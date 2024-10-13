@@ -28,7 +28,7 @@ uniform float Saturation
 >
 = 0.0;
 
-// Contrast slider configuration
+// Contrast slider configuratio
 uniform float Contrast
 <
     ui_type = "slider";
