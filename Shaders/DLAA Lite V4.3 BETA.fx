@@ -2,7 +2,7 @@
 | :: Description :: |
 '-------------------/
 
-    DLAA Lite V4.3 - with Edge Enhance
+    DLAA Lite V4.3 BETA - with BETA Edge Enhance
 
     Author: BarbatosBachiko
 
