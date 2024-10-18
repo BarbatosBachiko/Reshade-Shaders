@@ -153,7 +153,7 @@ void DLAA_VertexShader(in uint id : SV_VertexID, out float4 position : SV_Positi
 | :: Techniques :: |
 '-----------------*/
 
-technique DLAA_Lite_V4
+technique DLAA_Lite_V2
 {
     pass DLAA_Light
     {
