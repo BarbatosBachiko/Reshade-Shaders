@@ -1,8 +1,33 @@
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//* Directionally Localized Anti-Aliasing (DLAA)                                                                                                                     
-//* Lite Version 4.2 - Enhanced with performance improvements and adjustable parameters.
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////// DLAA 
+/*------------------.
+| :: Description :: |
+'-------------------/
 
+    DLAA Lite V3.1
+
+    Author: BarbatosBachiko
+
+    About:
+    Directionally Localized Anti-Aliasing (DLAA) Lite Version 3.1.
+ 
+    Ideas for future improvement:
+    * Add edge enhancement.
+    
+    Version 3.1
+    * Performance improvements and adjustable parameters.
+*/
+
+/*---------------.
+| :: Includes :: |
+'---------------*/
+
+#include "ReShade.fxh"
+#include "ReShadeUI.fxh"
+
+/*---------------.
+| :: Settings :: |
+'---------------*/
+
+// DLAA Settings
 uniform int View_Mode < 
     ui_type = "combo";
     ui_items = "DLAA Out\0Mask View A\0Mask View B\0"; 
@@ -28,7 +53,9 @@ uniform float Lambda <
     ui_default = 3.0; 
 > = 3.0; // Adjustable lambda
 
-#define pix float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT)
+/*---------------.
+| :: Textures :: |
+'---------------*/
 
 texture BackBufferTex : COLOR;
 sampler BackBuffer
@@ -36,13 +63,17 @@ sampler BackBuffer
     Texture = BackBufferTex;
 };
 
-// Function to load pixels
+/*----------------.
+| :: Functions :: |
+'----------------*/
+
+// Load pixel from texture
 float4 LoadPixel(sampler tex, float2 tc)
 {
     return tex2D(tex, tc);
 }
 
-// Function to apply DLAA 
+// Apply DLAA logic
 float4 ApplyDLAA(float4 center, float4 left, float4 right)
 {
     const float4 combH = left + right;
@@ -54,8 +85,8 @@ float4 ApplyDLAA(float4 center, float4 left, float4 right)
     return lerp(center, (combH + center) / 3.0, satAmountH * 0.5f);
 }
 
-// Function to apply a blur to the mask
-float4 BlurMask(float4 mask, float2 tc)
+// Apply blur to mask
+float4 BlurMask(float4 mask, float2 tc, float2 pix)
 {
     float4 blur = mask * 0.25; // Start with current mask weight
     blur += LoadPixel(BackBuffer, tc + float2(-pix.x, 0)) * 0.125; // Left
@@ -68,6 +99,9 @@ float4 BlurMask(float4 mask, float2 tc)
 // Main DLAA pass
 float4 Out(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
 {
+    // Define pix based on texture size
+    float2 pix = float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT);
+
     const float4 center = LoadPixel(BackBuffer, texcoord);
     const float4 left = LoadPixel(BackBuffer, texcoord + float2(-1.0 * pix.x, 0));
     const float4 right = LoadPixel(BackBuffer, texcoord + float2(1.0 * pix.x, 0));
@@ -86,7 +120,7 @@ float4 Out(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Targe
 
     if (View_Mode == 1)
     {
-        return BlurMask(maskA * maskColorA, texcoord); // Returns blurred mask A in yellow
+        return BlurMask(maskA * maskColorA, texcoord, pix); // Returns blurred mask A in yellow
     }
 
     // Logic for Mask View B
@@ -104,18 +138,22 @@ float4 Out(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Targe
 }
 
 // Vertex shader generating a triangle covering the entire screen
-void PostProcessVS(in uint id : SV_VertexID, out float4 position : SV_Position, out float2 texcoord : TEXCOORD)
+void CustomPostProcessVS(in uint id : SV_VertexID, out float4 position : SV_Position, out float2 texcoord : TEXCOORD)
 {
     texcoord = float2((id == 2) ? 2.0 : 0.0, (id == 1) ? 2.0 : 0.0);
     position = float4(texcoord * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
 }
 
+/*-----------------.
+| :: Techniques :: |
+'-----------------*/
+
 // Unique technique for optimized DLAA
-technique DLAA_Lite_V4
+technique DLAA_Lite_V3
 {
     pass DLAA_Light
     {
-        VertexShader = PostProcessVS;
+        VertexShader = CustomPostProcessVS;
         PixelShader = Out;
     }
 }
