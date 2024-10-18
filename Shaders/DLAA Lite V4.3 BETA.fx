@@ -2,12 +2,12 @@
 | :: Description :: |
 '-------------------/
 
-    DLAA Lite V4.3 BETA - with BETA Edge Enhance
+    DLAA Lite V3.2 BETA - with BETA Edge Enhance
 
     Author: BarbatosBachiko
 
     About:
-    Directionally Localized Anti-Aliasing (DLAA) Lite Version 4.3 
+    Directionally Localized Anti-Aliasing (DLAA) Lite Version 3.2 
 
     Ideas for future improvement:
     * Further optimization for edge enhancement.
@@ -15,7 +15,7 @@
     History:
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
 
-    Version 4.3
+    Version 3.2
     * Introduced edge enhancement.
     * Included DLAA debug view mode.
 
@@ -156,7 +156,7 @@ void CustomPostProcessVS(in uint id : SV_VertexID, out float4 position : SV_Posi
 | :: Techniques :: |
 '-----------------*/
 
-technique DLAA_Lite_V4_3
+technique DLAA_Lite_V3
 {
     pass DLAA_Light
     {
@@ -164,10 +164,4 @@ technique DLAA_Lite_V4_3
         PixelShader = Out;
     }
 }
-
-/*-------------.
-| :: Footer :: |
-'--------------/
-
-This shader implements Directionally Localized Anti-Aliasing
 
