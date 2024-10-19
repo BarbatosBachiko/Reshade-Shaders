@@ -1,7 +1,7 @@
 /*------------------.
 | :: Description :: |
 '-------------------/
-UFakeHDR (version 1.0) 
+UFakeHDR (version 0.1) 
 
 Author: BarbatosBachiko
 
@@ -11,7 +11,7 @@ Ideas for future improvement:
 Incorporate adaptive tone mapping. 
 Add bloom effects for brighter areas.
   
- Version 1.0
+ Version 0.1
   */
 
 /*---------------.
