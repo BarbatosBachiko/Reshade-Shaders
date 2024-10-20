@@ -4,12 +4,14 @@
 UFakeHDR (version 0.1) 
 
 Author: BarbatosBachiko
+License: MIT
 
 About: This shader simulates HDR effects to enhance image quality by increasing dynamic range.
 
 Ideas for future improvement:
 Incorporate adaptive tone mapping. 
 Add bloom effects for brighter areas.
+Add Deband
   
  Version 0.1
   */
