@@ -6,11 +6,8 @@
 
     Author: BarbatosBachiko
 
-    License: This work is licensed under a Creative Commons Attribution 3.0 Unported License.																							
-             So you are free to share, modify and adapt it for your needs, and even use it for commercial use.																		
-             I would also love to hear about a project you are using it with.	
-             https://creativecommons.org/licenses/by/3.0/us/	
-             Original method by Dmitry Andreev
+    License: MIT	
+    Original method by Dmitry Andreev
 
     About:
     Directionally Localized Anti-Aliasing (DLAA) Lite Version 1.3.
@@ -75,7 +72,7 @@ uniform bool EnableShading <
     ui_type = "checkbox";
     ui_label = "Enable Shading"; 
     ui_tooltip = "Enable or disable the shading effect."; 
-> = true; // Habilitado por padr„o
+> = true; // Habilitado por padr√£o
 
 uniform float ShadingIntensity < 
     ui_type = "slider";
