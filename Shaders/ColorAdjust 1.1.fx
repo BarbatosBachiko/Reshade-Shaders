@@ -5,6 +5,7 @@
 	ColorAdjust (version 1.1)
 
 	Author: BarbatosBachiko
+        License: MIT
 
 	About:
 	This shader adjusts brightness, saturation, and contrast.
@@ -14,8 +15,8 @@
 	
 	Version 1.0
 	* Simple Color shader with controls for brightness, saturation, and contrast.
-  Version 1.1
-  * Bug fixes
+        Version 1.1
+        * Bug fixes
 
 */
 
