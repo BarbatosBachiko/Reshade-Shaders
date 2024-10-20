@@ -5,6 +5,9 @@
     DTAA Shader (version 1.1)
 
     Author: BarbatosBachiko
+    License: MIT
+    Original DLAA method by Dmitry Andreev
+    TAA method by Mortalitas from GShade
 
     About:
     This shader integrates DLAA (Directional Localized Anti-Aliasing) and TAA (Temporal Anti-Aliasing) techniques. It applies both spatial and temporal anti-aliasing to reduce jagged edges and improve visual quality.
