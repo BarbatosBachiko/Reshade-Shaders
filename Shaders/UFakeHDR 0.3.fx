@@ -41,7 +41,7 @@ uniform int ToneMappingMethod <
     ui_type = "combo";
     ui_label = "Tone Mapping Method"; 
     ui_items = "Reinhard (bad)\0Filmic\0ACES\0BT.709\0Logarithmic\\0";
-> = 1;
+> = 2;
 
 // Color grading method selection
 uniform int ColorGradingMethod < 
