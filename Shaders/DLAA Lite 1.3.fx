@@ -84,7 +84,7 @@ uniform float sharpness <
     ui_type = "slider";
     ui_label = "Sharpness";
     ui_tooltip = "Control the sharpness level."; 
-> = 0.0; // Default sharpness
+> = 0.2; // Default sharpness
 
 /*---------------.
 | :: Textures :: |
