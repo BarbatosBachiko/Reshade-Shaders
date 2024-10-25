@@ -14,8 +14,8 @@
 
     Ideas for future improvement:
     * Integrate an adjustable sharpness pass after DLAA/TAA blending.
-    
-    
+    * Update the DLAA
+
     Version 1.0
     * Initial implementation combining DLAA and TAA with customizable blending and mixing rates.
     Version 1.1
