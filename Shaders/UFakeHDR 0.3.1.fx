@@ -167,21 +167,21 @@ float3 ApplyToneMapping(float3 color)
     return color; // No tone mapping
 }
 
-// Função para gerar ruído
+// Function to generate noise
 float make_noise(float2 uv)
 {
-    // Ruído Perlin modificado para melhorar a qualidade
+    // Modified Perlin noise to improve quality
     return frac(sin(dot(uv.xy, float2(12.9898, 78.233))) * 43758.5453);
 }
 
 // Dithering
 float3 ApplyDithering(float3 color, float2 texcoord)
 {
-    // Gera ruído baseado nas coordenadas da textura
-    float noise = make_noise(texcoord * 100.0); // Escala o ruído para aumentar a variação
-    // Aplica o efeito de dithering
-    color += (noise - 0.5) * DitherStrength; // DitherStrength ajusta a intensidade do dithering
-    return saturate(color); // Assegura que a cor fique dentro dos limites
+    // Generates noise based on texture coordinates
+    float noise = make_noise(texcoord * 100.0); // Scale noise to increase variation
+    // Applies the dithering effect
+    color += (noise - 0.5) * DitherStrength; // DitherStrength adjusts the intensity of dithering
+    return saturate(color); // Ensures color stays within limits
 }
 
 // Color Grading
