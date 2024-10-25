@@ -10,7 +10,7 @@
     Original method by Dmitry Andreev
 
     About:
-    Directionally Localized Anti-Aliasing (DLAA) Lite Version 1.3.
+    Directionally Localized Anti-Aliasing (DLAA) Lite Version 1.3.1
  
     Ideas for future improvement:
     Add Smart Subpixel Anti-Aliasing and optimizations
