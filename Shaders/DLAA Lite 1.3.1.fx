@@ -75,7 +75,7 @@ uniform bool EnableShading <
     ui_type = "checkbox";
     ui_label = "Enable Shading"; 
     ui_tooltip = "Enable or disable the shading effect."; 
-> = true; // Enabled by default
+> = false; // False by default
 
 uniform float ShadingIntensity < 
     ui_type = "slider";
