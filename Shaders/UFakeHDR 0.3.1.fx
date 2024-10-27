@@ -1,7 +1,7 @@
 /*------------------.
 | :: Description :: |
 '-------------------/
-UFakeHDR (version 0.3)
+UFakeHDR (version 0.3.5)
 
 Author: BarbatosBachiko
 License: MIT
@@ -16,6 +16,8 @@ Version 0.3
 Add Color Grading, Add Bloom Effect, Add Dithering, Remove Debanding.
 Version 0.3.1
 Dither fixed
+Version 0.3.5
+Add  Color grading color intensity, Update Reinhard
 */
 
 /*---------------.
@@ -33,13 +35,19 @@ uniform float HDRPower <
     ui_label = "HDR Power"; 
     ui_min = 1.0; 
     ui_max = 4.0; 
-> = 1.150; // Default adjusted to 1.150
+> = 1.150;
+
+// Adaptive tone mapping toggle
+uniform bool UseAdaptiveToneMapping < 
+    ui_type = "checkbox";
+    ui_label = "Use Adaptive Tone Mapping"; 
+> = true; 
 
 // Tone mapping method selection
 uniform int ToneMappingMethod < 
     ui_type = "combo";
     ui_label = "Tone Mapping Method"; 
-    ui_items = "Reinhard (bad)\0Filmic\0ACES\0BT.709\0Logarithmic\\0";
+    ui_items = "Reinhard\0Filmic\0ACES\0BT.709\0Logarithmic\\0";
 > = 2;
 
 // Color grading method selection
@@ -49,11 +57,13 @@ uniform int ColorGradingMethod <
     ui_items = "Neutral\0Warm\0Cool\0Sepia\0Black & White\0Vintage\0Vibrant\0Horror\0"; 
 > = 0;
 
-// Adaptive tone mapping toggle
-uniform bool UseAdaptiveToneMapping < 
-    ui_type = "checkbox";
-    ui_label = "Use Adaptive Tone Mapping"; 
-> = true; 
+// Color grading color intensity
+uniform float ColorGradingIntensity < 
+    ui_type = "slider";
+    ui_label = "Color grading color intensity"; 
+    ui_min = 0.0; 
+    ui_max = 1.0; 
+> = 1.0;
 
 // Dithering toggle
 uniform bool EnableDithering < 
@@ -81,11 +91,12 @@ uniform float BloomStrength <
     ui_label = "Bloom Strength"; 
     ui_min = 0.0; 
     ui_max = 1.0; 
-> = 0.200; // Força padrão do Bloom
+> = 0.200; 
 
 /*---------------.
 | :: Textures :: |
 '---------------*/
+
 texture2D BackBufferTex : COLOR;
 sampler BackBuffer
 {
@@ -99,21 +110,22 @@ sampler BackBuffer
 // Reinhard Tone Mapping
 float3 ReinhardToneMapping(float3 color)
 {
-// Defining constants
+    // Defining constants
     const float a = 0.18; // Desired average brightness
-    const float burn = 2.0; // Sets the brightness that will be mapped to white
+    const float burn = 2.0; // Brightness that will be mapped to white
     const float maxLum = 1.0; // Maximum luminance
 
-// Calculate the average luminance of the color
-    float luminance = dot(color, float3(0.2126, 0.7152, 0.0722)); // Luminance
-    luminance = max(luminance, 0.0001);
+    // Calculate the average luminance of the color
+    float luminance = dot(color, float3(0.2126, 0.7152, 0.0722)); 
+    luminance = max(luminance, 0.0001); 
 
-// Calculate the normalized luminance
-   float normalizedLuminance = luminance / (a * maxLum); // Normalize to the desired average brightness
+    // Calculate the normalized luminance
+    float normalizedLuminance = luminance / (a * maxLum);
 
+    // Tone mapping calculation
     float3 mapped = color * (normalizedLuminance / (normalizedLuminance + 1.0));
 
-    return saturate(mapped);
+    return saturate(mapped); 
 }
 
 // Filmic Tone Mapping
@@ -142,7 +154,7 @@ float3 LogarithmicToneMapping(float3 color)
     return log(color + 1.0) / log(2.0);
 }
 
-//Apply ToneMaaping
+// Apply Tone Mapping
 float3 ApplyToneMapping(float3 color)
 {
     if (UseAdaptiveToneMapping)
@@ -175,43 +187,62 @@ float make_noise(float2 uv)
 }
 
 // Dithering
-float3 ApplyDithering(float3 color, float2 texcoord)
+float3 ApplyDithering(float3 color, float2 texcoord, float DitherStrength)
 {
     // Generates noise based on texture coordinates
     float noise = make_noise(texcoord * 100.0); // Scale noise to increase variation
+    
     // Applies the dithering effect
-    color += (noise - 0.5) * DitherStrength; // DitherStrength adjusts the intensity of dithering
-    return saturate(color); // Ensures color stays within limits
+    color += (noise - 0.5) * DitherStrength; // Adjusts the intensity of dithering
+    
+    // Ensures color stays within limits
+    return saturate(color);
 }
 
 // Color Grading
 float3 ApplyColorGrading(float3 color)
 {
+    float clampedIntensity = clamp(ColorGradingIntensity, 0.0, 1.0);
+    float3 gradedColor;
+
     switch (ColorGradingMethod)
     {
         case 0: // Neutral
-            return color; // No change
+            gradedColor = color;
+            break;
         case 1: // Warm
-            return color * float3(1.2, 1.1, 0.9); // Increases red and green
+            gradedColor = color * float3(1.2, 1.1, 0.9);
+            break;
         case 2: // Cool
-            return color * float3(0.9, 1.1, 1.2); // Increases blue and green
+            gradedColor = color * float3(0.9, 1.1, 1.2);
+            break;
         case 3: // Sepia
-            return float3(dot(color, float3(0.393, 0.769, 0.189)),
-                           dot(color, float3(0.349, 0.686, 0.168)),
-                           dot(color, float3(0.272, 0.534, 0.131))); // Sepia effect
-        case 4: // Black & White
-            float gray = dot(color, float3(0.2989, 0.5870, 0.1140)); // Grayscale conversion
-            return float3(gray, gray, gray);
+            gradedColor = float3(dot(color, float3(0.393, 0.769, 0.189)),
+                                  dot(color, float3(0.349, 0.686, 0.168)),
+                                  dot(color, float3(0.272, 0.534, 0.131)));
+            break;
+        case 4: // Black and White
+            float gray = dot(color, float3(0.2989, 0.5870, 0.1140));
+            gradedColor = float3(gray, gray, gray);
+            break;
         case 5: // Vintage
-            return color * float3(1.0, 0.9, 0.8) * 0.8 + float3(0.1, 0.05, 0.05); // Faded colors
+            gradedColor = color * float3(1.0, 0.9, 0.8) * 0.8 + float3(0.1, 0.05, 0.05);
+            break;
         case 6: // Vibrant
-            return pow(color, float3(0.8, 1.0, 0.9)); // Boosts saturation
+            gradedColor = pow(color, float3(0.8, 1.0, 0.9));
+            break;
         case 7: // Horror
-            return float3(color.r * 0.5, color.g * 0.2, color.b * 0.2); // Desaturated red tones
+            gradedColor = float3(color.r * 0.5, color.g * 0.2, color.b * 0.2);
+            break;
         default:
-            return color; // No change
+            gradedColor = color;
+            break;
     }
+
+    // Mix the original color with the grading color based on the intensity
+    return lerp(color, gradedColor, clampedIntensity);
 }
+
 
 // Function to apply the Bloom effect
 float3 ApplyBloom(float3 color, float2 texcoord)
@@ -265,7 +296,7 @@ float3 FakeHDRPass(float4 position : SV_Position, float2 texcoord : TexCoord) : 
     // Apply Dithering if enabled
     if (EnableDithering)
     {
-        toneMappedColor = ApplyDithering(toneMappedColor, texcoord);
+        toneMappedColor = ApplyDithering(toneMappedColor, texcoord, DitherStrength);
     }
 
     // Apply Bloom effect if enabled
