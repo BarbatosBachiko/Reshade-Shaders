@@ -11,7 +11,8 @@
 
 	Ideas for future improvement:
 	* Integrate an adjustable sharpness
-	
+	* Swap TAA to other version
+
 	Version 1.0
 	* Initial version with integrated DFTAA
     Version 1.1
