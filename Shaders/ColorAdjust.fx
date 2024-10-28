@@ -12,11 +12,14 @@
 
 	Ideas for future improvement:
 	* Include a color filter mode (e.g., sepia, black and white)
+
+        History:
+        (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
 	
 	Version 1.0
 	* Simple Color shader with controls for brightness, saturation, and contrast.
         Version 1.1
-        * Bug fixes
+        x Bug fixes
 
 */
 
