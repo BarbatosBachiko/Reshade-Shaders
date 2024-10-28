@@ -2,6 +2,8 @@
 | :: Description :: |
 '-------------------/
 
+        MLAA (version 0.9)
+
 	Author: Barbatos Bachiko
 	License: MIT
 
@@ -9,12 +11,12 @@
 	This shader implements Morphological Anti-Aliasing (MLAA)
 
 	Ideas for future improvement:
-	* Improve Blending
+	* Add Blending
 	
 	History:
 	(*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
 	
-	Version 1.0
+	Version 0.9
 	* Initial implementation of MLAA shader.
 
 */
