@@ -13,10 +13,13 @@
 	* Integrate an adjustable sharpness
 	* Swap TAA to other version
 
+        History:
+        (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
+
 	Version 1.0
 	* Initial version with integrated DFTAA
-    Version 1.1
-	* code fixes
+        Version 1.1
+	x Bugfix
 
 */
 
