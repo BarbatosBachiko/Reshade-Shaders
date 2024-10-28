@@ -14,20 +14,23 @@
  
     Ideas for future improvement:
     Add Smart Subpixel Anti-Aliasing and optimizations
-    
+
+    History:
+    (*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
+
     Version 1.0
-    *Improved for performance
+    * Initial Simple DLAA
     Version 1.1
-    * Added Shading intensity control.
+    + Added Shading intensity control.
     * Introduced sharpness level adjustment.
     Version 1.2
     * Introduced edge enhancement.
     * Included DLAA debug view mode.
     Version 1.3
-    * Adjustable parameters, 
-    * Added Shading intensity control
+    + Adjustable parameters, 
+    + Added Shading intensity control
     * Added initial sharpness level adjustment
-    * other corrections
+    x other corrections
     Version 1.3.1
     * Added Subpixel Anti-Aliasing
     * Added Pixel Enchancement
@@ -101,7 +104,7 @@ uniform int PixelWidth <
     ui_items = "1\0 16\0 32\0 64\0 128\0"; // Combo box for pixel width options
     ui_label = "Pixel Width"; 
     ui_tooltip = "Select the pixel width."; 
-> = 0; // Default pixel width
+> = 1; // Default pixel width
 
 // Subpixel Anti-Aliasing Settings
 uniform bool EnableSubpixelAA < 
