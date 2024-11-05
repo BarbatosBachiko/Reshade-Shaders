@@ -78,7 +78,7 @@ uniform float BloomStrength <
     ui_label = "Bloom Strength"; 
     ui_min = 0.0; 
     ui_max = 1.0; 
-> = 0.200;
+> = 0.025;
 
 uniform float bloomThreshold < 
     ui_type = "slider";
