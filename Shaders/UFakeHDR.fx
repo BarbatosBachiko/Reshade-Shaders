@@ -31,16 +31,11 @@ uniform float HDRPower <
     ui_max = 4.0; 
 > = 1.150;
 
-uniform bool UseAdaptiveToneMapping < 
-    ui_type = "checkbox";
-    ui_label = "Use Adaptive Tone Mapping"; 
-> = true; 
-
 uniform int ToneMappingMethod < 
     ui_type = "combo";
-    ui_label = "Manual Tone Mapping Method"; 
-    ui_items = "Reinhard\0Filmic\0ACES\0BT.709\0Logarithmic\0";
-> = 2;
+    ui_label = "Tone Mapping Method"; 
+    ui_items = "Reinhard\0Filmic\0ACES\0BT.709\0Logarithmic\0Adaptive\0";
+> = 5;
 
 uniform bool EnableDithering < 
     ui_type = "checkbox";
@@ -71,7 +66,7 @@ uniform float NoiseSeed <
 uniform bool EnableBloom < 
     ui_type = "checkbox";
     ui_label = "Enable Bloom"; 
-> = false;
+> = true;
 
 uniform float BloomStrength < 
     ui_type = "slider";
@@ -206,8 +201,8 @@ float3 LogarithmicToneMapping(float3 color)
 float3 AdaptiveToneMapping(float3 color, float sceneLuminance)
 {
     static float lastSceneLuminance = 0.0;
-    float targetLuminance = 0.5; 
-    float adaptationSpeed = 0.1; 
+    float targetLuminance = 0.5;
+    float adaptationSpeed = 0.1;
     float minAdjustment = 0.5;
     float maxAdjustment = 2.0;
 
@@ -281,11 +276,7 @@ float3 ApplyBloom(float3 color, float2 texcoord)
 // Apply Tone Mapping
 float3 ApplyToneMapping(float3 color, float2 texcoord, inout float lastSceneLuminance)
 {
-    if (UseAdaptiveToneMapping)
-    {
-        float sceneLuminance = CalculateSceneLuminance(texcoord, lastSceneLuminance);
-        return AdaptiveToneMapping(color, sceneLuminance);
-    }
+    float sceneLuminance = CalculateSceneLuminance(texcoord, lastSceneLuminance);
 
     switch (ToneMappingMethod)
     {
@@ -299,6 +290,8 @@ float3 ApplyToneMapping(float3 color, float2 texcoord, inout float lastSceneLumi
             return BTToneMapping(color);
         case 4:
             return LogarithmicToneMapping(color);
+        case 5: // Caso para Adaptive Tone Mapping
+            return AdaptiveToneMapping(color, sceneLuminance);
         default:
             return color;
     }
