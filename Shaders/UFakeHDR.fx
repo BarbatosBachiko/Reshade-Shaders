@@ -34,7 +34,7 @@ uniform float HDRPower <
 uniform bool UseAdaptiveToneMapping < 
     ui_type = "checkbox";
     ui_label = "Use Adaptive Tone Mapping"; 
-> = false; 
+> = true; 
 
 uniform int ToneMappingMethod < 
     ui_type = "combo";
