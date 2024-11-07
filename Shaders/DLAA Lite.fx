@@ -2,7 +2,7 @@
 | :: Description :: |
 '-------------------/
 
-    DLAA Lite (Version 1.3.1)
+    DLAA Lite (Version 1.4)
 
     Author: BarbatosBachiko
 
@@ -31,7 +31,7 @@
     + Added Shading intensity control
     * Added initial sharpness level adjustment
     x other corrections
-    Version 1.3.1
+    Version 1.4
     * Added Subpixel Anti-Aliasing
     * Added Pixel Enchancement
 
