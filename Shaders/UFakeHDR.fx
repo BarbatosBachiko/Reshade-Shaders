@@ -1,7 +1,7 @@
 /*------------------.
 | :: Description :: |
 '-------------------/
-uFakeHDR (version 1.0)
+uFakeHDR (version 1.1)
 
 Author: BarbatosBachiko
 License: MIT
@@ -12,6 +12,11 @@ Ideas for future improvement:
 
 History:
 (*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
+
+Version 1.1:
+x Adaptation Speed ​​should work
++ Changed how textures size are declared
+- Removed spare functions
 
 */
 
@@ -98,14 +103,15 @@ sampler BackBuffer
     Texture = BackBufferTex;
 };
 
-#define textureSize float2(1920.0, 1080.0) 
+#define textureSize float2(BUFFER_WIDTH, BUFFER_HEIGHT)
+static float lastSceneLuminance = 0.0;
 
 /*----------------.
 | :: Functions :: |
 '----------------*/
 
 // Calculate the average luminance of the scene
-float CalculateSceneLuminance(float2 texcoord, inout float lastSceneLuminance)
+float CalculateSceneLuminance(float2 texcoord)
 {
     float sampleRadius = 2.0;
     float luminanceSum = 0.0;
@@ -153,26 +159,12 @@ float3 ReinhardToneMapping(float3 color)
     return saturate(mapped);
 }
 
-float3 ReinhardLuminanceToneMapping(float3 color)
-{
-    const float a = 0.15; // Adjust this value for different results
-    float luminance = dot(color, float3(0.2126, 0.7152, 0.0722));
-    return saturate(color / (luminance + a)); // Simple luminance mapping
-}
-
 float3 ACESFilmicToneMapping(float3 color)
 {
     const float A = 2.51;
     const float B = 0.03;
     float3 mapped = (color * (color * A + B)) / (color * (A - 1.0) + 1.0);
     return saturate(mapped);
-}
-
-float3 SMAA_ToneMapping(float3 color)
-{
-    // Simple tone mapping based on luminance
-    float luminance = dot(color, float3(0.2126, 0.7152, 0.0722));
-    return saturate(color * (1.0 / (luminance + 0.1)));
 }
 
 float3 FilmicToneMapping(float3 color)
@@ -200,7 +192,6 @@ float3 LogarithmicToneMapping(float3 color)
 
 float3 AdaptiveToneMapping(float3 color, float sceneLuminance)
 {
-    static float lastSceneLuminance = 0.0;
     float targetLuminance = 0.5;
     float adaptationSpeed = 0.1;
     float minAdjustment = 0.5;
@@ -210,18 +201,12 @@ float3 AdaptiveToneMapping(float3 color, float sceneLuminance)
     float luminanceAdjustment = targetLuminance / (sceneLuminance + 0.001);
     luminanceAdjustment = clamp(luminanceAdjustment, minAdjustment, maxAdjustment);
 
-    // Smooth adaptation using a history
-    lastSceneLuminance += (sceneLuminance - lastSceneLuminance) * adaptationSpeed;
-    float adjustedLuminance = targetLuminance / (lastSceneLuminance + 0.001);
-    adjustedLuminance = clamp(adjustedLuminance, minAdjustment, maxAdjustment);
-
     // Apply smooth interpolation for adaptation
-    float adjustmentFactor = lerp(1.0, adjustedLuminance, adaptationSpeed);
+    float adjustmentFactor = lerp(1.0, luminanceAdjustment, adaptationSpeed);
     
     // Apply the adjustment factor to the color
     color *= adjustmentFactor;
 
-    
     return saturate(color);
 }
 
@@ -274,9 +259,10 @@ float3 ApplyBloom(float3 color, float2 texcoord)
 }
 
 // Apply Tone Mapping
-float3 ApplyToneMapping(float3 color, float2 texcoord, inout float lastSceneLuminance)
+float3 ApplyToneMapping(float3 color, float2 texcoord)
 {
-    float sceneLuminance = CalculateSceneLuminance(texcoord, lastSceneLuminance);
+    // Calculate scene luminance using the global lastSceneLuminance
+    float sceneLuminance = CalculateSceneLuminance(texcoord);
 
     switch (ToneMappingMethod)
     {
@@ -290,7 +276,7 @@ float3 ApplyToneMapping(float3 color, float2 texcoord, inout float lastSceneLumi
             return BTToneMapping(color);
         case 4:
             return LogarithmicToneMapping(color);
-        case 5: // Caso para Adaptive Tone Mapping
+        case 5: // Adaptive Tone Mapping case
             return AdaptiveToneMapping(color, sceneLuminance);
         default:
             return color;
@@ -317,10 +303,8 @@ float4 uFakeHDRPass(float4 position : SV_Position, float2 texcoord : TexCoord) :
 {
     float3 color = tex2D(BackBuffer, texcoord).rgb;
     float3 hdrColor = pow(color, HDRPower);
-    float lastSceneLuminance = 0.0;
-
-    // Chama a função ApplyToneMapping com texcoord e lastSceneLuminance
-    hdrColor = ApplyToneMapping(hdrColor, texcoord, lastSceneLuminance);
+    
+    hdrColor = ApplyToneMapping(hdrColor, texcoord);
     hdrColor = ApplyBloom(hdrColor, texcoord);
 
     if (EnableDithering)
