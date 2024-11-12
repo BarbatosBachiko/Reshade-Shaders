@@ -2,7 +2,7 @@
 | :: Description :: |
 '-------------------/
 
-    Shading (version 1.1.1)
+    Shading (version 1.1.2)
 
     Author: Barbatos Bachiko
     License: MIT
@@ -16,8 +16,8 @@
     History:
 	(*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
     
-    Version 1.1.1:
-    * Sampling area added
+    Version 1.1.2:
+    x Fixes for Directx 9
 
 */
 
@@ -134,36 +134,78 @@ float4 ApplyShading(float4 color, float2 texcoord)
     float4 totalDiff = float4(0.0, 0.0, 0.0, 0.0);
     int count = 0;
 
-    // Loads the current normal
+    // Load the current normal
     float3 currentNormal = LoadNormal(texcoord);
 
-    // Define radius based on selected sampling area size
-    int radius = 0;
-    if (SamplingArea == 0)
-        radius = 1; // 3x3
-    else if (SamplingArea == 1)
-        radius = 2; // 4x4
-    else if (SamplingArea == 2)
-        radius = 3; // 6x6
-
-    // Sample neighboring pixels based on the selected area size
-    for (int x = -radius; x <= radius; ++x)
+    // Conditional blocks for different sampling sizes to avoid dynamic loops
+    if (SamplingArea == 0) // 3x3
     {
-        for (int y = -radius; y <= radius; ++y)
+        // Manually sample 3x3 area
+        [unroll]
+        for (int x = -1; x <= 1; ++x)
         {
-            if (x == 0 && y == 0 && radius > 0)
-                continue;
+            [unroll]
+            for (int y = -1; y <= 1; ++y)
+            {
+                if (x == 0 && y == 0)
+                    continue;
 
-            float4 neighborColor = LoadPixel(BackBuffer, texcoord + float2(x * bufferSize.x, y * bufferSize.y));
-            float4 diff = abs(neighborColor - color);
-            float3 neighborNormal = LoadNormal(texcoord + float2(x * bufferSize.x, y * bufferSize.y));
-            float normalInfluence = max(dot(currentNormal, neighborNormal), 0.0);
+                float4 neighborColor = LoadPixel(BackBuffer, texcoord + float2(x * bufferSize.x, y * bufferSize.y));
+                float4 diff = abs(neighborColor - color);
+                float3 neighborNormal = LoadNormal(texcoord + float2(x * bufferSize.x, y * bufferSize.y));
+                float normalInfluence = max(dot(currentNormal, neighborNormal), 0.0);
 
-            totalDiff += diff * normalInfluence;
-            count++;
+                totalDiff += diff * normalInfluence;
+                count++;
+            }
+        }
+    }
+    else if (SamplingArea == 1) // 4x4
+    {
+        // Manually sample 4x4 area
+        [unroll]
+        for (int x = -2; x <= 2; ++x)
+        {
+            [unroll]
+            for (int y = -2; y <= 2; ++y)
+            {
+                if (x == 0 && y == 0)
+                    continue;
+
+                float4 neighborColor = LoadPixel(BackBuffer, texcoord + float2(x * bufferSize.x, y * bufferSize.y));
+                float4 diff = abs(neighborColor - color);
+                float3 neighborNormal = LoadNormal(texcoord + float2(x * bufferSize.x, y * bufferSize.y));
+                float normalInfluence = max(dot(currentNormal, neighborNormal), 0.0);
+
+                totalDiff += diff * normalInfluence;
+                count++;
+            }
+        }
+    }
+    else if (SamplingArea == 2) // 6x6
+    {
+        // Manually sample 6x6 area
+        [unroll]
+        for (int x = -3; x <= 3; ++x)
+        {
+            [unroll]
+            for (int y = -3; y <= 3; ++y)
+            {
+                if (x == 0 && y == 0)
+                    continue;
+
+                float4 neighborColor = LoadPixel(BackBuffer, texcoord + float2(x * bufferSize.x, y * bufferSize.y));
+                float4 diff = abs(neighborColor - color);
+                float3 neighborNormal = LoadNormal(texcoord + float2(x * bufferSize.x, y * bufferSize.y));
+                float normalInfluence = max(dot(currentNormal, neighborNormal), 0.0);
+
+                totalDiff += diff * normalInfluence;
+                count++;
+            }
         }
     }
 
+    // Compute shading based on accumulated differences
     float complexity = dot(totalDiff.rgb, float3(1.0, 1.0, 1.0)) / count;
     float vrsFactor = 1.0 - (complexity * ShadingIntensity);
 
@@ -174,6 +216,7 @@ float4 ApplyShading(float4 color, float2 texcoord)
 
     return color * vrsFactor;
 }
+
 
 float4 ShadingPS(float4 vpos : SV_Position, float2 texcoord : TexCoord) : SV_Target
 {
