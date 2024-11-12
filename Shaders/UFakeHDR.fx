@@ -13,10 +13,8 @@ Ideas for future improvement:
 History:
 (*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
 
-Version 1.1:
-x Adaptation Speed ​​should work
-+ Changed how textures size are declared
-- Removed spare functions
+Version 1.1.1:
+x parameter adjustment
 
 */
 
@@ -92,7 +90,7 @@ uniform float LuminanceAdaptationSpeed <
     ui_label = "Luminance Adaptation Speed"; 
     ui_min = 0.01; 
     ui_max = 1.0; 
-> = 0.1;
+> = 0.5;
 
 /*---------------.
 | :: Textures :: |
