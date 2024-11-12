@@ -2,7 +2,7 @@
 | :: Description :: |
 '-------------------/
 
-    Shading (version 1.1)
+    Shading (version 1.1.1)
 
     Author: Barbatos Bachiko
     License: MIT
@@ -16,10 +16,8 @@
     History:
 	(*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
     
-    Version 1.1:
-    + Update ui_max for ShadingIntensity
-    + Use of 2x2 sampling instead of 3x3
-    * Added Sharpness
+    Version 1.1.1:
+    * Sampling area added
 
 */
 
@@ -51,6 +49,14 @@ uniform float sharpness <
     ui_max = 10.0;
     ui_default = 0.2;
 > = 0.2;
+
+uniform int SamplingArea <
+    ui_type = "combo";
+    ui_label = "Sampling Area";
+    ui_tooltip = "Select the sampling area size.";
+    ui_items = "3x3\0 4x4\0 6x6\0";
+    ui_default = 0;
+> = 0;
 
 uniform bool EnableShading
 <
@@ -125,41 +131,42 @@ float4 ApplyShading(float4 color, float2 texcoord)
     }
 
     float2 bufferSize = float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT);
-    float4 totalDiff = float4(0.0, 0.0, 0.0, 0.0); 
+    float4 totalDiff = float4(0.0, 0.0, 0.0, 0.0);
     int count = 0;
 
     // Loads the current normal
     float3 currentNormal = LoadNormal(texcoord);
 
-    // Sampling a 2x2 area of neighboring pixels
-    for (int x = -1; x <= 1; x += 2)
+    // Define radius based on selected sampling area size
+    int radius = 0;
+    if (SamplingArea == 0)
+        radius = 1; // 3x3
+    else if (SamplingArea == 1)
+        radius = 2; // 4x4
+    else if (SamplingArea == 2)
+        radius = 3; // 6x6
+
+    // Sample neighboring pixels based on the selected area size
+    for (int x = -radius; x <= radius; ++x)
     {
-        for (int y = -1; y <= 1; y += 2)
+        for (int y = -radius; y <= radius; ++y)
         {
-            // Skip the central pixel
-            if (x == 0 && y == 0)
+            if (x == 0 && y == 0 && radius > 0)
                 continue;
 
-            // Loads the neighboring pixel
             float4 neighborColor = LoadPixel(BackBuffer, texcoord + float2(x * bufferSize.x, y * bufferSize.y));
             float4 diff = abs(neighborColor - color);
-            totalDiff += diff;
-            count++;
-
-            // Loads the normal of the neighbor and adjusts the shading intensity
             float3 neighborNormal = LoadNormal(texcoord + float2(x * bufferSize.x, y * bufferSize.y));
-            float normalInfluence = max(dot(currentNormal, neighborNormal), 0.0); 
+            float normalInfluence = max(dot(currentNormal, neighborNormal), 0.0);
+
             totalDiff += diff * normalInfluence;
+            count++;
         }
     }
 
-    // Calculates visual complexity based on color differences
-    float complexity = (dot(totalDiff.rgb, float3(1.0, 1.0, 1.0)) / count);
-
-    // Adjusts shading intensity based on complexity
+    float complexity = dot(totalDiff.rgb, float3(1.0, 1.0, 1.0)) / count;
     float vrsFactor = 1.0 - (complexity * ShadingIntensity);
 
-    // Applies mixing with scene colors if enabled
     if (EnableMixWithSceneColor)
     {
         return lerp(color, color * vrsFactor, 0.5);
