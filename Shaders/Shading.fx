@@ -2,7 +2,7 @@
 | :: Description :: |
 '-------------------/
 
-    Shading (version 1.0)
+    Shading (version 1.1)
 
     Author: Barbatos Bachiko
     License: MIT
