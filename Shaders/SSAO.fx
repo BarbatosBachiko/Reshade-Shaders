@@ -180,7 +180,7 @@ float4 SSAOPS(float4 vpos : SV_Position, float2 texcoord : TexCoord) : SV_Target
 | :: Techniques :: |
 '-----------------*/
 
-technique Template
+technique SSAO
 {
     pass
     {
