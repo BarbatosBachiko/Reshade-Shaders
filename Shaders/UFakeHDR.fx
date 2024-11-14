@@ -6,15 +6,16 @@ uFakeHDR (version 1.1)
 Author: BarbatosBachiko
 License: MIT
 
-About: This shader simulates HDR effects for SDR.
+About: This shader simulates HDR effects for SDR. 
 
 Ideas for future improvement:
 
 History:
 (*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
 
-Version 1.1.1:
+Version 1.1.2:
 x parameter adjustment
++ Bloom uses texturesize
 
 */
 
@@ -76,21 +77,21 @@ uniform float BloomStrength <
     ui_label = "Bloom Strength"; 
     ui_min = 0.0; 
     ui_max = 1.0; 
-> = 0.025;
+> = 0.300;
 
 uniform float bloomThreshold < 
     ui_type = "slider";
     ui_label = "Bloom Threshold"; 
     ui_min = 0.0; 
     ui_max = 1.0; 
-> = 0.230; 
+> = 0.0; 
 
 uniform float LuminanceAdaptationSpeed < 
     ui_type = "slider";
     ui_label = "Luminance Adaptation Speed"; 
     ui_min = 0.01; 
     ui_max = 1.0; 
-> = 0.5;
+> = 0.1;
 
 /*---------------.
 | :: Textures :: |
@@ -229,12 +230,13 @@ float3 ApplyBloom(float3 color, float2 texcoord)
 
     float3 bloomColor = float3(0.0, 0.0, 0.0);
     float totalWeight = 0.0;
+    float2 offsetFactor = 1.0 / textureSize;
 
     for (int x = -2; x <= 2; x++)
     {
         for (int y = -2; y <= 2; y++)
         {
-            float2 offset = float2(x, y) / 512.0;
+            float2 offset = float2(x, y) * offsetFactor; 
             float3 sampleColor = tex2D(BackBuffer, texcoord + offset).rgb;
 
             float sampleLuminance = dot(sampleColor, luminanceCoefficients);
