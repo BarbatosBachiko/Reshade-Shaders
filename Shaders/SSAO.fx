@@ -18,8 +18,6 @@
 
 */
 
-namespace SSAO
-{
     /*---------------.
     | :: Includes :: |
     '---------------*/
@@ -76,7 +74,9 @@ namespace SSAO
     /*---------------.
     | :: Textures :: |
     '---------------*/
-
+   
+    namespace SSAO
+    {
     texture ColorTex : COLOR;
     texture DepthTex : DEPTH;
 
