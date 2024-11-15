@@ -2,13 +2,13 @@
 | :: Description :: |
 '-------------------/
 
-SSAO (version 0.5)
+        SSAO (version 0.5.1)
 
 	Author: Barbatos Bachiko
 	License: MIT
 
 	About:
-    Screen-Space Ambient Occlusion (SSAO) using a mix of fixed and random direction sampling for depth-based occlusion calculations.
+        Screen-Space Ambient Occlusion (SSAO) using a mix of fixed and random direction sampling for depth-based occlusion calculations.
     
 	Ideas for future improvement:
 	Add a debug mode or more
@@ -16,8 +16,8 @@ SSAO (version 0.5)
 	History:
 	(*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
 	
-	Version 0.5
-	* Simple functions added
+	Version 0.5.1
+	x Namespace implemented to avoid conflicts with other shaders.
 
 */
 
@@ -76,8 +76,10 @@ uniform int aoType
 | :: Textures :: |
 '---------------*/
 
-texture2D ColorTex : COLOR;
-texture2D DepthTex : DEPTH;
+namespace SSAO
+{
+texture ColorTex : COLOR;
+texture DepthTex : DEPTH;
 sampler ColorSampler
 {
     Texture = ColorTex;
