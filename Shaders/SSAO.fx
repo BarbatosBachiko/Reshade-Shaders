@@ -1,7 +1,4 @@
-﻿/*------------------.
-| :: Description :: |
-'-------------------/
-
+/*
         SSAO (version 0.5.1)
 
 	Author: Barbatos Bachiko
@@ -21,179 +18,166 @@
 
 */
 
-/*---------------.
-| :: Includes :: |
-'---------------*/
-
-#include "ReShade.fxh"
-#include "ReShadeUI.fxh"
-
-/*---------------.
-| :: Settings :: |
-'---------------*/
-
-uniform int viewMode <
-    ui_type = "combo";
-    ui_label = "View Mode";
-    ui_tooltip = "Select the view mode for SSAO";
-    ui_items = 
-    "Normal\0"; 
-> = 0;
-
-uniform int qualityLevel
-< 
-	ui_type = "combo";
-	ui_label = "Quality Level";
-	ui_tooltip = "Select quality level for ambient occlusion";
-	ui_items = 
-	"Low\0"
-	"Medium\0"
-	"High\0";
->
-= 0;
-
-uniform float intensity
-<
-	ui_type = "slider";
-	ui_label = "Occlusion Intensity";
-	ui_tooltip = "Adjust the intensity of ambient occlusion";
-	ui_min = 0.0; ui_max = 1.0; ui_step = 0.05;
->
-= 0.1;
-
-uniform int aoType
-<
-    ui_type = "combo";
-    ui_label = "AO Type";
-    ui_tooltip = "Select ambient occlusion type";
-    ui_items = 
-    "AO-F\0" 
-    "AO-R\0"; 
->
-= 1;
-
-/*---------------.
-| :: Textures :: |
-'---------------*/
-
 namespace SSAO
 {
-texture ColorTex : COLOR;
-texture DepthTex : DEPTH;
-sampler ColorSampler
-{
-    Texture = ColorTex;
-};
-sampler DepthSampler
-{
-    Texture = DepthTex;
-};
+    /*---------------.
+    | :: Includes :: |
+    '---------------*/
 
-/*----------------.
-| :: Functions :: |
-'----------------*/
+    #include "ReShade.fxh"
+#include "ReShadeUI.fxh"
 
-float3 RandomDirection(float2 texcoord, int sampleIndex)
-{
-    float randomValue = frac(sin(dot(texcoord * 100.0 + float2(sampleIndex, 0.0), float2(12.9898, 78.233))) * 43758.5453);
-    float phi = randomValue * 2.0 * 3.14159265359;
-    float theta = acos(1.0 - 2.0 * (frac(randomValue * 0.12345)));
+    /*---------------.
+    | :: Settings :: |
+    '---------------*/
 
-    float3 dir;
-    dir.x = sin(theta) * cos(phi);
-    dir.y = sin(theta) * sin(phi);
-    dir.z = cos(theta);
+    uniform int viewMode
+    <
+        ui_type = "combo";
+        ui_label = "View Mode";
+        ui_tooltip = "Select the view mode for SSAO";
+        ui_items = 
+        "Normal\0";
+    >
+    = 0;
 
-    return normalize(dir * 0.5 + float3(0.5, 0.5, 0.5));
-}
+    uniform int qualityLevel
+    <
+        ui_type = "combo";
+        ui_label = "Quality Level";
+        ui_tooltip = "Select quality level for ambient occlusion";
+        ui_items = 
+        "Low\0"
+        "Medium\0"
+        "High\0";
+    >
+    = 0;
 
-float3 FixedDirection(int sampleIndex)
-{
-    float3 directions[8] =
+    uniform float intensity
+    <
+        ui_type = "slider";
+        ui_label = "Occlusion Intensity";
+        ui_tooltip = "Adjust the intensity of ambient occlusion";
+        ui_min = 0.0; ui_max = 1.0; ui_step = 0.05;
+    >
+    = 0.1;
+
+    uniform int aoType
+    <
+        ui_type = "combo";
+        ui_label = "AO Type";
+        ui_tooltip = "Select ambient occlusion type";
+        ui_items = 
+        "AO-F\0" 
+        "AO-R\0";
+    >
+    = 1;
+
+    /*---------------.
+    | :: Textures :: |
+    '---------------*/
+
+    texture ColorTex : COLOR;
+    texture DepthTex : DEPTH;
+
+    sampler ColorSampler
     {
-        float3(1.0, 0.0, 0.0),
-        float3(-1.0, 0.0, 0.0),
-        float3(0.0, 1.0, 0.0),
-        float3(0.0, -1.0, 0.0),
-        float3(0.707, 0.707, 0.0),
-        float3(-0.707, 0.707, 0.0),
-        float3(0.707, -0.707, 0.0),
-        float3(-0.707, -0.707, 0.0)
+        Texture = ColorTex;
     };
-    return directions[sampleIndex % 8];
-}
 
-float4 SSAO(float2 texcoord)
-{
-    float4 originalColor = tex2D(ColorSampler, texcoord);
-    float depthValue = tex2D(DepthSampler, texcoord).r;
-    float occlusion = 0.0;
-
-    int sampleCount;
-    if (qualityLevel == 0)
-        sampleCount = 8;
-    else if (qualityLevel == 1)
-        sampleCount = 16;
-    else
-        sampleCount = 32;
-
-    float radius = 0.005;
-    float falloff = 0.01;
-
-    // Loop over the samples to compute occlusion
-    for (int i = 0; i < sampleCount; i++)
+    sampler DepthSampler
     {
-        float3 sampleDir;
+        Texture = DepthTex;
+    };
 
-        if (aoType == 0)
-            sampleDir = FixedDirection(i);
-        else if (aoType == 1)
-            sampleDir = RandomDirection(texcoord, i);
+    /*----------------.
+    | :: Functions :: |
+    '----------------*/
 
-        float2 sampleCoord = texcoord + sampleDir.xy * radius;
-        sampleCoord = clamp(sampleCoord, 0.0, 1.0); 
+    float3 RandomDirection(float2 texcoord, int sampleIndex)
+    {
+        float randomValue = frac(sin(dot(texcoord * 100.0 + float2(sampleIndex, 0.0), float2(12.9898, 78.233))) * 43758.5453);
+        float phi = randomValue * 2.0 * 3.14159265359;
+        float theta = acos(1.0 - 2.0 * (frac(randomValue * 0.12345)));
 
-        float sampleDepth = tex2D(DepthSampler, sampleCoord).r;
-        float rangeCheck = exp(-abs(depthValue - sampleDepth) / falloff); 
+        float3 dir;
+        dir.x = sin(theta) * cos(phi);
+        dir.y = sin(theta) * sin(phi);
+        dir.z = cos(theta);
 
-        occlusion += (sampleDepth < depthValue) ? rangeCheck : 0.0;
+        return normalize(dir * 0.5 + float3(0.5, 0.5, 0.5));
     }
 
-    // Normalize occlusion
-    occlusion = (occlusion / sampleCount) * intensity;
-
-    // Selected view mode
-    if (viewMode == 0)
+    float3 FixedDirection(int sampleIndex)
     {
-        float4 finalColor = originalColor * (1.0 - saturate(occlusion)); 
-        return finalColor;
+        float3 directions[8] =
+        {
+            float3(1.0, 0.0, 0.0),
+            float3(-1.0, 0.0, 0.0),
+            float3(0.0, 1.0, 0.0),
+            float3(0.0, -1.0, 0.0),
+            float3(0.707, 0.707, 0.0),
+            float3(-0.707, 0.707, 0.0),
+            float3(0.707, -0.707, 0.0),
+            float3(-0.707, -0.707, 0.0)
+        };
+        return directions[sampleIndex % 8];
     }
 
-    return originalColor;
-}
-
-float4 SSAOPS(float4 vpos : SV_Position, float2 texcoord : TexCoord) : SV_Target
-{
-    float4 ssaoColor = SSAO(texcoord);
-    return ssaoColor;
-}
-
-/*-----------------.
-| :: Techniques :: |
-'-----------------*/
-
-technique SSAO
-{
-    pass
+    float4 SSAO(float2 texcoord)
     {
-        VertexShader = PostProcessVS;
-        PixelShader = SSAOPS;
+        float4 originalColor = tex2D(ColorSampler, texcoord);
+        float depthValue = tex2D(DepthSampler, texcoord).r;
+        float occlusion = 0.0;
+
+        int sampleCount;
+        if (qualityLevel == 0)
+            sampleCount = 8;
+        else if (qualityLevel == 1)
+            sampleCount = 16;
+        else
+            sampleCount = 32;
+
+        float radius = 0.005;
+        float falloff = 0.01;
+
+        for (int i = 0; i < sampleCount; i++)
+        {
+            float3 sampleDir = (aoType == 0) ? FixedDirection(i) : RandomDirection(texcoord, i);
+
+            float2 sampleCoord = clamp(texcoord + sampleDir.xy * radius, 0.0, 1.0);
+            float sampleDepth = tex2D(DepthSampler, sampleCoord).r;
+            float rangeCheck = exp(-abs(depthValue - sampleDepth) / falloff);
+
+            occlusion += (sampleDepth < depthValue) ? rangeCheck : 0.0;
+        }
+
+        occlusion = (occlusion / sampleCount) * intensity;
+
+        if (viewMode == 0)
+        {
+            return originalColor * (1.0 - saturate(occlusion));
+        }
+
+        return originalColor;
+    }
+
+    float4 SSAOPS(float4 vpos : SV_Position, float2 texcoord : TexCoord) : SV_Target
+    {
+        float4 ssaoColor = SSAO(texcoord);
+        return ssaoColor;
+    }
+
+    /*-----------------.
+    | :: Techniques :: |
+    '-----------------*/
+
+    technique SSAO
+    {
+        pass
+        {
+            VertexShader = PostProcessVS;
+            PixelShader = SSAOPS;
+        }
     }
 }
-
-/*-------------.
-| :: Footer :: |
-'--------------/
-
-https://john-chapman-graphics.blogspot.com/2013/01/ssao-tutorial.html
-https://github.com/d3dcoder/d3d12book/blob/master/Chapter%2021%20Ambient%20Occlusion/Ssao/Shaders/Ssao.hlsl
