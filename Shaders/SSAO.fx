@@ -29,7 +29,6 @@
 	(*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
 	
 	Version 0.6
-	x Namespace implemented to avoid conflicts with other shaders.
 
 */
 
