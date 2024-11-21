@@ -86,7 +86,7 @@ uniform int aoType
     "AO-F\0" 
     "AO-R\0"
     "AO-R2\0"
-    "AO-RH\0"; // Renamed Hemisphere AO Type to O-RH
+    "AO-RH\0"; 
 >
 = 1;
 
