@@ -88,7 +88,7 @@ uniform int aoType
     "AO-R2\0"
     "AO-RH\0"; 
 >
-= 1;
+= 3;
 
     /*---------------.
     | :: Textures :: |
