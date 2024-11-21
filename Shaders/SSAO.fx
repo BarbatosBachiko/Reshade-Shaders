@@ -1,5 +1,5 @@
 /*
-        SSAO (version 0.6)
+        SSAO (version 0.6.1)
 
 	Author: Barbatos Bachiko
 	License: MIT
@@ -28,9 +28,10 @@
 	History:
 	(*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
 	
-	Version 0.6
-
-*/
+	Version 0.6.1
+        + Add Sample Radius
+        + Add Noise Scale for AO-R
+*/ 
 
     /*---------------.
     | :: Includes :: |
@@ -90,6 +91,24 @@ uniform int aoType
 >
 = 3;
 
+uniform float sampleRadius
+    <
+        ui_type = "slider";
+        ui_label = "Sample Radius";
+        ui_tooltip = "Adjust the radius of the samples for SSAO";
+        ui_min = 0.001; ui_max = 0.01; ui_step = 0.001;
+    >
+    = 0.005;
+
+uniform float noiseScale
+    <
+        ui_type = "slider";
+        ui_label = "Noise Scale (AO-R)";
+        ui_tooltip = "Adjust the scale of noise for random direction sampling";
+        ui_min = 0.1; ui_max = 1.0; ui_step = 0.05;
+    >
+    = 1.0;
+
     /*---------------.
     | :: Textures :: |
     '---------------*/
@@ -114,19 +133,21 @@ namespace SSAO
     '----------------*/
 
     // Random Direction
-    float3 RandomDirection(float2 texcoord, int sampleIndex)
+    float3 RandomDirection(float2 texcoord, int sampleIndex, float noiseScale)
     {
         float randomValue = frac(sin(dot(texcoord * 100.0 + float2(sampleIndex, 0.0), float2(12.9898, 78.233))) * 43758.5453);
         float phi = randomValue * 2.0 * 3.14159265359;
         float theta = acos(1.0 - 2.0 * (frac(randomValue * 0.12345)));
 
+    // Apply noise scale
         float3 dir;
         dir.x = sin(theta) * cos(phi);
         dir.y = sin(theta) * sin(phi);
         dir.z = cos(theta);
 
-        return normalize(dir * 0.5 + float3(0.5, 0.5, 0.5));
+        return normalize(dir * noiseScale + float3(0.5, 0.5, 0.5)); 
     }
+
 
     //Fixed Direction
     float3 FixedDirection(int sampleIndex)
@@ -171,7 +192,7 @@ namespace SSAO
         return normalize(dir);
     }
 
-    // Main SSAO
+   // Main SSAO
     float4 SSAO(float2 texcoord)
     {
         float4 originalColor = tex2D(ColorSampler, texcoord);
@@ -186,7 +207,7 @@ namespace SSAO
         else
             sampleCount = 32;
 
-        float radius = 0.005;
+        float radius = sampleRadius; 
         float falloff = 0.01;
 
         for (int i = 0; i < sampleCount; i++)
@@ -195,7 +216,7 @@ namespace SSAO
             if (aoType == 0)
                 sampleDir = FixedDirection(i);
             else if (aoType == 1)
-                sampleDir = RandomDirection(texcoord, i);
+                sampleDir = RandomDirection(texcoord, i, noiseScale); 
             else if (aoType == 2)
                 sampleDir = RandomDirection2(texcoord, i);
             else if (aoType == 3) 
@@ -214,7 +235,7 @@ namespace SSAO
         {
             return originalColor * (1.0 - saturate(occlusion));
         }
-        
+    
         if (viewMode == 1)
         {
             return float4(saturate(occlusion), saturate(occlusion), saturate(occlusion), 1.0);
