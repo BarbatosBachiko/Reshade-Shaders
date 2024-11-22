@@ -2,18 +2,18 @@
 | :: Description :: |
 '-------------------/
 
-   Convolution Anti-Aliasing (Version 1.1)
+   Convolution Anti-Aliasing (Version 1.2)
 
     Author: Barbatos Bachiko
     License: MIT
+
     About: Implements an anti-aliasing technique using a local convolution filter and pixel warping if necessary for smoothing.
 
     History:
-	 (*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
+    (*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
 	
-	Version 1.1
-	+ Improve Distortion
-   + Add Kernel Size
+    Version 1.2
+    + Improve Convolution AA with Grid-based Sampling
 */
 
 #include "ReShade.fxh"
@@ -91,11 +91,10 @@ float GetPixelVariance(float2 texcoord)
             variance += abs(centerLuminance - neighborLuminance);
         }
     }
-
     return variance / (KernelSize * KernelSize);
 }
 
-// Applies adaptive convolution 
+// Applies adaptive convolution
 float4 AdaptiveConvolutionAA(float2 texcoord)
 {
     float variance = GetPixelVariance(texcoord);
@@ -107,24 +106,23 @@ float4 AdaptiveConvolutionAA(float2 texcoord)
     float4 smoothedPixel = 0.0;
     float totalWeight = 0.0;
 
-    for (int y = -halfSize; y <= halfSize; y++)
+    // Grid-based sampling
+    int fixedGridSize = 3;
+    for (int y = -fixedGridSize; y <= fixedGridSize; y++)
     {
-        for (int x = -halfSize; x <= halfSize; x++)
+        for (int x = -fixedGridSize; x <= fixedGridSize; x++)
         {
-            float2 sampleOffset = float2(x * offset.x, y * offset.y);
-            float2 diagonalOffset = float2(x + y, x - y) * offset;
-            float4 samplePixel1 = LoadPixel(texcoord + sampleOffset);
-            float4 samplePixel2 = LoadPixel(texcoord + diagonalOffset);
-
-            float kernelWeight = 1.0;
-            smoothedPixel += samplePixel1 * kernelWeight;
-            smoothedPixel += samplePixel2 * kernelWeight;
-            totalWeight += 2.0 * kernelWeight;
+            if (abs(x) + abs(y) <= halfSize)
+            {
+                float2 sampleOffset = float2(x * offset.x, y * offset.y);
+                smoothedPixel += LoadPixel(texcoord + sampleOffset);
+                totalWeight += 1.0;
+            }
         }
     }
-
     smoothedPixel /= totalWeight;
 
+    // Apply distortion if necessary
     float2 distortionOffset = float2(sin(texcoord.x * PI * 2.0), cos(texcoord.y * PI * 2.0)) * DistortionStrength;
     texcoord += distortionOffset * weight;
     
