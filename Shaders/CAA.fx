@@ -2,12 +2,18 @@
 | :: Description :: |
 '-------------------/
 
-   Convolution Anti-Aliasing (Version 1.0)
+   Convolution Anti-Aliasing (Version 1.1)
 
     Author: Barbatos Bachiko
     License: MIT
     About: Implements an anti-aliasing technique using a local convolution filter and pixel warping if necessary for smoothing.
 
+    History:
+	 (*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
+	
+	Version 1.1
+	+ Improve Distortion
+   + Add Kernel Size
 */
 
 #include "ReShade.fxh"
@@ -34,6 +40,15 @@ uniform float DistortionStrength <
     ui_default = 0.0; 
 > = 0.0;
 
+uniform int KernelSize < 
+    ui_type = "slider";
+    ui_label = "Kernel Size"; 
+    ui_tooltip = "Adjust the size of the convolution kernel."; 
+    ui_min = 3; 
+    ui_max = 11; 
+    ui_default = 3; 
+> = 3;
+
 /*---------------.
 | :: Textures :: |
 '---------------*/
@@ -56,65 +71,67 @@ float4 LoadPixel(float2 texcoord)
     return tex2D(BackBuffer, texcoord);
 }
 
-// Calculates the difference between neighboring pixels (local variance)
+// Calculates the variance between the pixel and its neighbors based on luminance
 float GetPixelVariance(float2 texcoord)
 {
     float2 offset = float2(1.0 / BUFFER_WIDTH, 1.0 / BUFFER_HEIGHT);
     float4 center = LoadPixel(texcoord);
-    
-    float4 neighbors[8] =
-    {
-        LoadPixel(texcoord + float2(-offset.x, -offset.y)),
-        LoadPixel(texcoord + float2(offset.x, -offset.y)),
-        LoadPixel(texcoord + float2(-offset.x, offset.y)),
-        LoadPixel(texcoord + float2(offset.x, offset.y)),
-        LoadPixel(texcoord + float2(-offset.x, 0)),
-        LoadPixel(texcoord + float2(offset.x, 0)),
-        LoadPixel(texcoord + float2(0, -offset.y)),
-        LoadPixel(texcoord + float2(0, offset.y))
-    };
-    
+    float centerLuminance = 0.299 * center.r + 0.587 * center.g + 0.114 * center.b;
+
     float variance = 0.0;
-    for (int i = 0; i < 8; i++)
-    {
-        variance += length(center.rgb - neighbors[i].rgb);
-    }
+    int halfSize = (KernelSize - 1) / 2;
     
-    return variance / 8.0;
+    for (int y = -halfSize; y <= halfSize; y++)
+    {
+        for (int x = -halfSize; x <= halfSize; x++)
+        {
+            float2 sampleOffset = float2(x * offset.x, y * offset.y);
+            float4 neighbor = LoadPixel(texcoord + sampleOffset);
+            float neighborLuminance = 0.299 * neighbor.r + 0.587 * neighbor.g + 0.114 * neighbor.b;
+            variance += abs(centerLuminance - neighborLuminance);
+        }
+    }
+
+    return variance / (KernelSize * KernelSize);
 }
 
-// Adaptive convolution for anti-aliasing
+// Applies adaptive convolution 
 float4 AdaptiveConvolutionAA(float2 texcoord)
 {
     float variance = GetPixelVariance(texcoord);
-    
-    // If variance is above threshold, we consider it an edge and apply strong anti-aliasing
     float weight = smoothstep(EdgeThreshold, EdgeThreshold + 0.1, variance);
     
     float2 offset = float2(1.0 / BUFFER_WIDTH, 1.0 / BUFFER_HEIGHT);
-    
-    // Apply adaptive smoothing: stronger filter where variance is low (smooth areas)
+    int halfSize = (KernelSize - 1) / 2;
+
     float4 smoothedPixel = 0.0;
-    smoothedPixel += LoadPixel(texcoord + float2(-offset.x, -offset.y));
-    smoothedPixel += LoadPixel(texcoord + float2(offset.x, -offset.y));
-    smoothedPixel += LoadPixel(texcoord + float2(-offset.x, offset.y));
-    smoothedPixel += LoadPixel(texcoord + float2(offset.x, offset.y));
-    
-    smoothedPixel += LoadPixel(texcoord + float2(-offset.x, 0));
-    smoothedPixel += LoadPixel(texcoord + float2(offset.x, 0));
-    smoothedPixel += LoadPixel(texcoord + float2(0, -offset.y));
-    smoothedPixel += LoadPixel(texcoord + float2(0, offset.y));
-    
-    smoothedPixel /= 8.0;
-    
-    // If the area is not an edge, apply a distortion to smooth the pixels
+    float totalWeight = 0.0;
+
+    for (int y = -halfSize; y <= halfSize; y++)
+    {
+        for (int x = -halfSize; x <= halfSize; x++)
+        {
+            float2 sampleOffset = float2(x * offset.x, y * offset.y);
+            float2 diagonalOffset = float2(x + y, x - y) * offset;
+            float4 samplePixel1 = LoadPixel(texcoord + sampleOffset);
+            float4 samplePixel2 = LoadPixel(texcoord + diagonalOffset);
+
+            float kernelWeight = 1.0;
+            smoothedPixel += samplePixel1 * kernelWeight;
+            smoothedPixel += samplePixel2 * kernelWeight;
+            totalWeight += 2.0 * kernelWeight;
+        }
+    }
+
+    smoothedPixel /= totalWeight;
+
     float2 distortionOffset = float2(sin(texcoord.x * PI * 2.0), cos(texcoord.y * PI * 2.0)) * DistortionStrength;
     texcoord += distortionOffset * weight;
     
     return lerp(LoadPixel(texcoord), smoothedPixel, weight);
 }
 
-// Main 
+// Main function
 float4 Out(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
 {
     return AdaptiveConvolutionAA(texcoord);
