@@ -70,7 +70,7 @@ uniform float NoiseSeed <
 uniform bool EnableBloom < 
     ui_type = "checkbox";
     ui_label = "Enable Bloom"; 
-> = true;
+> = false;
 
 uniform float BloomStrength < 
     ui_type = "slider";
