@@ -5,15 +5,15 @@
 	Color Grading (version 1.0)
 
 	Author: BarbatosBachiko
-    License: MIT
+        License: MIT
 
 	About:
 	This shader adjusts brightness, saturation, and contrast and color grading interpolation.
 
 	Ideas for future improvement:
 
-    History:
-    (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
+        History:
+        (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
 	
 	Version 1.0
 	* Release
