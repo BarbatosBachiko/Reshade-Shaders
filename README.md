@@ -2,14 +2,7 @@
 
 **Welcome to the BaBa Reshade-Shaders wiki!**
 
-**How to install the shaders?**
+**Anti Aliasing Shaders**
 
-1- Install Reshade:
-https://reshade.me/
-
-2- Download the file
-![image](https://github.com/user-attachments/assets/bf066a57-329c-4188-9e85-02af01310e5d)
-
-3- Extract inside the reshade shaders folder
-
-4- Enjoy!
+Comparative:
+([https://imgsli.com/MzIxMDA0/0/4](https://imgsli.com/MzIxMDA0/0/4)
