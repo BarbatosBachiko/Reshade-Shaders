@@ -2,25 +2,24 @@
 | :: Description :: |
 '-------------------/
 
-Directionally Localized Anti Aliasing Lite (version 1.5)
+Directionally Localized Anti Aliasing Lite (version 1.6)
 
 	Author: Barbatos Bachiko
 	License: Creative Commons Attribution 3.0
+        Original by: BlueSkyDefender. Thanks!
 
 	About:
-    This shader applies Directionally Localized Anti-Aliasing (DLAA) with
-    Shading effect and Sharpness.
+        This shader applies Directionally Localized Anti-Aliasing (DLAA) with
+        Shading effect and Sharpness.
     
 	Ideas for future improvement:
 	Implement Additional Anti-Aliasing
 
 	History:
-	(*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
+	(*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
 	
-	Version 1.5
-	* Shader changed to use GShade's DLAA 
-    - Removed Subpixel Anti-Aliasing
-
+	Version 1.6
+	+ Improved Shading
 */
 
 /*---------------.
@@ -60,7 +59,10 @@ uniform float ShadingIntensity <
     ui_type = "slider";
     ui_label = "Shading"; 
     ui_tooltip = "Control the Shading."; 
-> = 0.2; 
+    ui_min = 0.0; 
+    ui_max = 4.0; 
+    ui_default = 2.0; 
+> = 2.0;
 
 uniform bool EnableShading < 
     ui_type = "checkbox";
@@ -105,21 +107,17 @@ sampler SamplerLoadedPixel
 | :: Functions :: |
 '----------------*/
 
-//Luminosity Intensity
 float LI(in float3 value)
 {
-	//Luminosity Controll from 0.1 to 1.0 
-	//If GGG value of 0.333, 0.333, 0.333 is about right for Green channel. 
-	//Slide 51 talk more about this.	
     return dot(value.ggg, float3(0.333, 0.333, 0.333));
 }
 
-float4 LP(float2 tc, float dx, float dy) //Load Pixel
+float4 LP(float2 tc, float dx, float dy) 
 {
     return tex2D(BackBuffer, tc + float2(dx, dy) * pix.xy);
 }
 
-float4 PreFilter(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target //Loaded Pixel
+float4 PreFilter(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target 
 {
 
     const float4 center = LP(texcoord, 0, 0);
@@ -134,7 +132,7 @@ float4 PreFilter(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV
     return float4(center.rgb, edgesLum);
 }
 
-float4 SLP(float2 tc, float dx, float dy) //Load Pixel
+float4 SLP(float2 tc, float dx, float dy) 
 {
     return tex2D(SamplerLoadedPixel, tc + float2(dx, dy) * pix.xy);
 }
@@ -160,30 +158,41 @@ float4 ApplySharpness(float4 color, float2 texcoord)
     return clamp(sharpened, 0.0, 1.0);
 }
 
-// Apply Shading
 float4 ApplyShading(float4 color, float2 texcoord)
 {
     if (!EnableShading)
     {
         return color;
     }
-    float4 left = LoadPixel(BackBuffer, texcoord + float2(-1.0 * float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT).x, 0));
-    float4 right = LoadPixel(BackBuffer, texcoord + float2(1.0 * float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT).x, 0));
-    float4 top = LoadPixel(BackBuffer, texcoord + float2(0, -1.0 * float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT).y));
-    float4 bottom = LoadPixel(BackBuffer, texcoord + float2(0, 1.0 * float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT).y));
-    float4 diffLeft = abs(left - color);
-    float4 diffRight = abs(right - color);
-    float4 diffTop = abs(top - color);
-    float4 diffBottom = abs(bottom - color);
-    float complexity = (dot(diffLeft.rgb, float3(1.0, 1.0, 1.0)) +
-                        dot(diffRight.rgb, float3(1.0, 1.0, 1.0)) +
-                        dot(diffTop.rgb, float3(1.0, 1.0, 1.0)) +
-                        dot(diffBottom.rgb, float3(1.0, 1.0, 1.0))) / 4.0;
-    float vrsFactor = 1.0 - (complexity * ShadingIntensity);
-    return color * vrsFactor;
+
+    // Load neighboring pixels
+    float4 left = LoadPixel(BackBuffer, texcoord + float2(-BUFFER_RCP_WIDTH, 0));
+    float4 right = LoadPixel(BackBuffer, texcoord + float2(BUFFER_RCP_WIDTH, 0));
+    float4 top = LoadPixel(BackBuffer, texcoord + float2(0, -BUFFER_RCP_HEIGHT));
+    float4 bottom = LoadPixel(BackBuffer, texcoord + float2(0, BUFFER_RCP_HEIGHT));
+
+    // Calculate differences
+    float3 diffLeft = abs(left.rgb - color.rgb);
+    float3 diffRight = abs(right.rgb - color.rgb);
+    float3 diffTop = abs(top.rgb - color.rgb);
+    float3 diffBottom = abs(bottom.rgb - color.rgb);
+
+    // Aggregate edge intensity
+    float3 weightVector = float3(0.333, 0.333, 0.333); 
+    float edgeIntensity = (dot(diffLeft, weightVector) +
+                           dot(diffRight, weightVector) +
+                           dot(diffTop, weightVector) +
+                           dot(diffBottom, weightVector)) / 4.0;
+
+    float weight = smoothstep(0.0, 1.0, edgeIntensity * ShadingIntensity);
+
+    float4 dimmedColor = color * (1.0 - ShadingIntensity);
+    float4 shadedColor = lerp(color, dimmedColor, weight);
+
+    return shadedColor;
 }
 
-// Adaptive based on scene complexity and pixel width
+// Pixel width
 float4 ApplyPixelWidth(float4 color, float2 texcoord)
 {
     if (!PixelWidth)
@@ -203,7 +212,7 @@ float4 ApplyPixelWidth(float4 color, float2 texcoord)
     float edgeIntensity = length(laplacian.rgb);
 
     // Dynamic complexity factor based on scene metrics
-    float complexityFactor = 1.0 + edgeIntensity * 0.5; 
+    float complexityFactor = 1.0 + edgeIntensity * 0.5;
     float enhancementFactor = saturate(edgeIntensity * 3.0 * complexityFactor);
 
     float4 enhancedColor = color + laplacian * enhancementFactor;
