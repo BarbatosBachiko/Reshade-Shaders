@@ -355,14 +355,14 @@ float4 Out(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Targe
         DLAA = ApplyPixelWidth(DLAA, texcoord);
     }
     
-    if (sharpness > 0.0)
-    {
-        DLAA = ApplySharpness(DLAA, texcoord);
-    }
-
     if (EnableShading > 0.0)
     {
         DLAA = ApplyShading(DLAA, texcoord);
+    }
+
+    if (sharpness > 0.0)
+    {
+        DLAA = ApplySharpness(DLAA, texcoord);
     }
     
     return DLAA;
