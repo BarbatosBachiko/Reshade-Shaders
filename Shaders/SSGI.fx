@@ -2,12 +2,18 @@
 | :: Description :: |
 '-------------------/
 
-   Screen-space global illumination (SSGI) with Multi-Bounce (Version 1.1)
+   Screen-space global illumination (SSGI) (Version 1.1.1)
 
     Author: Barbatos Bachiko
     License: MIT
 
     About: This shader simulates screen-space global illumination (SSGI) to enhance scene lighting by calculating indirect light bounces.
+
+    History:
+	(*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
+    
+    Version 1.1.1
+    + Clean Code
 */
 
 #include "ReShade.fxh"
@@ -86,34 +92,15 @@ namespace SSGI
 
     float3 SampleDiffuse(float2 coord)
     {
-        coord = clamp(coord, 0.0, 1.0);
-        return tex2D(ColorSampler, coord).rgb;
+        return tex2D(ColorSampler, clamp(coord, 0.0, 1.0)).rgb;
     }
     
+    float SampleDepth(float2 coord)
+    {
 #if RESHADE_DEPTH_INPUT_IS_UPSIDE_DOWN
-    float SampleDepth(float2 coord)
-    {
-        coord.y = 1.0 - coord.y; 
-        coord = clamp(coord, 0.0, 1.0);
-        return tex2D(DepthSampler, coord).r;
-    }
-#else
-    float SampleDepth(float2 coord)
-    {
-        coord = clamp(coord, 0.0, 1.0);
-        return tex2D(DepthSampler, coord).r;
-    }
+        coord.y = 1.0 - coord.y;
 #endif
-
-    float3 ReflectRay(float3 rayDir, float3 normal)
-    {
-        return rayDir - 2.0 * dot(rayDir, normal) * normal;
-    }
-
-    float3 UVToWorldDir(float2 uv, float3 cameraPos, float3 normal)
-    {
-        float3 viewDir = cameraPos - float3(uv, SampleDepth(uv));
-        return ReflectRay(viewDir, normal);
+        return tex2D(DepthSampler, clamp(coord, 0.0, 1.0)).r;
     }
 
     float2 RandomOffset(float2 coord)
@@ -123,7 +110,7 @@ namespace SSGI
 
     float3 GatherDiffuseGI(float2 texcoord, float radius)
     {
-        float3 indirectLight = float3(0.0, 0.0, 0.0);
+        float3 indirectLight = 0.0;
         float3 viewPos = float3(texcoord, SampleDepth(texcoord));
         float radiusOverSamples = radius / float(numSamples);
 
@@ -133,8 +120,7 @@ namespace SSGI
             float2 randomDir = float2(cos(angle), sin(angle)) * RandomOffset(texcoord + float2(i, i));
             float2 sampleCoord = texcoord + randomDir * radiusOverSamples;
             float3 sampleColor = SampleDiffuse(sampleCoord);
-            float sampleDepth = SampleDepth(sampleCoord);
-            if (sampleDepth < viewPos.z)
+            if (SampleDepth(sampleCoord) < viewPos.z)
             {
                 indirectLight += sampleColor;
             }
@@ -145,14 +131,14 @@ namespace SSGI
 
     float3 ComputeMultiBounceGI(float2 texcoord)
     {
-        float3 totalIndirectLight = float3(0.0, 0.0, 0.0);
+        float3 totalIndirectLight = 0.0;
         float3 indirectLight = GatherDiffuseGI(texcoord, sampleRadius);
 
         totalIndirectLight += giIntensity * indirectLight;
 
         for (int bounce = 1; bounce < numBounces; ++bounce)
         {
-            indirectLight = GatherDiffuseGI(texcoord, sampleRadius * 0.5); 
+            indirectLight = GatherDiffuseGI(texcoord, sampleRadius * 0.5);
             totalIndirectLight += giIntensity * indirectLight * (1.0 / (bounce + 1));
         }
 
@@ -165,22 +151,19 @@ namespace SSGI
         float3 indirectLight = ComputeMultiBounceGI(texcoord);
         float3 finalColor = originalColor + indirectLight;
 
-        if (viewMode == 0) 
+        if (viewMode == 0)
         {
             return float4(finalColor, 1.0);
         }
-        else if (viewMode == 1) 
+        else if (viewMode == 1)
         {
-            float3 giContribution = indirectLight - originalColor;
-            giContribution = clamp(giContribution, 0.0, 5.0); 
+            float3 giContribution = clamp(indirectLight - originalColor, 0.0, 5.0);
             return float4(giContribution, 1.0);
         }
     
         return float4(originalColor, 1.0);
     }
 
-
-// Vertex Shader 
     void PostProcessVS(in uint id : SV_VertexID, out float4 position : SV_Position, out float2 texcoord : TEXCOORD)
     {
         texcoord = float2((id == 2) ? 2.0 : 0.0, (id == 1) ? 2.0 : 0.0);
