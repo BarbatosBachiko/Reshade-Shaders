@@ -2,7 +2,7 @@
 | :: Description :: |
 '-------------------/
 
-   Screen-space global illumination (SSGI) (Version 1.1.1)
+   Screen-space global illumination (SSGI) (Version 1.2)
 
     Author: Barbatos Bachiko
     License: MIT
@@ -12,10 +12,9 @@
     History:
 	(*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
     
-    Version 1.1.1
-    + Clean Code
+    Version 1.2
+    + Add NormalMap
 */
-
 #include "ReShade.fxh"
 
 namespace SSGI
@@ -25,7 +24,7 @@ namespace SSGI
 '---------------*/
 
     uniform int viewMode
-    <
+    < 
         ui_type = "combo";
         ui_label = "View Mode";
         ui_tooltip = "Select the view mode";
@@ -36,16 +35,16 @@ namespace SSGI
     = 0;
 
     uniform float giIntensity
-    <
+    < 
         ui_type = "slider";
         ui_label = "GI Intensity";
         ui_tooltip = "Adjust the intensity.";
         ui_min = 0.0; ui_max = 2.0; ui_step = 0.05;
     >
-    = 1.0;
+    = 0.5;
 
     uniform float sampleRadius
-    <
+    < 
         ui_type = "slider";
         ui_label = "Sample Radius";
         ui_tooltip = "Adjust the radius of the samples.";
@@ -54,7 +53,7 @@ namespace SSGI
     = 1.0;
 
     uniform int numSamples
-    <
+    < 
         ui_type = "slider";
         ui_label = "Sample Count";
         ui_tooltip = "Number of samples (higher = better quality).";
@@ -63,7 +62,7 @@ namespace SSGI
     = 32;
 
     uniform int numBounces
-    <
+    < 
         ui_type = "slider";
         ui_label = "Number of Bounces";
         ui_tooltip = "Number of GI bounces.";
@@ -77,6 +76,7 @@ namespace SSGI
 
     texture ColorTex : COLOR;
     texture DepthTex : DEPTH;
+    texture NormalTex : NORMAL; // Adicionando a textura de normais
     sampler ColorSampler
     {
         Texture = ColorTex;
@@ -85,47 +85,66 @@ namespace SSGI
     {
         Texture = DepthTex;
     };
+    sampler NormalSampler
+    {
+        Texture = NormalTex;
+    };
 
 /*----------------.
 | :: Functions :: |
 '----------------*/
 
-    float3 SampleDiffuse(float2 coord)
+    float GetLinearDepth(float2 coords)
     {
-        return tex2D(ColorSampler, clamp(coord, 0.0, 1.0)).rgb;
-    }
-    
-    float SampleDepth(float2 coord)
-    {
-#if RESHADE_DEPTH_INPUT_IS_UPSIDE_DOWN
-        coord.y = 1.0 - coord.y;
-#endif
-        return tex2D(DepthSampler, clamp(coord, 0.0, 1.0)).r;
+        return ReShade::GetLinearizedDepth(coords);
     }
 
     float2 RandomOffset(float2 coord)
     {
         return frac(sin(dot(coord, float2(12.9898, 78.233))) * 43758.5453);
     }
+    
+    float3 GetPosition(float2 coords)
+    {
+        float EyeDepth = GetLinearDepth(coords.xy) * RESHADE_DEPTH_LINEARIZATION_FAR_PLANE;
+        return float3((coords.xy * 2.0 - 1.0) * EyeDepth, EyeDepth);
+    }
+
+    float3 SampleDiffuse(float2 coord)
+    {
+        return tex2D(ColorSampler, clamp(coord, 0.0, 1.0)).rgb;
+    }
+
+    float3 GetNormal(float2 coords)
+    {
+        return tex2D(NormalSampler, coords).xyz * 2.0 - 1.0;
+    }
 
     float3 GatherDiffuseGI(float2 texcoord, float radius)
     {
         float3 indirectLight = 0.0;
-        float3 viewPos = float3(texcoord, SampleDepth(texcoord));
+        float3 viewPos = GetPosition(texcoord);
+        float3 normal = GetNormal(texcoord);
         float radiusOverSamples = radius / float(numSamples);
 
         for (int i = 0; i < numSamples; ++i)
         {
+ 
             float angle = (float(i) / numSamples) * 6.28318530718;
             float2 randomDir = float2(cos(angle), sin(angle)) * RandomOffset(texcoord + float2(i, i));
             float2 sampleCoord = texcoord + randomDir * radiusOverSamples;
             float3 sampleColor = SampleDiffuse(sampleCoord);
-            if (SampleDepth(sampleCoord) < viewPos.z)
+            if (GetLinearDepth(sampleCoord) < viewPos.z)
             {
-                indirectLight += sampleColor;
+                float3 sampleNormal = GetNormal(sampleCoord);
+                float normalDot = dot(normal, sampleNormal);
+                if (normalDot > 0.0)
+                {
+                    indirectLight += sampleColor;
+                }
             }
         }
-
+        
         return indirectLight / numSamples;
     }
 
