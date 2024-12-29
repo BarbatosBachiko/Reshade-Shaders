@@ -2,8 +2,11 @@
 | :: Description :: |
 '-------------------/
 
-   Screen-space global illumination (SSGI) (Version 1.2)
-
+  ___ ___  ___ ___ 
+ / __/ __|/ __|_ _|
+ \__ \__ \ (_ || | 
+ |___/___/\___|___|
+                   
     Author: Barbatos Bachiko
     License: MIT
 
@@ -76,7 +79,7 @@ namespace SSGI
 
     texture ColorTex : COLOR;
     texture DepthTex : DEPTH;
-    texture NormalTex : NORMAL; // Adicionando a textura de normais
+    texture NormalTex : NORMAL; 
     sampler ColorSampler
     {
         Texture = ColorTex;
