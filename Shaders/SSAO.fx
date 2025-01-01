@@ -7,7 +7,7 @@
  \__ \__ \/ _ \ (_) |
  |___/___/_/ \_\___/  
                                                                                        
-    Version 0.7.1
+    Version 0.7.2
 	Author: Barbatos Bachiko
 	License: MIT
 
@@ -19,8 +19,8 @@
 	History:
 	(*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
 	
-	Version 0.7.1
-    + Improvement for Sky
+	Version 0.7.2
+    * add MXAO (Random + Hemisphere)
 
 */ 
 
@@ -77,9 +77,10 @@ uniform int aoType
     ui_tooltip = "Select ambient occlusion type";
     ui_items = 
     "Random Direction\0"
-    "Hemisphere\0"; 
+    "Hemisphere\0"
+    "MXAO\0"; 
 >
-= 1;
+= 2;
 
 uniform float sampleRadius
     <
@@ -211,11 +212,18 @@ namespace SSAO
         float falloff = 0.01;
         for (int i = 0; i < sampleCount; i++)
         {
-            float3 sampleDir;
-            if (aoType == 0)
+            float3 sampleDir = float3(0.0, 0.0, 0.0);
+
+            if (aoType == 0) 
                 sampleDir = RandomDirection(texcoord, i, noiseScale);
-            else if (aoType == 1)
+            else if (aoType == 1) 
                 sampleDir = HemisphereSampling(i, normal);
+            else if (aoType == 2) 
+            {
+                float3 randomDir = RandomDirection(texcoord, i, noiseScale);
+                float3 hemisphereDir = HemisphereSampling(i, normal);
+                sampleDir = normalize(randomDir + hemisphereDir); 
+            }
 
             float2 sampleCoord = clamp(texcoord + sampleDir.xy * radius, 0.0, 1.0);
             float sampleDepth = GetLinearDepth(sampleCoord);
@@ -242,7 +250,7 @@ namespace SSAO
         {
             return float4(depthValue, depthValue, depthValue, 1.0);
         }
-        else if (viewMode == 3) 
+        else if (viewMode == 3)
         {
             if (depthValue >= depthThreshold)
                 return float4(1.0, 0.0, 0.0, 1.0);
