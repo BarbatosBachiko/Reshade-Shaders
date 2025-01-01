@@ -7,7 +7,7 @@
  \__ \__ \/ _ \ (_) |
  |___/___/_/ \_\___/  
                                                                                        
-    Version 0.7
+    Version 0.7.1
 	Author: Barbatos Bachiko
 	License: MIT
 
@@ -19,10 +19,9 @@
 	History:
 	(*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
 	
-	Version 0.7
-    x now the shader responds to reshade commands
-    - AO-F and AO-R2 have been removed
-    + Integrated NormalMap
+	Version 0.7.1
+    + Improvement for Sky
+
 */ 
 
     /*---------------.
@@ -43,8 +42,9 @@ uniform int viewMode
         ui_tooltip = "Select the view mode for SSAO";
         ui_items = 
 "Normal\0" 
-"AO Only\0"
-"AO Debug\0";
+"AO Debug\0"
+"Depth\0"
+"Sky Debug\0";
 
     >
     = 0;
@@ -106,7 +106,17 @@ uniform float fDepthMultiplier <
         ui_label = "Depth multiplier";
         ui_min = 0.001; ui_max = 20.00;
         ui_step = 0.001;
-    > = 0.010;
+    > = 1.0;
+
+uniform float depthThreshold
+<
+    ui_type = "slider";
+    ui_category = "Depth";
+    ui_label = "Depth Threshold (Sky)";
+    ui_tooltip = "Set the depth threshold to ignore the sky during occlusion.";
+    ui_min = 0.9; ui_max = 1.0; ui_step = 0.01;
+>
+= 0.95;
 
     /*---------------.
     | :: Textures :: |
@@ -116,7 +126,7 @@ namespace SSAO
 {
     texture ColorTex : COLOR;
     texture DepthTex : DEPTH;
-    texture NormalTex : NORMAL; 
+    texture NormalTex : NORMAL;
 
     sampler ColorSampler
     {
@@ -199,7 +209,6 @@ namespace SSAO
 
         float radius = sampleRadius;
         float falloff = 0.01;
-
         for (int i = 0; i < sampleCount; i++)
         {
             float3 sampleDir;
@@ -210,9 +219,12 @@ namespace SSAO
 
             float2 sampleCoord = clamp(texcoord + sampleDir.xy * radius, 0.0, 1.0);
             float sampleDepth = GetLinearDepth(sampleCoord);
-            float rangeCheck = exp(-abs(depthValue - sampleDepth) / falloff);
 
-            occlusion += (sampleDepth < depthValue) ? rangeCheck : 0.0;
+            if (sampleDepth < depthThreshold)
+            {
+                float rangeCheck = exp(-abs(depthValue - sampleDepth) / falloff);
+                occlusion += (sampleDepth < depthValue) ? rangeCheck : 0.0;
+            }
         }
 
         occlusion = (occlusion / sampleCount) * intensity;
@@ -228,6 +240,12 @@ namespace SSAO
         }
         else if (viewMode == 2)
         {
+            return float4(depthValue, depthValue, depthValue, 1.0);
+        }
+        else if (viewMode == 3) 
+        {
+            if (depthValue >= depthThreshold)
+                return float4(1.0, 0.0, 0.0, 1.0);
             return float4(depthValue, depthValue, depthValue, 1.0);
         }
 
