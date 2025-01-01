@@ -1,21 +1,19 @@
 /*------------------.
 | :: Description :: |
 '-------------------/
-uFakeHDR (version 1.1)
+uFakeHDR 
 
+Version 1.2
 Author: BarbatosBachiko
 License: MIT
 
-About: This shader simulates HDR effects for SDR. 
-
-Ideas for future improvement:
+About: This shader simulates HDR effects (expected by me) for SDR.
 
 History:
 (*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
 
-Version 1.1.2:
-x parameter adjustment
-+ Bloom uses texturesize
+Version 1.2:
++ organization
 
 */
 
@@ -42,11 +40,13 @@ uniform int ToneMappingMethod <
 > = 5;
 
 uniform bool EnableDithering < 
+    ui_category = "Dithering";
     ui_type = "checkbox";
     ui_label = "Enable Dithering"; 
 > = false; 
 
 uniform float DitherStrength < 
+    ui_category = "Dithering";
     ui_type = "slider";
     ui_label = "Dither Strength"; 
     ui_min = 0.0; 
@@ -54,6 +54,7 @@ uniform float DitherStrength <
 > = 0.05; 
 
 uniform float NoiseScale < 
+    ui_category = "Dithering";
     ui_type = "slider";
     ui_label = "Noise Scale"; 
     ui_min = 0.1; 
@@ -61,6 +62,7 @@ uniform float NoiseScale <
 > = 1.0; 
 
 uniform float NoiseSeed < 
+    ui_category = "Dithering";
     ui_type = "slider";
     ui_label = "Noise Seed"; 
     ui_min = 1.0; 
@@ -68,11 +70,13 @@ uniform float NoiseSeed <
 > = 43758.5453; 
 
 uniform bool EnableBloom < 
+    ui_category = "Bloom";
     ui_type = "checkbox";
     ui_label = "Enable Bloom"; 
 > = false;
 
 uniform float BloomStrength < 
+    ui_category = "Bloom";
     ui_type = "slider";
     ui_label = "Bloom Strength"; 
     ui_min = 0.0; 
@@ -80,6 +84,7 @@ uniform float BloomStrength <
 > = 0.300;
 
 uniform float bloomThreshold < 
+    ui_category = "Bloom";
     ui_type = "slider";
     ui_label = "Bloom Threshold"; 
     ui_min = 0.0; 
@@ -87,6 +92,7 @@ uniform float bloomThreshold <
 > = 0.0; 
 
 uniform float LuminanceAdaptationSpeed < 
+    ui_category = "Luminace";
     ui_type = "slider";
     ui_label = "Luminance Adaptation Speed"; 
     ui_min = 0.01; 
@@ -109,7 +115,6 @@ static float lastSceneLuminance = 0.0;
 | :: Functions :: |
 '----------------*/
 
-// Calculate the average luminance of the scene
 float CalculateSceneLuminance(float2 texcoord)
 {
     float sampleRadius = 2.0;
@@ -140,7 +145,6 @@ float CalculateSceneLuminance(float2 texcoord)
     return lastSceneLuminance;
 }
 
-// Tone mapping functions
 float3 ReinhardToneMapping(float3 color)
 {
     const float a = 0.25;
@@ -195,21 +199,14 @@ float3 AdaptiveToneMapping(float3 color, float sceneLuminance)
     float adaptationSpeed = 0.1;
     float minAdjustment = 0.5;
     float maxAdjustment = 2.0;
-
-    // Calculate the luminance adjustment
     float luminanceAdjustment = targetLuminance / (sceneLuminance + 0.001);
     luminanceAdjustment = clamp(luminanceAdjustment, minAdjustment, maxAdjustment);
-
-    // Apply smooth interpolation for adaptation
     float adjustmentFactor = lerp(1.0, luminanceAdjustment, adaptationSpeed);
-    
-    // Apply the adjustment factor to the color
     color *= adjustmentFactor;
 
     return saturate(color);
 }
 
-// Bloom
 float3 ApplyBloom(float3 color, float2 texcoord)
 {
     if (!EnableBloom)
@@ -236,7 +233,7 @@ float3 ApplyBloom(float3 color, float2 texcoord)
     {
         for (int y = -2; y <= 2; y++)
         {
-            float2 offset = float2(x, y) * offsetFactor; 
+            float2 offset = float2(x, y) * offsetFactor;
             float3 sampleColor = tex2D(BackBuffer, texcoord + offset).rgb;
 
             float sampleLuminance = dot(sampleColor, luminanceCoefficients);
@@ -258,10 +255,8 @@ float3 ApplyBloom(float3 color, float2 texcoord)
     return saturate(color + bloomColor * localBloomStrength);
 }
 
-// Apply Tone Mapping
 float3 ApplyToneMapping(float3 color, float2 texcoord)
 {
-    // Calculate scene luminance using the global lastSceneLuminance
     float sceneLuminance = CalculateSceneLuminance(texcoord);
 
     switch (ToneMappingMethod)
@@ -276,20 +271,18 @@ float3 ApplyToneMapping(float3 color, float2 texcoord)
             return BTToneMapping(color);
         case 4:
             return LogarithmicToneMapping(color);
-        case 5: // Adaptive Tone Mapping case
+        case 5:
             return AdaptiveToneMapping(color, sceneLuminance);
         default:
             return color;
     }
 }
 
-// Function to generate noise
 float make_noise(float2 uv)
 {
     return frac(sin(dot(uv.xy * NoiseScale, float2(12.9898, 78.233))) * NoiseSeed);
 }
 
-// Dithering
 float3 ApplyDithering(float3 color, float2 texcoord, float DitherStrength)
 {
     float noise = make_noise(texcoord * 100.0);
@@ -298,7 +291,6 @@ float3 ApplyDithering(float3 color, float2 texcoord, float DitherStrength)
     return saturate(color);
 }
 
-// Main
 float4 uFakeHDRPass(float4 position : SV_Position, float2 texcoord : TexCoord) : SV_Target
 {
     float3 color = tex2D(BackBuffer, texcoord).rgb;
@@ -320,7 +312,7 @@ float4 uFakeHDRPass(float4 position : SV_Position, float2 texcoord : TexCoord) :
 '-----------------*/
 technique uFakeHDR
 {
-    pass P0
+    pass
     {
         VertexShader = PostProcessVS;
         PixelShader = uFakeHDRPass;
