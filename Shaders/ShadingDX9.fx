@@ -230,7 +230,7 @@ float4 ShadingPS(float4 vpos : SV_Position, float2 texcoord : TexCoord) : SV_Tar
 | :: Techniques :: |
 '-----------------*/
 
-technique Shading
+technique Shading_DX
 {
     pass
     {
