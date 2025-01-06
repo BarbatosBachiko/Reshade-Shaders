@@ -2,7 +2,7 @@
 | :: Description :: |
 '-------------------/
 
-Directionally Localized Anti Aliasing Lite (version 1.6)
+Directionally Localized Anti Aliasing Lite (version 1.6.1)
 
 	Author: Barbatos Bachiko
 	License: Creative Commons Attribution 3.0
@@ -12,13 +12,10 @@ Directionally Localized Anti Aliasing Lite (version 1.6)
         This shader applies Directionally Localized Anti-Aliasing (DLAA) with
         Shading effect and Sharpness.
     
-	Ideas for future improvement:
-	Implement Additional Anti-Aliasing
-
 	History:
 	(*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
 	
-	Version 1.6
+	Version 1.6.1
 	+ Improved Shading
 */
 
@@ -34,6 +31,7 @@ Directionally Localized Anti Aliasing Lite (version 1.6)
 '---------------*/
 
 uniform int View_Mode <
+    ui_category = "DLAA";
 	ui_type = "combo";
 	ui_items = "DLAA Out\0Mask View A\0Mask View B\0";
 	ui_label = "View Mode";
@@ -41,6 +39,7 @@ uniform int View_Mode <
 > = 0;
 
 uniform float LongEdgeSampleSize < 
+    ui_category = "DLAA";
     ui_type = "slider";
     ui_label = "Long Edge Sample Size";
     ui_tooltip = "Adjust the sample size for long edge detection."; 
@@ -49,13 +48,23 @@ uniform float LongEdgeSampleSize <
     ui_default = 8.0; 
 > = 8.0;
 
+uniform int PixelWidth < 
+    ui_category = "DLAA";
+    ui_type = "combo";
+    ui_items = "1\0 16\0 32\0 64\0 128\0"; 
+    ui_label = "Pixel Width"; 
+    ui_tooltip = "Select the pixel width."; 
+> = 1; 
+
 uniform float sharpness < 
+    ui_category = "Plus";
     ui_type = "slider";
     ui_label = "Sharpness";
     ui_tooltip = "Control the sharpness level."; 
 > = 0.2;
 
 uniform float ShadingIntensity < 
+    ui_category = "Plus";
     ui_type = "slider";
     ui_label = "Shading"; 
     ui_tooltip = "Control the Shading."; 
@@ -65,17 +74,11 @@ uniform float ShadingIntensity <
 > = 2.0;
 
 uniform bool EnableShading < 
+    ui_category = "Plus";
     ui_type = "checkbox";
     ui_label = "Enable Shading"; 
     ui_tooltip = "Enable or disable the shading effect."; 
 > = true; 
-
-uniform int PixelWidth < 
-    ui_type = "combo";
-    ui_items = "1\0 16\0 32\0 64\0 128\0"; 
-    ui_label = "Pixel Width"; 
-    ui_tooltip = "Select the pixel width."; 
-> = 1; 
 
 /*---------------.
 | :: Textures :: |
@@ -91,6 +94,18 @@ sampler BackBuffer
 {
     Texture = BackBufferTex;
 };
+
+texture2D NormalMapTex : NORMAL;
+sampler NormalMap
+{
+    Texture = NormalMapTex;
+    AddressU = Clamp;
+    AddressV = Clamp;
+    MinFilter = Linear;
+    MagFilter = Linear;
+    MipFilter = Linear;
+};
+
 texture SLPtex
 {
     Width = BUFFER_WIDTH;
@@ -106,6 +121,11 @@ sampler SamplerLoadedPixel
 /*----------------.
 | :: Functions :: |
 '----------------*/
+
+float3 LoadNormal(float2 texcoord)
+{
+    return normalize(tex2D(NormalMap, texcoord).rgb * 2.0 - 1.0);
+}
 
 float LI(in float3 value)
 {
@@ -165,31 +185,35 @@ float4 ApplyShading(float4 color, float2 texcoord)
         return color;
     }
 
-    // Load neighboring pixels
-    float4 left = LoadPixel(BackBuffer, texcoord + float2(-BUFFER_RCP_WIDTH, 0));
-    float4 right = LoadPixel(BackBuffer, texcoord + float2(BUFFER_RCP_WIDTH, 0));
-    float4 top = LoadPixel(BackBuffer, texcoord + float2(0, -BUFFER_RCP_HEIGHT));
-    float4 bottom = LoadPixel(BackBuffer, texcoord + float2(0, BUFFER_RCP_HEIGHT));
+    float2 bufferSize = float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT);
+    float4 totalDiff = float4(0.0, 0.0, 0.0, 0.0);
+    int count = 0;
 
-    // Calculate differences
-    float3 diffLeft = abs(left.rgb - color.rgb);
-    float3 diffRight = abs(right.rgb - color.rgb);
-    float3 diffTop = abs(top.rgb - color.rgb);
-    float3 diffBottom = abs(bottom.rgb - color.rgb);
+    float3 currentNormal = LoadNormal(texcoord);
 
-    // Aggregate edge intensity
-    float3 weightVector = float3(0.333, 0.333, 0.333); 
-    float edgeIntensity = (dot(diffLeft, weightVector) +
-                           dot(diffRight, weightVector) +
-                           dot(diffTop, weightVector) +
-                           dot(diffBottom, weightVector)) / 4.0;
+    int sampleOffset = 1;
 
-    float weight = smoothstep(0.0, 1.0, edgeIntensity * ShadingIntensity);
+    for (int x = -sampleOffset; x <= sampleOffset; ++x)
+    {
+        for (int y = -sampleOffset; y <= sampleOffset; ++y)
+        {
+            if (x == 0 && y == 0)
+                continue;
 
-    float4 dimmedColor = color * (1.0 - ShadingIntensity);
-    float4 shadedColor = lerp(color, dimmedColor, weight);
+            float4 neighborColor = LoadPixel(BackBuffer, texcoord + float2(x * bufferSize.x, y * bufferSize.y));
+            float4 diff = abs(neighborColor - color);
+            float3 neighborNormal = LoadNormal(texcoord + float2(x * bufferSize.x, y * bufferSize.y));
+            float normalInfluence = max(dot(currentNormal, neighborNormal), 0.0);
 
-    return shadedColor;
+            totalDiff += diff * normalInfluence;
+            count++;
+        }
+    }
+
+    float complexity = dot(totalDiff.rgb, float3(1.0, 1.0, 1.0)) / count;
+    float vrsFactor = 1.0 - (complexity * ShadingIntensity);
+
+    return lerp(color, color * vrsFactor, 0.5);
 }
 
 // Pixel width
@@ -341,6 +365,10 @@ float4 Out(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Targe
         DLAA = lerp(DLAA, H, EAH);
     }
 
+    if (EnableShading > 0.0)
+    {
+        DLAA = ApplyShading(DLAA, texcoord);
+    }
     if (View_Mode == 1)
     {
         DLAA = Mask * 2;
@@ -349,17 +377,10 @@ float4 Out(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Targe
     {
         DLAA = lerp(DLAA, float4(1, 1, 0, 1), Mask * 2);
     }
-    
     if (PixelWidth > 0.0)
     {
         DLAA = ApplyPixelWidth(DLAA, texcoord);
     }
-    
-    if (EnableShading > 0.0)
-    {
-        DLAA = ApplyShading(DLAA, texcoord);
-    }
-
     if (sharpness > 0.0)
     {
         DLAA = ApplySharpness(DLAA, texcoord);
