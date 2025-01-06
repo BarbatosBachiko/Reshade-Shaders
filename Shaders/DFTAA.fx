@@ -2,13 +2,13 @@
 | :: Description :: |
 '-------------------/
 
-	DFTAA (version 1.2)
+	DFTAA (version 1.2.1)
 
 	Author: Barbatos Bachiko
         License: MIT
 
 	About:
-	Implementation of Directionally Fast Temporal Anti-Aliasing (DFTAA) that combines DLAA, FSMAA and TAA.
+	Implementation of Directionally Fast Temporal Anti-Aliasing (DFTAA) that combines DLAA, FSMAA and Simple TAA.
 
 	Ideas for future improvement:
 	* Integrate an adjustable sharpness
@@ -17,8 +17,8 @@
         History:
         (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
 
-	Version 1.2
-	* Adapted FSMAA
+	Version 1.2.1
+	+ Code org
 
 */
 
@@ -29,7 +29,7 @@
 #include "ReShade.fxh"
 #include "ReShadeUI.fxh"
 
-// SMAA configuration
+// SMAA 
 #if !defined(SMAA_PRESET_LOW) && !defined(SMAA_PRESET_MEDIUM) && !defined(SMAA_PRESET_HIGH) && !defined(SMAA_PRESET_ULTRA)
 #define SMAA_PRESET_CUSTOM 
 #define SMAA_DISABLE_DIAG_DETECTION
@@ -45,25 +45,27 @@ uniform int View_Mode <
     ui_items = "DFTAA Out\0Mask View A\0Mask View B\0"; 
     ui_label = "View Mode"; 
     ui_tooltip = "Select normal output or debug view."; 
-> = 0; // Default view mode as DFTAA Out
+> = 0; 
 
 uniform float EdgeThreshold < 
+    ui_category = "DLAA";
     ui_type = "slider";
     ui_label = "Edge Threshold"; 
     ui_tooltip = "Adjust the edge threshold for mask creation."; 
     ui_min = 0.0; 
     ui_max = 1.0; 
     ui_default = 0.020; 
-> = 0.020; // Default edge threshold
+> = 0.020; 
 
 uniform float Lambda < 
+    ui_category = "DLAA";
     ui_type = "slider";
     ui_label = "Lambda"; 
     ui_tooltip = "Adjust the lambda for saturation amount."; 
     ui_min = 0.0; 
     ui_max = 10.0; 
     ui_default = 3.0; 
-> = 3.0; // Adjustable lambda
+> = 3.0;
 
 #ifndef SMAA_DISABLE_DEPTH_BUFFER
 uniform int EdgeDetectionType < __UNIFORM_COMBO_INT1
@@ -72,6 +74,7 @@ uniform int EdgeDetectionType < __UNIFORM_COMBO_INT1
 > = 1;
 #else
 uniform int EdgeDetectionType < __UNIFORM_COMBO_INT1
+    ui_category = "SMAA";
 	ui_items = "Luminance edge detection\0Color edge detection\0";
 	ui_label = "Edge Detection Type";
 > = 1;
@@ -79,6 +82,7 @@ uniform int EdgeDetectionType < __UNIFORM_COMBO_INT1
 
 #ifdef SMAA_PRESET_CUSTOM
 uniform float EdgeDetectionThreshold < __UNIFORM_DRAG_FLOAT1
+    ui_category = "SMAA";
 	ui_min = 0.05; ui_max = 0.20; ui_step = 0.001;
 	ui_tooltip = "Edge detection threshold. If SMAA misses some edges try lowering this slightly.";
 	ui_label = "Edge Detection Threshold";
@@ -93,6 +97,7 @@ uniform float DepthEdgeDetectionThreshold < __UNIFORM_DRAG_FLOAT1
 #endif
 
 uniform int MaxSearchSteps < __UNIFORM_SLIDER_INT1
+    ui_category = "SMAA";
 	ui_min = 0; ui_max = 112;
 	ui_label = "Max Search Steps";
 	ui_tooltip = "Determines the radius SMAA will search for aliased edges.";
@@ -108,6 +113,7 @@ uniform int MaxSearchStepsDiagonal < __UNIFORM_SLIDER_INT1
 
 #ifndef SMAA_DISABLE_CORNER_DETECTION
 uniform int CornerRounding < __UNIFORM_SLIDER_INT1
+    ui_category = "SMAA";
 	ui_min = 0; ui_max = 100;
 	ui_label = "Corner Rounding";
 	ui_tooltip = "Determines the percent of anti-aliasing to apply to corners.";
@@ -140,27 +146,28 @@ uniform float PredicationStrength < __UNIFORM_SLIDER_FLOAT1
 #endif
 
 uniform int DebugOutput < __UNIFORM_COMBO_INT1
+    ui_category = "SMAA";
 	ui_items = "None\0View edges\0View weights\0";
 	ui_label = "Debug Output";
 > = false;
 
 #ifdef SMAA_PRESET_CUSTOM
-	#define SMAA_THRESHOLD EdgeDetectionThreshold
-	#define SMAA_MAX_SEARCH_STEPS MaxSearchSteps
+#define SMAA_THRESHOLD EdgeDetectionThreshold
+#define SMAA_MAX_SEARCH_STEPS MaxSearchSteps
 #ifndef SMAA_DISABLE_CORNER_DETECTION
-	#define SMAA_CORNER_ROUNDING CornerRounding
+#define SMAA_CORNER_ROUNDING CornerRounding
 #endif
 #ifndef SMAA_DISABLE_DIAG_DETECTION
-	#define SMAA_MAX_SEARCH_STEPS_DIAG MaxSearchStepsDiagonal
+#define SMAA_MAX_SEARCH_STEPS_DIAG MaxSearchStepsDiagonal
 #endif
 #ifndef SMAA_DISABLE_DEPTH_BUFFER
-	#define SMAA_DEPTH_THRESHOLD DepthEdgeDetectionThreshold
-	#define SMAA_PREDICATION PredicationEnabled
-	#define SMAA_PREDICATION_THRESHOLD PredicationThreshold
-	#define SMAA_PREDICATION_SCALE PredicationScale
-	#define SMAA_PREDICATION_STRENGTH PredicationStrength
+#define SMAA_DEPTH_THRESHOLD DepthEdgeDetectionThreshold
+#define SMAA_PREDICATION PredicationEnabled
+#define SMAA_PREDICATION_THRESHOLD PredicationThreshold
+#define SMAA_PREDICATION_SCALE PredicationScale
+#define SMAA_PREDICATION_STRENGTH PredicationStrength
 #else
-	#define SMAA_PREDICATION false
+#define SMAA_PREDICATION false
 #endif
 #endif
 
@@ -179,7 +186,7 @@ uniform int DebugOutput < __UNIFORM_COMBO_INT1
 #define SMAA_FLATTEN [flatten]
 
 #if (__RENDERER__ == 0xb000 || __RENDERER__ == 0xb100)
-	#define SMAAGather(tex, coord) tex2Dgather(tex, coord, 0)
+#define SMAAGather(tex, coord) tex2Dgather(tex, coord, 0)
 #endif
 
 #include "SMAA.fxh"
@@ -314,13 +321,11 @@ sampler searchSampler
 | :: Functions :: |
 '----------------*/
 
-// Function to load pixels
 float4 LoadPixel(sampler tex, float2 tc)
 {
     return tex2D(tex, tc);
 }
 
-// Function to apply DFTAA 
 float4 ApplyDFTAA(float4 center, float4 left, float4 right)
 {
     const float4 combH = left + right;
@@ -332,15 +337,14 @@ float4 ApplyDFTAA(float4 center, float4 left, float4 right)
     return lerp(center, (combH + center) / 3.0, satAmountH * 0.5f);
 }
 
-// Function to apply a blur to the mask
 float4 BlurMask(float4 mask, float2 tc)
 {
-    float4 blur = mask * 0.25; 
+    float4 blur = mask * 0.25;
     blur += LoadPixel(BackBuffer, tc + float2(-1.0 * BUFFER_RCP_WIDTH, 0)) * 0.125; // Left
     blur += LoadPixel(BackBuffer, tc + float2(1.0 * BUFFER_RCP_WIDTH, 0)) * 0.125; // Right
     blur += LoadPixel(BackBuffer, tc + float2(0, -BUFFER_RCP_HEIGHT)) * 0.125; // Up
     blur += LoadPixel(BackBuffer, tc + float2(0, BUFFER_RCP_HEIGHT)) * 0.125; // Down
-    return saturate(blur); 
+    return saturate(blur);
 }
 
 /*-----------------.
@@ -378,10 +382,10 @@ float4 DFTAAPass(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV
 
     if (View_Mode == 2)
     {
-        return BlurMask(maskB * float4(1.0, 0.0, 0.0, 1.0), texcoord); 
+        return BlurMask(maskB * float4(1.0, 0.0, 0.0, 1.0), texcoord);
     }
 
-    return DFTAA; 
+    return DFTAA;
 }
 
 // SMAALumaEdgeDetection
@@ -397,7 +401,7 @@ float4 FSMAAPass(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV
 {
     float4 edgeDetection = SMAALumaEdgeDetectionPS(texcoord);
     
-    return DFTAAPass(position, texcoord); 
+    return DFTAAPass(position, texcoord);
 }
 
 // Main TAA Pass
