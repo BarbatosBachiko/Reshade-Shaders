@@ -4,14 +4,16 @@
 
     Shading (only for DX11 and above) 
     
-    Version 1.2
+    Version 1.3
     Author: Barbatos Bachiko
     License: MIT
 
-    About: This shader adds shading based on visual complexity.
+    About: Shading.
 
+   Update: depth-based normals
 */
-
+namespace masteroftheginseng
+{
 /*---------------.
 | :: Includes :: |
 '---------------*/
@@ -25,12 +27,13 @@
 
 uniform float ShadingIntensity < 
     ui_type = "slider";
-    ui_label = "Shading"; 
-    ui_tooltip = "Control the Shading."; 
+    ui_label = "Shading Intensity"; 
+    ui_tooltip = "Control the strength of the shading effect."; 
     ui_min = 0.0; 
     ui_max = 10.0; 
-    ui_default = 0.5; 
-> = 0.5;
+    ui_default = 1.5; 
+    ui_category = "Shading Settings";
+> = 1.5;
 
 uniform float sharpness < 
     ui_type = "slider";
@@ -39,25 +42,35 @@ uniform float sharpness <
     ui_min = 0.0; 
     ui_max = 10.0; 
     ui_default = 0.2; 
+    ui_category = "Shading Settings";
 > = 0.2;
 
-uniform int SamplingArea < 
+uniform int SamplingArea <
     ui_type = "combo";
     ui_label = "Sampling Area"; 
     ui_tooltip = "Select the sampling area size."; 
-    ui_items = "3x3\0 4x4\0 6x6\0 8x8\0 10x10\0"; 
+    ui_items = "3x3\0a5x5\0a7x7\0a9x9\0a11x11\0"; 
     ui_default = 0; 
+    ui_category = "Shading Settings"; 
 > = 0;
-
-uniform bool EnableShading < 
-    ui_label = "Enable Shading";
-    ui_tooltip = "Enable or disable"; 
-> = true;
 
 uniform bool EnableMixWithSceneColor < 
     ui_label = "Mix with Scene Colors";
-    ui_tooltip = "Mixes the shaded color with the original scene colors"; 
+    ui_tooltip = "Mixes the shaded color with the original scene colors."; 
+    ui_category = "Shading Settings"; 
 > = false;
+
+uniform int viewMode
+< 
+    ui_type = "combo"; 
+    ui_label = "View Mode";
+    ui_tooltip = "Select the view mode"; 
+    ui_items = 
+        "None\0"      
+        "Normals\0"     
+        "Depth\0";      
+    ui_category = "Debug Modes"; 
+> = 0; 
 
 /*---------------.
 | :: Textures :: |
@@ -69,10 +82,10 @@ sampler BackBuffer
     Texture = BackBufferTex;
 };
 
-texture2D NormalMapTex : NORMAL;
-sampler NormalMap
+texture2D DepthBufferTex : DEPTH;
+sampler DepthBuffer
 {
-    Texture = NormalMapTex;
+    Texture = DepthBufferTex;
 };
 
 /*----------------.
@@ -84,9 +97,20 @@ float4 LoadPixel(sampler2D tex, float2 uv)
     return tex2D(tex, uv);
 }
 
-float3 LoadNormal(float2 texcoord)
+float GetLinearDepth(float2 coords)
 {
-    return normalize(tex2D(NormalMap, texcoord).rgb * 2.0 - 1.0);
+    return ReShade::GetLinearizedDepth(coords);
+}
+
+float3 GetNormalFromDepth(float2 coords)
+{
+    float2 texelSize = 1.0 / float2(BUFFER_WIDTH, BUFFER_HEIGHT);
+    float depthCenter = GetLinearDepth(coords);
+    float depthX = GetLinearDepth(coords + float2(texelSize.x, 0.0));
+    float depthY = GetLinearDepth(coords + float2(0.0, texelSize.y));
+    float3 deltaX = float3(texelSize.x, 0.0, depthX - depthCenter);
+    float3 deltaY = float3(0.0, texelSize.y, depthY - depthCenter);
+    return normalize(cross(deltaY, deltaX)); 
 }
 
 float4 ApplySharpness(float4 color, float2 texcoord)
@@ -102,22 +126,17 @@ float4 ApplySharpness(float4 color, float2 texcoord)
 
 float4 ApplyShading(float4 color, float2 texcoord)
 {
-    if (!EnableShading)
-    {
-        return color;
-    }
-
     float2 bufferSize = float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT);
     float4 totalDiff = float4(0.0, 0.0, 0.0, 0.0);
     int count = 0;
 
-    float3 currentNormal = LoadNormal(texcoord);
+    float3 currentNormal = GetNormalFromDepth(texcoord);
 
     int sampleOffset = (SamplingArea == 0) ? 1 :
                        (SamplingArea == 1) ? 2 :
                        (SamplingArea == 2) ? 3 :
                        (SamplingArea == 3) ? 4 : 5;
-
+    
     for (int x = -sampleOffset; x <= sampleOffset; ++x)
     {
         for (int y = -sampleOffset; y <= sampleOffset; ++y)
@@ -127,7 +146,7 @@ float4 ApplyShading(float4 color, float2 texcoord)
 
             float4 neighborColor = LoadPixel(BackBuffer, texcoord + float2(x * bufferSize.x, y * bufferSize.y));
             float4 diff = abs(neighborColor - color);
-            float3 neighborNormal = LoadNormal(texcoord + float2(x * bufferSize.x, y * bufferSize.y));
+            float3 neighborNormal = GetNormalFromDepth(texcoord + float2(x * bufferSize.x, y * bufferSize.y));
             float normalInfluence = max(dot(currentNormal, neighborNormal), 0.0);
 
             totalDiff += diff * normalInfluence;
@@ -136,22 +155,35 @@ float4 ApplyShading(float4 color, float2 texcoord)
     }
 
     float complexity = dot(totalDiff.rgb, float3(1.0, 1.0, 1.0)) / count;
-    float vrsFactor = 1.0 - (complexity * ShadingIntensity);
+    float shadingFactor = max(1.0 - (complexity * ShadingIntensity), 0.0);
 
     if (EnableMixWithSceneColor)
     {
-        return lerp(color, color * vrsFactor, 0.5);
+        return lerp(color, color * shadingFactor, 0.5);
     }
 
-    return color * vrsFactor;
+    return color * shadingFactor;
 }
 
 float4 ShadingPS(float4 vpos : SV_Position, float2 texcoord : TexCoord) : SV_Target
 {
     float4 color = tex2D(ReShade::BackBuffer, texcoord);
-    color = ApplyShading(color, texcoord);
-    color = ApplySharpness(color, texcoord);
-    return color;
+
+    switch (viewMode)
+    {
+        case 1: // Normals
+            float3 normal = GetNormalFromDepth(texcoord);
+            return float4(normal * 0.5 + 0.5, 1.0);
+        
+        case 2: // Depth
+            float depth = GetLinearDepth(texcoord);
+            return float4(depth, depth, depth, 1.0);
+
+        default:
+            color = ApplyShading(color, texcoord);
+            color = ApplySharpness(color, texcoord);
+            return color;
+    }
 }
 
 /*-----------------.
@@ -165,4 +197,5 @@ technique Shading
         VertexShader = PostProcessVS;
         PixelShader = ShadingPS;
     }
+  }
 }
