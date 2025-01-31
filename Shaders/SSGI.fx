@@ -59,12 +59,6 @@ namespace ScreenSpaceGIJonson
         ui_category = "Global Illumination";
     > = 8;
 
-    uniform float roughness <
-        ui_type = "slider";
-        ui_label = "Surface Roughness";
-        ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
-        ui_category = "Material Properties";
-    > = 0.5;
 
 /*---------------.
 | :: GI Settings :: |
@@ -137,6 +131,13 @@ namespace ScreenSpaceGIJonson
         ui_min = 1; ui_max = 4; ui_step = 1;
         ui_category = "Ray Tracing";
     > = 1;
+
+    uniform float roughness <
+        ui_type = "slider";
+        ui_label = "Surface Roughness";
+        ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+        ui_category = "Material Properties";
+    > = 0.5;
 
     uniform float metallic <
     ui_type = "slider";
