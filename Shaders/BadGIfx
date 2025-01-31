@@ -618,7 +618,7 @@ namespace ScreenSpaceGIJonson
 | :: Techniques :: |
 '-----------------*/
 
-    technique SSGI
+    technique BadGI
     {
         pass
         {
