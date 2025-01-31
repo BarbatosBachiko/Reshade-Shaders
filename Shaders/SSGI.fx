@@ -55,9 +55,9 @@ namespace ScreenSpaceGIJonson
     uniform int numSamples <
         ui_type = "slider";
         ui_label = "Sample Count";
-        ui_min = 8; ui_max = 64; ui_step = 2;
+        ui_min = 4; ui_max = 64; ui_step = 2;
         ui_category = "Global Illumination";
-    > = 32;
+    > = 8;
 
     uniform float roughness <
         ui_type = "slider";
