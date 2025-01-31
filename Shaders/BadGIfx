@@ -13,7 +13,7 @@ BadGI
 	(*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
     
     Version 2.0
-    * Remake
+    x sample radius
 */
 #include "ReShade.fxh"
 
@@ -551,8 +551,7 @@ namespace ScreenSpaceGIJonson
             rand(texcoord + i + 0.2),
             rand(texcoord + i + 0.3)
         );
-
-            float3 sampleDir = ImportanceSampleGGX(xi, normal, 0.5);
+            float3 sampleDir = ImportanceSampleGGX(xi, normal, 0.5) * radius;
             Ray giRay = GetRay(viewPos, normalize(sampleDir + jitter));
 
         // Trace multi-bounce light transport
@@ -560,7 +559,7 @@ namespace ScreenSpaceGIJonson
             float NdotS = dot(normal, sampleDir);
 
             float distanceToSample = length(viewPos - giRay.Origin);
-            float falloff = exp(-distanceToSample / falloffDistance); 
+            float falloff = exp(-distanceToSample / falloffDistance);
             indirect += rayColor * NdotS * falloff * diffuseIntensity;
         }
         indirect *= giIntensity / numSamples;
