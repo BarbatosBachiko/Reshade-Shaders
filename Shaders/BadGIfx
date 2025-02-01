@@ -12,7 +12,7 @@ BadGI
     History:
 	(*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
     
-    Version 2.3
+    Version 2.2
     +
 */
 #include "ReShade.fxh"
@@ -135,7 +135,7 @@ namespace ScreenSpaceGIJonsona
     float3 GetPosition(float2 coords)
     {
         float EyeDepth = GetLinearDepth(coords.xy) * RESHADE_DEPTH_LINEARIZATION_FAR_PLANE;
-        return float3((coords.xy * 1.0 - 1.0) * EyeDepth, EyeDepth);
+        return float3((coords.xy * 0.01 - 0.01) * EyeDepth, EyeDepth);
     }
 
     float3 GetNormalFromDepth(float2 coords)
@@ -420,7 +420,7 @@ namespace ScreenSpaceGIJonsona
         }
         else if (viewMode == 2)
         {
-            return float4(ao, ao, ao, 1.0); // Debug do AO
+            return float4(ao, ao, ao, 1.0); // Debug AO
         }
         return float4(originalColor, 1.0);
     }
