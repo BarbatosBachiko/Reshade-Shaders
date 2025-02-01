@@ -12,7 +12,7 @@ BadGI
     History:
 	(*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
     
-    Version 2.2
+    Version 2.3
     +
 */
 #include "ReShade.fxh"
@@ -40,7 +40,7 @@ namespace ScreenSpaceGIJonsona
         ui_label = "IL Strength";
         ui_min = 0.0; ui_max = 2.0; ui_step = 0.05;
         ui_category = "IL Settings";
-    > = 0.4;
+    > = 1.0;
 
     uniform float sampleRadius <
         ui_type = "slider";
@@ -75,7 +75,14 @@ namespace ScreenSpaceGIJonsona
         ui_category = "AO Settings";
     >
     = 0.5;
-
+    
+    uniform int AOnumSamples <
+        ui_type = "slider";
+        ui_label = "Sample Count";
+        ui_min = 4; ui_max = 64; ui_step = 2;
+        ui_category = "AO Settings";
+    > = 8;
+    
     uniform float aoRadius
     < 
         ui_type = "slider";
@@ -84,14 +91,7 @@ namespace ScreenSpaceGIJonsona
         ui_min = 0.001; ui_max = 10.0; ui_step = 0.01;
         ui_category = "AO Settings";
     >
-    = 0.3;
-
-    uniform float rayJitter <
-        ui_type = "slider";
-        ui_label = "Ray Jitter";
-        ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
-        ui_category = "Ray Tracing";
-    > = 0.25;
+    = 0.05;
 
     uniform int rayTraceDepth <
         ui_type = "slider";
@@ -135,7 +135,7 @@ namespace ScreenSpaceGIJonsona
     float3 GetPosition(float2 coords)
     {
         float EyeDepth = GetLinearDepth(coords.xy) * RESHADE_DEPTH_LINEARIZATION_FAR_PLANE;
-        return float3((coords.xy * 2.0 - 1.0) * EyeDepth, EyeDepth);
+        return float3((coords.xy * 1.0 - 1.0) * EyeDepth, EyeDepth);
     }
 
     float3 GetNormalFromDepth(float2 coords)
@@ -164,12 +164,6 @@ namespace ScreenSpaceGIJonsona
             bits = bits >> 1;
         }
         return float2(u, v);
-    }
-
-    float3 Random(float2 texcoord, int seed)
-    {
-        float noise = frac(sin(dot(texcoord, float2(12.9898, 78.233)) + seed) * 43758.5453);
-        return float3(cos(noise * 6.283), sin(noise * 6.283), noise);
     }
 
     struct Ray
@@ -278,7 +272,7 @@ namespace ScreenSpaceGIJonsona
                 float specularStrength = saturate(fresnel * 0.5 * 2.0);
             
             // Scattering directions
-                float3 diffuseDir = normalize(normal + Random(texcoord, depth));
+                float3 diffuseDir = normalize(normal);
                 float3 scatterDir = diffuseDir;
             
             // Energy conservation
@@ -290,7 +284,7 @@ namespace ScreenSpaceGIJonsona
 
             // Prepare next ray
                 currentRay.Origin = rec.Point + normal * 0.001;
-                currentRay.Direction = normalize(scatterDir + rayJitter * Random(texcoord, depth));
+                currentRay.Direction = normalize(scatterDir);
             }
             else
             {
@@ -307,7 +301,7 @@ namespace ScreenSpaceGIJonsona
             if (depth > 2)
             {
                 float p = max(throughput.r, max(throughput.g, throughput.b));
-                if (Random(texcoord, depth).z > p)
+                if (p < 0.1)
                     break;
                 throughput /= p;
             }
@@ -319,17 +313,12 @@ namespace ScreenSpaceGIJonsona
     float CalculateAmbientOcclusion(float2 texcoord, float3 position, float3 normal)
     {
         float occlusion = 0.0;
-        float radiusOverSamples = aoRadius / numSamples;
+        float radiusOverSamples = aoRadius / AOnumSamples;
 
     [loop]
         for (int i = 0; i < numSamples; ++i)
         {
-            float2 rand2D = Hammersley(i, numSamples);
-            float angle = rand2D.x * 6.28318530718;
-            float radiusScale = sqrt(rand2D.y);
-
-            float3 jitter = Random(texcoord, i) * radiusScale;
-            float2 sampleDir = float2(cos(angle), sin(angle)) * radiusScale + jitter.xy;
+            float2 sampleDir = Hammersley(i, AOnumSamples);
             sampleDir *= radiusOverSamples;
 
             float2 sampleCoord = texcoord + sampleDir;
@@ -356,29 +345,25 @@ namespace ScreenSpaceGIJonsona
         float3 indirect = 0.0;
         float3 viewPos = GetPosition(texcoord);
         float3 normal = GetNormalFromDepth(texcoord);
-        float randSeed = Random(texcoord, 0).z;
 
         float radiusFactor = radius / viewPos.z;
 
         for (int i = 0; i < numSamples; ++i)
         {
-        // Generate random sample in cosine-weighted hemisphere around normal
-            float3 randVec = Random(texcoord, i);
-            float3 tangent = normalize(randVec - normal * dot(randVec, normal));
+        // Generate sample in cosine-weighted hemisphere around normal
+            float2 sampleDir = Hammersley(i, numSamples);
+            float3 tangent = normalize(float3(sampleDir.x, sampleDir.y, 0.0) - normal * dot(float3(sampleDir.x, sampleDir.y, 0.0), normal));
             float3 bitangent = cross(normal, tangent);
-            float r = sqrt(randVec.x); 
-            float phi = 2.0 * PI * randVec.y;
+            float r = sqrt(sampleDir.x);
+            float phi = 2.0 * PI * sampleDir.y;
             float x = r * cos(phi);
             float y = r * sin(phi);
             float z = sqrt(1.0 - x * x - y * y);
-            float3 sampleDir = tangent * x + bitangent * y + normal * z;
+            float3 sampleDir3D = tangent * x + bitangent * y + normal * z;
         
-            sampleDir *= radiusFactor;
-            float3 jitter = tangent * (Random(texcoord, i).x - 0.5) + bitangent * (Random(texcoord, i).y - 0.5);
-            jitter *= rayJitter * radiusFactor;
-            sampleDir = normalize(sampleDir + jitter);
+            sampleDir3D *= radiusFactor;
 
-            Ray giRay = GetRay(viewPos, sampleDir);
+            Ray giRay = GetRay(viewPos, sampleDir3D);
             float3 rayColor = RayColor(giRay, rayTraceDepth, texcoord);
             float NdotS = max(dot(normal, giRay.Direction), 0.0);
 
