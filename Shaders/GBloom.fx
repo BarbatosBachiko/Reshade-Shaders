@@ -1,16 +1,20 @@
-//+++++++++++++++++++++++++++++++++++++++++++++++++
-// GBloom
-//+++++++++++++++++++++++++++++++++++++++++++++++++
-// Author: Barbatos Bachiko
-// Version: 1.0
-// License: MIT
-//+++++++++++++++++++++++++++++++++++++++++++++++++
+/*------------------.
+| :: Description :: |
+'-------------------/
 
-namespace oaugedadepressaoeansidade
+   GBloom
+   Author: Barbatos Bachiko
+   Version: 1.0
+   License: MIT
+
+*/
+namespace SimplesBlooms
 {
     #include "ReShade.fxh"
 
-    // Settings
+/*---------------.
+| :: Settings :: |
+'---------------*/
     uniform float BloomIntensity <
         ui_type = "slider";
         ui_label = "Bloom Intensity";
@@ -41,7 +45,10 @@ namespace oaugedadepressaoeansidade
         ui_default = 3.0;
     > = 3.0;
 
-    // Textures
+/*---------------.
+| :: Textures :: |
+'---------------*/
+
     texture2D BloomTex
     {
         Width = BUFFER_WIDTH;
@@ -73,6 +80,10 @@ namespace oaugedadepressaoeansidade
         0.0540540541,
         0.0162162162
     };
+
+/*----------------.
+| :: Functions :: |
+'----------------*/
 
     // Bright Pass Extraction
     float4 BrightPass(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
@@ -135,7 +146,9 @@ namespace oaugedadepressaoeansidade
         pos = float4(uv * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
     }
 
-    // Techniques
+/*-----------------.
+| :: Techniques :: |
+'-----------------*/
     technique GBloom
     {
         pass BrightPass
