@@ -7,7 +7,7 @@
  \__ \__ \/ _ \ (_) |
  |___/___/_/ \_\___/  
                                                                                        
-    Version 0.7.2
+    Version 0.8
 	Author: Barbatos Bachiko
 	License: MIT
 
@@ -19,8 +19,9 @@
 	History:
 	(*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
 	
-	Version 0.7.2
-    * add MXAO (Random + Hemisphere)
+	Version 0.8
+    + Fix
+    + Implemented Get Normal From Depth
 
 */ 
 
@@ -36,39 +37,35 @@
     '---------------*/
 
 uniform int viewMode
-    <
-        ui_type = "combo";
-        ui_label = "View Mode";
-        ui_tooltip = "Select the view mode for SSAO";
-        ui_items = 
+<
+    ui_type = "combo";
+    ui_label = "View Mode";
+    ui_tooltip = "Select the view mode for SSAO";
+    ui_items = 
 "Normal\0" 
 "AO Debug\0"
 "Depth\0"
 "Sky Debug\0";
+>
+= 0;
 
-    >
-    = 0;
-
-uniform int qualityLevel
-    <
-        ui_type = "combo";
-        ui_label = "Quality Level";
-        ui_tooltip = "Select quality level for ambient occlusion";
-        ui_items = 
-        "Low\0"
-        "Medium\0"
-        "High\0";
-    >
-    = 2;
+uniform int sampleCount
+<
+    ui_type = "slider";
+    ui_label = "Sample Count";
+    ui_tooltip = "Number of samples for SSAO calculation";
+    ui_min = 1; ui_max = 64; ui_step = 1;
+>
+= 16;
 
 uniform float intensity
-    <
-        ui_type = "slider";
-        ui_label = "Occlusion Intensity";
-        ui_tooltip = "Adjust the intensity of ambient occlusion";
-        ui_min = 0.0; ui_max = 1.0; ui_step = 0.05;
-    >
-    = 0.3;
+<
+    ui_type = "slider";
+    ui_label = "Occlusion Intensity";
+    ui_tooltip = "Adjust the intensity of ambient occlusion";
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.05;
+>
+= 0.3;
 
 uniform int aoType
 <
@@ -83,31 +80,31 @@ uniform int aoType
 = 2;
 
 uniform float sampleRadius
-    <
-        ui_type = "slider";
-        ui_label = "Sample Radius";
-        ui_tooltip = "Adjust the radius of the samples for SSAO";
-        ui_min = 0.001; ui_max = 0.01; ui_step = 0.001;
-    >
-    = 0.005;
+<
+    ui_type = "slider";
+    ui_label = "Sample Radius";
+    ui_tooltip = "Adjust the radius of the samples for SSAO";
+    ui_min = 0.001; ui_max = 0.01; ui_step = 0.001;
+>
+= 0.005;
 
 uniform float noiseScale
-    <
-        ui_type = "slider";
-        ui_category = "Random Directios Settings";
-        ui_label = "Noise Scale";
-        ui_tooltip = "Adjust the scale of noise for random direction sampling";
-        ui_min = 0.1; ui_max = 1.0; ui_step = 0.05;
-    >
-    = 1.0;
+<
+    ui_type = "slider";
+    ui_category = "Random Directions Settings";
+    ui_label = "Noise Scale";
+    ui_tooltip = "Adjust the scale of noise for random direction sampling";
+    ui_min = 0.1; ui_max = 1.0; ui_step = 0.05;
+>
+= 1.0;
 
-uniform float fDepthMultiplier <
-        ui_type = "slider";
-        ui_category = "Depth";
-        ui_label = "Depth multiplier";
-        ui_min = 0.001; ui_max = 20.00;
-        ui_step = 0.001;
-    > = 1.0;
+uniform float DepthMultiplier <
+    ui_type = "slider";
+    ui_category = "Depth";
+    ui_label = "Depth multiplier";
+    ui_min = 0.001; ui_max = 20.00;
+    ui_step = 0.001;
+> = 1.0;
 
 uniform float depthThreshold
 <
@@ -119,9 +116,9 @@ uniform float depthThreshold
 >
 = 0.95;
 
-    /*---------------.
-    | :: Textures :: |
-    '---------------*/
+/*---------------.
+| :: Textures :: |
+'---------------*/
 
 namespace SSAO
 {
@@ -150,16 +147,22 @@ namespace SSAO
 
     float GetLinearDepth(float2 coords)
     {
-        return ReShade::GetLinearizedDepth(coords) * fDepthMultiplier;
+        return ReShade::GetLinearizedDepth(coords) * DepthMultiplier;
     }
 
-    float3 GetNormal(float2 coords)
+    float3 GetNormalFromDepth(float2 coords)
     {
-        float4 normalTex = tex2D(NormalSampler, coords);
-        float3 normal = normalize(normalTex.xyz * 2.0 - 1.0);
+        float2 texelSize = 1.0 / float2(BUFFER_WIDTH, BUFFER_HEIGHT);
+        float depthCenter = GetLinearDepth(coords);
+        float depthX = GetLinearDepth(coords + float2(texelSize.x, 0.0));
+        float depthY = GetLinearDepth(coords + float2(0.0, texelSize.y));
+        float3 deltaX = float3(texelSize.x, 0.0, depthX - depthCenter);
+        float3 deltaY = float3(0.0, texelSize.y, depthY - depthCenter);
+        float3 normal = normalize(cross(deltaX, deltaY));
+
         return normal;
     }
-
+    
     // Random Direction
     float3 RandomDirection(float2 texcoord, int sampleIndex, float noiseScale)
     {
@@ -172,7 +175,7 @@ namespace SSAO
         dir.y = sin(theta) * sin(phi);
         dir.z = cos(theta);
 
-        float3 normal = GetNormal(texcoord);
+        float3 normal = GetNormalFromDepth(texcoord);
         dir = normalize(reflect(dir, normal));
 
         return normalize(dir * noiseScale + float3(0.5, 0.5, 0.5));
@@ -197,16 +200,8 @@ namespace SSAO
     {
         float4 originalColor = tex2D(ColorSampler, texcoord);
         float depthValue = GetLinearDepth(texcoord);
-        float3 normal = GetNormal(texcoord);
+        float3 normal = GetNormalFromDepth(texcoord);
         float occlusion = 0.0;
-
-        int sampleCount;
-        if (qualityLevel == 0)
-            sampleCount = 8;
-        else if (qualityLevel == 1)
-            sampleCount = 16;
-        else
-            sampleCount = 32;
 
         float radius = sampleRadius;
         float falloff = 0.01;
@@ -218,11 +213,11 @@ namespace SSAO
                 sampleDir = RandomDirection(texcoord, i, noiseScale);
             else if (aoType == 1) 
                 sampleDir = HemisphereSampling(i, normal);
-            else if (aoType == 2) 
+            else if (aoType == 2)
             {
                 float3 randomDir = RandomDirection(texcoord, i, noiseScale);
                 float3 hemisphereDir = HemisphereSampling(i, normal);
-                sampleDir = normalize(randomDir + hemisphereDir); 
+                sampleDir = normalize(randomDir + hemisphereDir);
             }
 
             float2 sampleCoord = clamp(texcoord + sampleDir.xy * radius, 0.0, 1.0);
@@ -239,6 +234,10 @@ namespace SSAO
 
         if (viewMode == 0)
         {
+            if (depthValue >= depthThreshold)
+            {
+                return originalColor;
+            }
             return originalColor * (1.0 - saturate(occlusion));
         }
 
