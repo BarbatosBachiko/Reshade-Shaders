@@ -28,32 +28,32 @@ namespace ScreenSpaceGIJonsona
 '---------------*/
 
     uniform int viewMode
-    < 
-        ui_type = "combo";
-        ui_label = "View Mode";
-        ui_items = "Normal\0GI Debug\0Depth\0Normals\0";
-        ui_category = "Visualization";
-    > = 0;
+< 
+    ui_type = "combo";
+    ui_label = "View Mode";
+    ui_items = "Normal\0IL Debug\0AO Debug\0Depth\0Normals\0";
+    ui_category = "Visualization";
+> = 0;
 
     uniform float giIntensity <
         ui_type = "slider";
-        ui_label = "GI Strength";
+        ui_label = "IL Strength";
         ui_min = 0.0; ui_max = 2.0; ui_step = 0.05;
-        ui_category = "Global Illumination";
-    > = 0.3;
+        ui_category = "IL Settings";
+    > = 0.4;
 
     uniform float sampleRadius <
         ui_type = "slider";
         ui_label = "Sample Radius";
         ui_min = 0.1; ui_max = 5.0; ui_step = 0.01;
-        ui_category = "Global Illumination";
+        ui_category = "IL Settings";
     > = 1.0;
 
     uniform int numSamples <
         ui_type = "slider";
         ui_label = "Sample Count";
         ui_min = 4; ui_max = 64; ui_step = 2;
-        ui_category = "Global Illumination";
+        ui_category = "IL Settings";
     > = 8;
 
     uniform float diffuseIntensity
@@ -62,29 +62,19 @@ namespace ScreenSpaceGIJonsona
         ui_label = "Diffuse Intensity";
         ui_tooltip = "Adjust the intensity of diffuse reflections.";
         ui_min = 0.0; ui_max = 2.0; ui_step = 0.05;
-        ui_category = "GI Settings";
+        ui_category = "IL Settings";
     >
     = 1.0;
-
-    uniform float falloffDistance
-    <
-        ui_type = "slider";
-        ui_label = "Falloff Distance";
-        ui_tooltip = "Adjust the distance at which indirect light falls off.";
-        ui_min = 0.1; ui_max = 10.0; ui_step = 0.1;
-        ui_category = "GI Settings";
-    >
-    = 10.0;
 
     uniform float aoIntensity
     < 
         ui_type = "slider";
         ui_label = "AO Intensity";
         ui_tooltip = "Adjust the intensity of ambient occlusion.";
-        ui_min = 0.0; ui_max = 20.0; ui_step = 0.05;
+        ui_min = 0.0; ui_max = 2.0; ui_step = 0.01;
         ui_category = "AO Settings";
     >
-    = 2.0;
+    = 0.5;
 
     uniform float aoRadius
     < 
@@ -94,7 +84,7 @@ namespace ScreenSpaceGIJonsona
         ui_min = 0.001; ui_max = 10.0; ui_step = 0.01;
         ui_category = "AO Settings";
     >
-    = 0.05;
+    = 0.3;
 
     uniform float rayJitter <
         ui_type = "slider";
@@ -109,6 +99,16 @@ namespace ScreenSpaceGIJonsona
         ui_min = 1; ui_max = 4; ui_step = 1;
         ui_category = "Ray Tracing";
     > = 1;
+    
+    uniform float falloffDistance
+    <
+        ui_type = "slider";
+        ui_label = "Falloff Distance";
+        ui_tooltip = "Adjust the distance at which indirect light falls off.";
+        ui_min = 0.1; ui_max = 10.0; ui_step = 0.1;
+        ui_category = "Geral Settings";
+    >
+    = 10.0;
 
 /*---------------.
 | :: Textures :: |
@@ -392,7 +392,7 @@ namespace ScreenSpaceGIJonsona
         return indirect;
     }
 
-    float4 BadGI_PS(float4 vpos : SV_Position, float2 texcoord : TexCoord) : SV_Target
+    float4 GI_Pass(float4 vpos : SV_Position, float2 texcoord : TexCoord) : SV_Target
     {
         float3 originalColor = SampleDiffuse(texcoord);
         float3 indirectLight = CalculateIndirectLight(texcoord, sampleRadius);
@@ -407,15 +407,35 @@ namespace ScreenSpaceGIJonsona
         {
             return float4(indirectLight, 1.0);
         }
-        else if (viewMode == 2)
+        else if (viewMode == 3)
         {
             float depth = GetLinearDepth(texcoord);
             return float4(depth, depth, depth, 1.0);
         }
-        else if (viewMode == 3)
+        else if (viewMode == 4)
         {
             float3 normal = GetNormalFromDepth(texcoord);
             return float4(normal * 0.5 + 0.5, 1.0);
+        }
+        return float4(originalColor, 1.0);
+    }
+    
+    float4 AO_Pass(float4 vpos : SV_Position, float2 texcoord : TexCoord) : SV_Target
+    {
+        float3 originalColor = SampleDiffuse(texcoord);
+        float3 position = GetPosition(texcoord);
+        float3 normal = GetNormalFromDepth(texcoord);
+
+        float ao = CalculateAmbientOcclusion(texcoord, position, normal);
+        float3 finalColor = originalColor * ao;
+
+        if (viewMode == 0)
+        {
+            return float4(finalColor, 1.0);
+        }
+        else if (viewMode == 2)
+        {
+            return float4(ao, ao, ao, 1.0); // Debug do AO
         }
         return float4(originalColor, 1.0);
     }
@@ -435,7 +455,12 @@ namespace ScreenSpaceGIJonsona
         pass
         {
             VertexShader = PostProcessVS;
-            PixelShader = BadGI_PS;
+            PixelShader = GI_Pass;
+        }
+        pass
+        {
+            VertexShader = PostProcessVS;
+            PixelShader = AO_Pass;
         }
     }
 }
