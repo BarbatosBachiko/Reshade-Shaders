@@ -4,7 +4,7 @@
 
 NeoSSAO
                                                                                        
-    Version 1.0
+    Version 1.1
 	Author: Barbatos Bachiko
 	License: MIT
 
@@ -12,13 +12,13 @@ NeoSSAO
 	History:
 	(*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
 	
-	Version 1.0
-    * Render Scale
-
+	Version 1.1
+    + New textures
+    - Render Scale to 0.111
 */ 
 
 #ifndef RENDER_SCALE
- #define RENDER_SCALE 0.333
+#define RENDER_SCALE 0.111
 #endif
 #define INPUT_WIDTH BUFFER_WIDTH 
 #define INPUT_HEIGHT BUFFER_HEIGHT 
@@ -111,32 +111,40 @@ uniform float4 OcclusionColor
 >
 = float4(0.0, 0.0, 0.0, 1.0);
 
-/*-------------------.
-| :: Textures ::    |
-'-------------------*/
+/*---------------.
+| :: Textures :: |
+'---------------*/
 
 namespace NEOSSAOMEGAETC
 {
-    texture ColorTex : COLOR;
-    texture DepthTex : DEPTH;
-    sampler ColorSampler
+    texture2D SSAOTex
     {
-        Texture = ColorTex;
+        Width = BUFFER_WIDTH;
+        Height = BUFFER_HEIGHT;
+        Format = RGBA16F;
     };
-    sampler DepthSampler
+
+    sampler2D sSSAO
+    {
+        Texture = SSAOTex;
+    };
+
+    texture DepthTex : DEPTH;
+    
+    sampler2D DepthSampler
     {
         Texture = DepthTex;
     };
-
-	/*-------------------.
-	| :: Functions ::    |
-	'-------------------*/
+    
+    /*----------------.
+    | :: Functions :: |
+    '----------------*/
 
     float GetLinearDepth(float2 coords, int mipLevel = 0)
     {
         float depth = (mipLevel > 0)
-        ? tex2Dlod(DepthSampler, float4(coords, 0, mipLevel)).r
-        : tex2D(DepthSampler, coords).r;
+            ? tex2Dlod(DepthSampler, float4(coords, 0, mipLevel)).r
+            : tex2D(DepthSampler, coords).r;
         return ReShade::GetLinearizedDepth(coords) * DepthMultiplier;
     }
 
@@ -149,7 +157,6 @@ namespace NEOSSAOMEGAETC
         float3 deltaX = float3(texelSize.x, 0.0, depthX - depthCenter);
         float3 deltaY = float3(0.0, texelSize.y, depthY - depthCenter);
         float3 normal = normalize(cross(deltaX, deltaY));
-
         return normal;
     }
 
@@ -179,75 +186,77 @@ namespace NEOSSAOMEGAETC
         return occlusion;
     }
 
-    // Main SSAO 
-    float4 SSAO(float2 texcoord)
+    float4 SSAO_PS(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
-        float4 originalColor = tex2D(ColorSampler, texcoord);
-        float depthValue = GetLinearDepth(texcoord);
-        float3 normal = GetNormalFromDepth(texcoord);
+        float depthValue = GetLinearDepth(uv);
+        float3 normal = GetNormalFromDepth(uv);
         float occlusion = 0.0;
 
-        int sampleCount = (QualityLevel == 0) ? 8 : (QualityLevel == 1) ? 16 : 32; // Quality Level
-        float radius = SampleRadius;
-
+        int sampleCount = (QualityLevel == 0) ? 8 : (QualityLevel == 1) ? 16 : 32;
         for (int i = 0; i < sampleCount; i++)
         {
-            float phi = (i + 0.5) * 3.14159265359 * 2.0 / sampleCount;
+            float phi = (i + 0.5) * 6.28318530718 / sampleCount;
             float theta = acos(2.0 * frac(sin(phi) * 0.5 + 0.5) - 1.0);
             float3 sampleDir = float3(sin(theta) * cos(phi), sin(theta) * sin(phi), cos(theta));
-
-            occlusion += RayMarching(texcoord, sampleDir * radius, normal);
+            occlusion += RayMarching(uv, sampleDir * SampleRadius, normal);
         }
-
         occlusion = (occlusion / sampleCount) * Intensity;
+        return float4(occlusion, occlusion, occlusion, 1.0);
+    }
 
-    // View modes: Normal, AO Debug, Depth, Sky Debug
-        if (ViewMode == 0)
+    float4 Composite_PS(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
+    {
+        float4 originalColor = tex2D(ReShade::BackBuffer, uv);
+        float occlusion = tex2D(sSSAO, uv).r;
+        float depthValue = GetLinearDepth(uv);
+        float3 normal = GetNormalFromDepth(uv);
+
+         // View modes: Normal, AO Debug, Depth, Sky Debug
+        if (ViewMode == 0) 
         {
             if (depthValue >= DepthThreshold)
             {
-                return originalColor;
+                return originalColor * (1.0 - saturate(occlusion)) + OcclusionColor * saturate(occlusion);
             }
             return originalColor * (1.0 - saturate(occlusion)) + OcclusionColor * saturate(occlusion);
         }
-        else if (ViewMode == 1)
+        else if (ViewMode == 1) 
         {
-            return float4(saturate(occlusion), saturate(occlusion), saturate(occlusion), 1.0); // AO Debug
+            return float4(saturate(occlusion), saturate(occlusion), saturate(occlusion), 1.0);
         }
-        else if (ViewMode == 2)
+        else if (ViewMode == 2) 
         {
-            return float4(depthValue, depthValue, depthValue, 1.0); // Depth Debug
+            return float4(depthValue, depthValue, depthValue, 1.0);
         }
-        else if (ViewMode == 3)
+        else if (ViewMode == 3) 
         {
             return (depthValue >= DepthThreshold)
-            ? float4(1.0, 0.0, 0.0, 1.0) // Sky Debug
-            : float4(depthValue, depthValue, depthValue, 1.0);
+                ? float4(1.0, 0.0, 0.0, 1.0)
+                : float4(depthValue, depthValue, depthValue, 1.0);
         }
-        else if (ViewMode == 4) // Normal Debug
+        else if (ViewMode == 4) 
         {
             return float4(normal * 0.5 + 0.5, 1.0);
         }
         return originalColor;
     }
 
-    // Pixel shader
-    float4 SSAOPS(float4 vpos : SV_Position, float2 texcoord : TexCoord) : SV_Target
-    {
-        return SSAO(texcoord);
-    }
-
-	/*-------------------.
-	| :: Techniques ::   |
-	'-------------------*/
+    /*-------------------.
+    | :: Techniques ::   |
+    '-------------------*/
 
     technique NeoSSAO
     {
-        pass
+        pass SSAOPass
         {
             VertexShader = PostProcessVS;
-            PixelShader = SSAOPS;
+            PixelShader = SSAO_PS;
+            RenderTarget = SSAOTex;
+        }
+        pass Composite
+        {
+            VertexShader = PostProcessVS;
+            PixelShader = Composite_PS;
         }
     }
-}
-// https://www.comp.nus.edu.sg/~lowkl/publications/mssao_visual_computer_2012.pdf
+} // https://www.comp.nus.edu.sg/~lowkl/publications/mssao_visual_computer_2012.pdf (this is just my study material, it doesn't mean there are implementations from here)
