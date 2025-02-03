@@ -14,11 +14,11 @@ NeoSSAO
 	
 	Version 1.1
     + New textures
-    - Render Scale to 0.111
+    - Render Scale to 0.333
 */ 
 
 #ifndef RENDER_SCALE
-#define RENDER_SCALE 0.111
+#define RENDER_SCALE 0.333
 #endif
 #define INPUT_WIDTH BUFFER_WIDTH 
 #define INPUT_HEIGHT BUFFER_HEIGHT 
