@@ -7,7 +7,7 @@
  \__ \__ \/ _ \ (_) |
  |___/___/_/ \_\___/  
                                                                                        
-    Version 0.8
+    Version 0.9
 	Author: Barbatos Bachiko
 	License: MIT
 
@@ -19,12 +19,18 @@
 	History:
 	(*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
 	
-	Version 0.8
-    + Fix
-    + Implemented Get Normal From Depth
-
+	Version 0.9
+    + Render Scale, new texture, code optimization.
 */ 
-
+namespace SSAOmaisoumenos
+{
+#ifndef RENDER_SCALE
+#define RENDER_SCALE 0.888
+#endif
+#define INPUT_WIDTH BUFFER_WIDTH 
+#define INPUT_HEIGHT BUFFER_HEIGHT 
+#define RENDER_WIDTH (INPUT_WIDTH * RENDER_SCALE)
+#define RENDER_HEIGHT (INPUT_HEIGHT * RENDER_SCALE) 
     /*---------------.
     | :: Includes :: |
     '---------------*/
@@ -36,16 +42,12 @@
     | :: Settings :: |
     '---------------*/
 
-uniform int viewMode
+uniform int ViewMode
 <
     ui_type = "combo";
     ui_label = "View Mode";
     ui_tooltip = "Select the view mode for SSAO";
-    ui_items = 
-"Normal\0" 
-"AO Debug\0"
-"Depth\0"
-"Sky Debug\0";
+    ui_items = "Normal\0AO Debug\0Depth\0Sky Debug\0Normal Debug\0";
 >
 = 0;
 
@@ -75,7 +77,7 @@ uniform int aoType
     ui_items = 
     "Random Direction\0"
     "Hemisphere\0"
-    "MXAO\0"; 
+    "Mixed (Random + Hemisphere)\0"; 
 >
 = 2;
 
@@ -106,7 +108,7 @@ uniform float DepthMultiplier <
     ui_step = 0.001;
 > = 1.0;
 
-uniform float depthThreshold
+uniform float DepthThreshold
 <
     ui_type = "slider";
     ui_category = "Depth";
@@ -119,26 +121,17 @@ uniform float depthThreshold
 /*---------------.
 | :: Textures :: |
 '---------------*/
-
-namespace SSAO
-{
-    texture ColorTex : COLOR;
-    texture DepthTex : DEPTH;
-    texture NormalTex : NORMAL;
-
-    sampler ColorSampler
+    
+    texture2D SSAOTex
     {
-        Texture = ColorTex;
+        Width = RENDER_WIDTH;
+        Height = RENDER_HEIGHT;
+        Format = RGBA16F;
     };
 
-    sampler DepthSampler
+    sampler2D sSSAO
     {
-        Texture = DepthTex;
-    };
-
-    sampler NormalSampler
-    {
-        Texture = NormalTex;
+        Texture = SSAOTex;
     };
 
     /*----------------.
@@ -184,7 +177,7 @@ namespace SSAO
     // Hemisphere Sampling
     float3 HemisphereSampling(int sampleIndex, float3 normal)
     {
-        float phi = (sampleIndex + 0.5) * 3.14159265359 * 2.0 / 26.0; // amostras
+        float phi = (sampleIndex + 0.5) * 3.14159265359 * 2.0 / 16.0; // amostras
         float theta = acos(2.0 * frac(sin(phi) * 0.5 + 0.5) - 1.0);
 
         float3 dir;
@@ -196,9 +189,9 @@ namespace SSAO
     }
 
     // Main SSAO
-    float4 SSAO(float2 texcoord)
+    float4 SSAO_PS(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
     {
-        float4 originalColor = tex2D(ColorSampler, texcoord);
+        float4 originalColor = tex2D(ReShade::BackBuffer, texcoord);
         float depthValue = GetLinearDepth(texcoord);
         float3 normal = GetNormalFromDepth(texcoord);
         float occlusion = 0.0;
@@ -223,7 +216,7 @@ namespace SSAO
             float2 sampleCoord = clamp(texcoord + sampleDir.xy * radius, 0.0, 1.0);
             float sampleDepth = GetLinearDepth(sampleCoord);
 
-            if (sampleDepth < depthThreshold)
+            if (sampleDepth < DepthThreshold)
             {
                 float rangeCheck = exp(-abs(depthValue - sampleDepth) / falloff);
                 occlusion += (sampleDepth < depthValue) ? rangeCheck : 0.0;
@@ -232,38 +225,44 @@ namespace SSAO
 
         occlusion = (occlusion / sampleCount) * intensity;
 
-        if (viewMode == 0)
+        return float4(occlusion, occlusion, occlusion, 1.0);
+    }
+    
+    float4 Composite_PS(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
+    {
+        float4 originalColor = tex2D(ReShade::BackBuffer, uv);
+        float occlusion = tex2D(sSSAO, uv).r;
+        float depthValue = GetLinearDepth(uv);
+        float3 normal = GetNormalFromDepth(uv);
+
+         // View modes: Normal, AO Debug, Depth, Sky Debug
+        if (ViewMode == 0)
         {
-            if (depthValue >= depthThreshold)
+            if (depthValue >= DepthThreshold)
             {
-                return originalColor;
+                return originalColor * (1.0 - saturate(occlusion));
             }
             return originalColor * (1.0 - saturate(occlusion));
         }
-
-        if (viewMode == 1)
+        else if (ViewMode == 1)
         {
             return float4(saturate(occlusion), saturate(occlusion), saturate(occlusion), 1.0);
         }
-        else if (viewMode == 2)
+        else if (ViewMode == 2)
         {
             return float4(depthValue, depthValue, depthValue, 1.0);
         }
-        else if (viewMode == 3)
+        else if (ViewMode == 3)
         {
-            if (depthValue >= depthThreshold)
-                return float4(1.0, 0.0, 0.0, 1.0);
-            return float4(depthValue, depthValue, depthValue, 1.0);
+            return (depthValue >= DepthThreshold)
+                ? float4(1.0, 0.0, 0.0, 1.0)
+                : float4(depthValue, depthValue, depthValue, 1.0);
         }
-
+        else if (ViewMode == 4)
+        {
+            return float4(normal * 0.5 + 0.5, 1.0);
+        }
         return originalColor;
-    }
-
-    // PixelShader
-    float4 SSAOPS(float4 vpos : SV_Position, float2 texcoord : TexCoord) : SV_Target
-    {
-        float4 ssaoColor = SSAO(texcoord);
-        return ssaoColor;
     }
 
     /*-----------------.
@@ -272,10 +271,16 @@ namespace SSAO
 
     technique SSAO
     {
-        pass
+        pass 
         {
             VertexShader = PostProcessVS;
-            PixelShader = SSAOPS;
+            PixelShader = SSAO_PS;
+            RenderTarget = SSAOTex;
+        }
+        pass 
+        {
+            VertexShader = PostProcessVS;
+            PixelShader = Composite_PS;
         }
     }
 }
