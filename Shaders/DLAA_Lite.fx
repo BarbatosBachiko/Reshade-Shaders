@@ -2,29 +2,32 @@
 | :: Description :: |
 '-------------------/
 
-Directionally Localized Anti Aliasing Lite (version 1.6.1)
+DLAA Lite
 
-	Author: Barbatos Bachiko
-	License: Creative Commons Attribution 3.0
-        Original by: BlueSkyDefender. Thanks!
+    Version 1.6.2
+    Author: Barbatos Bachiko
+    License: Creative Commons Attribution 3.0
+    Original by: BlueSkyDefender. Thanks!
 
-	About:
-        This shader applies Directionally Localized Anti-Aliasing (DLAA) with
-        Shading effect and Sharpness.
-    
-	History:
-	(*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
+    About: This shader applies Directionally Localized Anti-Aliasing (DLAA) with Sharpness.
+    History:
+    (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
 	
-	Version 1.6.1
-	+ Improved Shading
+    Version 1.6.2
+    - Removed Shading
+    + Code Clean
+    + adjustments for better quality
 */
-
+namespace RedSkyAttacker
+{
+#define pix float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT)
+#define lambda 3.0f
+#define epsilon 0.1f
 /*---------------.
 | :: Includes :: |
 '---------------*/
 
 #include "ReShade.fxh"
-#include "ReShadeUI.fxh"
 
 /*---------------.
 | :: Settings :: |
@@ -45,8 +48,8 @@ uniform float LongEdgeSampleSize <
     ui_tooltip = "Adjust the sample size for long edge detection."; 
     ui_min = 2.0; 
     ui_max = 12.0; 
-    ui_default = 8.0; 
-> = 8.0;
+    ui_default = 5.0; 
+> = 5.0;
 
 uniform int PixelWidth < 
     ui_category = "DLAA";
@@ -54,7 +57,7 @@ uniform int PixelWidth <
     ui_items = "1\0 16\0 32\0 64\0 128\0"; 
     ui_label = "Pixel Width"; 
     ui_tooltip = "Select the pixel width."; 
-> = 1; 
+> =0; 
 
 uniform float sharpness < 
     ui_category = "Plus";
@@ -63,48 +66,9 @@ uniform float sharpness <
     ui_tooltip = "Control the sharpness level."; 
 > = 0.2;
 
-uniform float ShadingIntensity < 
-    ui_category = "Plus";
-    ui_type = "slider";
-    ui_label = "Shading"; 
-    ui_tooltip = "Control the Shading."; 
-    ui_min = 0.0; 
-    ui_max = 4.0; 
-    ui_default = 2.0; 
-> = 2.0;
-
-uniform bool EnableShading < 
-    ui_category = "Plus";
-    ui_type = "checkbox";
-    ui_label = "Enable Shading"; 
-    ui_tooltip = "Enable or disable the shading effect."; 
-> = true; 
-
 /*---------------.
 | :: Textures :: |
 '---------------*/
-
-#define pix float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT)
-#define lambda 3.0f
-#define epsilon 0.1f
-
-texture BackBufferTex : COLOR;
-
-sampler BackBuffer
-{
-    Texture = BackBufferTex;
-};
-
-texture2D NormalMapTex : NORMAL;
-sampler NormalMap
-{
-    Texture = NormalMapTex;
-    AddressU = Clamp;
-    AddressV = Clamp;
-    MinFilter = Linear;
-    MagFilter = Linear;
-    MipFilter = Linear;
-};
 
 texture SLPtex
 {
@@ -122,22 +86,17 @@ sampler SamplerLoadedPixel
 | :: Functions :: |
 '----------------*/
 
-float3 LoadNormal(float2 texcoord)
-{
-    return normalize(tex2D(NormalMap, texcoord).rgb * 2.0 - 1.0);
-}
-
 float LI(in float3 value)
 {
     return dot(value.ggg, float3(0.333, 0.333, 0.333));
 }
 
-float4 LP(float2 tc, float dx, float dy) 
+float4 LP(float2 tc, float dx, float dy)
 {
-    return tex2D(BackBuffer, tc + float2(dx, dy) * pix.xy);
+    return tex2D(ReShade::BackBuffer, tc + float2(dx, dy) * pix.xy);
 }
 
-float4 PreFilter(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target 
+float4 PreFilter(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
 {
 
     const float4 center = LP(texcoord, 0, 0);
@@ -152,7 +111,7 @@ float4 PreFilter(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV
     return float4(center.rgb, edgesLum);
 }
 
-float4 SLP(float2 tc, float dx, float dy) 
+float4 SLP(float2 tc, float dx, float dy)
 {
     return tex2D(SamplerLoadedPixel, tc + float2(dx, dy) * pix.xy);
 }
@@ -166,54 +125,12 @@ float4 LoadPixel(sampler tex, float2 tc)
 float4 ApplySharpness(float4 color, float2 texcoord)
 {
     // Sample neighboring pixels to apply the sharpness filter
-    float4 left = tex2D(BackBuffer, texcoord + float2(-1.0 * float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT).x, 0));
-    float4 right = tex2D(BackBuffer, texcoord + float2(1.0 * float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT).x, 0));
-    float4 top = tex2D(BackBuffer, texcoord + float2(0, -1.0 * float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT).y));
-    float4 bottom = tex2D(BackBuffer, texcoord + float2(0, 1.0 * float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT).y));
-
-    // Apply the sharpening filter: enhance the current pixel and subtract neighboring pixels
+    float4 left = tex2D(ReShade::BackBuffer, texcoord + float2(-1.0 * float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT).x, 0));
+    float4 right = tex2D(ReShade::BackBuffer, texcoord + float2(1.0 * float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT).x, 0));
+    float4 top = tex2D(ReShade::BackBuffer, texcoord + float2(0, -1.0 * float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT).y));
+    float4 bottom = tex2D(ReShade::BackBuffer, texcoord + float2(0, 1.0 * float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT).y));
     float4 sharpened = color * (1.0 + sharpness) - (left + right + top + bottom) * (sharpness * 0.25);
-
-    // Clamp the result to ensure valid color values
     return clamp(sharpened, 0.0, 1.0);
-}
-
-float4 ApplyShading(float4 color, float2 texcoord)
-{
-    if (!EnableShading)
-    {
-        return color;
-    }
-
-    float2 bufferSize = float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT);
-    float4 totalDiff = float4(0.0, 0.0, 0.0, 0.0);
-    int count = 0;
-
-    float3 currentNormal = LoadNormal(texcoord);
-
-    int sampleOffset = 1;
-
-    for (int x = -sampleOffset; x <= sampleOffset; ++x)
-    {
-        for (int y = -sampleOffset; y <= sampleOffset; ++y)
-        {
-            if (x == 0 && y == 0)
-                continue;
-
-            float4 neighborColor = LoadPixel(BackBuffer, texcoord + float2(x * bufferSize.x, y * bufferSize.y));
-            float4 diff = abs(neighborColor - color);
-            float3 neighborNormal = LoadNormal(texcoord + float2(x * bufferSize.x, y * bufferSize.y));
-            float normalInfluence = max(dot(currentNormal, neighborNormal), 0.0);
-
-            totalDiff += diff * normalInfluence;
-            count++;
-        }
-    }
-
-    float complexity = dot(totalDiff.rgb, float3(1.0, 1.0, 1.0)) / count;
-    float vrsFactor = 1.0 - (complexity * ShadingIntensity);
-
-    return lerp(color, color * vrsFactor, 0.5);
 }
 
 // Pixel width
@@ -226,10 +143,10 @@ float4 ApplyPixelWidth(float4 color, float2 texcoord)
 
     float2 pixelOffset = float2(float(PixelWidth), float(PixelWidth)) * float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT);
 
-    float4 left = LoadPixel(BackBuffer, texcoord + float2(-pixelOffset.x, 0));
-    float4 right = LoadPixel(BackBuffer, texcoord + float2(pixelOffset.x, 0));
-    float4 top = LoadPixel(BackBuffer, texcoord + float2(0, -pixelOffset.y));
-    float4 bottom = LoadPixel(BackBuffer, texcoord + float2(0, pixelOffset.y));
+    float4 left = LoadPixel(ReShade::BackBuffer, texcoord + float2(-pixelOffset.x, 0));
+    float4 right = LoadPixel(ReShade::BackBuffer, texcoord + float2(pixelOffset.x, 0));
+    float4 top = LoadPixel(ReShade::BackBuffer, texcoord + float2(0, -pixelOffset.y));
+    float4 bottom = LoadPixel(ReShade::BackBuffer, texcoord + float2(0, pixelOffset.y));
 
     float4 laplacian = (left + right + top + bottom - 4.0 * color) * 0.2;
 
@@ -246,8 +163,8 @@ float4 ApplyPixelWidth(float4 color, float2 texcoord)
 }
 
 //Information on Slide 44 says to run the edge processing jointly short and Large.
-float4 Out(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
-{
+    float4 DLAA_P(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
+    {
 	//Short Edge Filter 
     float4 DLAA, DLAA_S, DLAA_L; //DLAA is the completed AA Result.
 	
@@ -365,10 +282,6 @@ float4 Out(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Targe
         DLAA = lerp(DLAA, H, EAH);
     }
 
-    if (EnableShading > 0.0)
-    {
-        DLAA = ApplyShading(DLAA, texcoord);
-    }
     if (View_Mode == 1)
     {
         DLAA = Mask * 2;
@@ -390,24 +303,6 @@ float4 Out(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Targe
 }
 
 /*-----------------.
-| :: Reshade.fxh:: |
-'-----------------*/
-
-// Vertex shader generating a triangle covering the entire screen
-void DPostProcessVS(in uint id : SV_VertexID, out float4 position : SV_Position, out float2 texcoord : TEXCOORD)
-{
-    if (id == 2)
-        texcoord.x = 2.0;
-    else
-        texcoord.x = 0.0;
-    if (id == 1)
-        texcoord.y = 2.0;
-    else
-        texcoord.y = 0.0;
-    position = float4(texcoord * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
-}
-
-/*-----------------.
 | :: Techniques :: |
 '-----------------*/
 
@@ -415,15 +310,16 @@ technique DLAA_Lite
 {
     pass Pre_Filter
     {
-        VertexShader = DPostProcessVS;
+        VertexShader = PostProcessVS;
         PixelShader = PreFilter;
         RenderTarget = SLPtex;
     }
     pass DLAA_Light
     {
-        VertexShader = DPostProcessVS;
-        PixelShader = Out;
+        VertexShader = PostProcessVS;
+        PixelShader = DLAA_P;
     }
+  }
 }
 
 /*-------------.
