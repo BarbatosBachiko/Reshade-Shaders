@@ -10,10 +10,10 @@
 
     About: Bits, Chromatic Aberration and fog.
     History:
-	(*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
+    (*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
 
     Version 1.2
-	+ restructuring
+    + restructuring
     - removed pixelate, convolution and outline
 
 /*---------------.
