@@ -1,19 +1,19 @@
 /*------------------.
 | :: Description :: |
 '-------------------/
+
 uFakeHDR 
 
-Version 1.2
+Version 1.3
 Author: BarbatosBachiko
 License: MIT
 
-About: This shader simulates HDR effects (expected by me) for SDR.
-
+About: This shader simulates HDR effects (expected by me) for SDR. 
 History:
 (*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
 
-Version 1.2:
-+ organization
+Version 1.3:
++ Code clean, new texture, fixes and remove bloom.
 
 */
 
@@ -69,32 +69,10 @@ uniform float NoiseSeed <
     ui_max = 100000.0; 
 > = 43758.5453; 
 
-uniform bool EnableBloom < 
-    ui_category = "Bloom";
-    ui_type = "checkbox";
-    ui_label = "Enable Bloom"; 
-> = false;
-
-uniform float BloomStrength < 
-    ui_category = "Bloom";
+uniform float Luminance < 
+    ui_category = "Luminace (only for Adaptative)";
     ui_type = "slider";
-    ui_label = "Bloom Strength"; 
-    ui_min = 0.0; 
-    ui_max = 1.0; 
-> = 0.300;
-
-uniform float bloomThreshold < 
-    ui_category = "Bloom";
-    ui_type = "slider";
-    ui_label = "Bloom Threshold"; 
-    ui_min = 0.0; 
-    ui_max = 1.0; 
-> = 0.0; 
-
-uniform float LuminanceAdaptationSpeed < 
-    ui_category = "Luminace";
-    ui_type = "slider";
-    ui_label = "Luminance Adaptation Speed"; 
+    ui_label = "Luminance"; 
     ui_min = 0.01; 
     ui_max = 1.0; 
 > = 0.1;
@@ -102,10 +80,15 @@ uniform float LuminanceAdaptationSpeed <
 /*---------------.
 | :: Textures :: |
 '---------------*/
-texture2D BackBufferTex : COLOR;
-sampler BackBuffer
+texture FakeHDRTex
 {
-    Texture = BackBufferTex;
+    Width = BUFFER_WIDTH;
+    Height = BUFFER_HEIGHT;
+    Format = RGBA16F;
+};
+sampler sFakeHDR
+{
+    Texture = FakeHDRTex;
 };
 
 #define textureSize float2(BUFFER_WIDTH, BUFFER_HEIGHT)
@@ -128,9 +111,9 @@ float CalculateSceneLuminance(float2 texcoord)
             float2 offset = float2(x, y) * (sampleRadius / textureSize.x);
             float2 sampleCoord = texcoord + offset;
 
-            if (sampleCoord.x >= 0.0 && sampleCoord.x <= 1.0 && sampleCoord.y >= 0.0 && sampleCoord.y <= 1.0)
+            if (all(saturate(sampleCoord) == sampleCoord))
             {
-                float3 sampleColor = tex2D(BackBuffer, sampleCoord).rgb;
+                float3 sampleColor = tex2D(sFakeHDR, sampleCoord).rgb;
                 float luminance = dot(sampleColor, float3(0.2126, 0.7152, 0.0722));
 
                 luminanceSum += luminance;
@@ -140,7 +123,7 @@ float CalculateSceneLuminance(float2 texcoord)
     }
 
     float currentLuminance = (sampleCount > 0) ? luminanceSum / sampleCount : 0.0;
-    lastSceneLuminance += (currentLuminance - lastSceneLuminance) * LuminanceAdaptationSpeed;
+    lastSceneLuminance = lerp(lastSceneLuminance, currentLuminance, Luminance);
 
     return lastSceneLuminance;
 }
@@ -148,7 +131,6 @@ float CalculateSceneLuminance(float2 texcoord)
 float3 ReinhardToneMapping(float3 color)
 {
     const float a = 0.25;
-    const float burn = 1.5;
     const float maxLum = 1.0;
 
     float luminance = dot(color, float3(0.2126, 0.7152, 0.0722)) * 1.2;
@@ -196,63 +178,14 @@ float3 LogarithmicToneMapping(float3 color)
 float3 AdaptiveToneMapping(float3 color, float sceneLuminance)
 {
     float targetLuminance = 0.5;
-    float adaptationSpeed = 0.1;
     float minAdjustment = 0.5;
     float maxAdjustment = 2.0;
     float luminanceAdjustment = targetLuminance / (sceneLuminance + 0.001);
     luminanceAdjustment = clamp(luminanceAdjustment, minAdjustment, maxAdjustment);
-    float adjustmentFactor = lerp(1.0, luminanceAdjustment, adaptationSpeed);
+    float adjustmentFactor = lerp(1.0, luminanceAdjustment, Luminance);
     color *= adjustmentFactor;
 
     return saturate(color);
-}
-
-float3 ApplyBloom(float3 color, float2 texcoord)
-{
-    if (!EnableBloom)
-    {
-        return color;
-    }
-
-    const float localBloomStrength = BloomStrength;
-    const float localBloomThreshold = bloomThreshold;
-    const float3 luminanceCoefficients = float3(0.2126, 0.7152, 0.0722);
-
-    float luminance = dot(color, luminanceCoefficients);
-
-    if (luminance < localBloomThreshold)
-    {
-        return color;
-    }
-
-    float3 bloomColor = float3(0.0, 0.0, 0.0);
-    float totalWeight = 0.0;
-    float2 offsetFactor = 1.0 / textureSize;
-
-    for (int x = -2; x <= 2; x++)
-    {
-        for (int y = -2; y <= 2; y++)
-        {
-            float2 offset = float2(x, y) * offsetFactor;
-            float3 sampleColor = tex2D(BackBuffer, texcoord + offset).rgb;
-
-            float sampleLuminance = dot(sampleColor, luminanceCoefficients);
-
-            if (sampleLuminance > localBloomThreshold)
-            {
-                float weight = sampleLuminance - localBloomThreshold;
-                bloomColor += sampleColor * weight;
-                totalWeight += weight;
-            }
-        }
-    }
-
-    if (totalWeight > 0.0)
-    {
-        bloomColor /= totalWeight;
-    }
-
-    return saturate(color + bloomColor * localBloomStrength);
 }
 
 float3 ApplyToneMapping(float3 color, float2 texcoord)
@@ -285,7 +218,7 @@ float make_noise(float2 uv)
 
 float3 ApplyDithering(float3 color, float2 texcoord, float DitherStrength)
 {
-    float noise = make_noise(texcoord * 100.0);
+    float noise = make_noise(texcoord);
     color += (noise - 0.5) * DitherStrength;
 
     return saturate(color);
@@ -293,17 +226,22 @@ float3 ApplyDithering(float3 color, float2 texcoord, float DitherStrength)
 
 float4 uFakeHDRPass(float4 position : SV_Position, float2 texcoord : TexCoord) : SV_Target
 {
-    float3 color = tex2D(BackBuffer, texcoord).rgb;
+    float3 color = tex2D(ReShade::BackBuffer, texcoord).rgb;
     float3 hdrColor = pow(color, HDRPower);
     
     hdrColor = ApplyToneMapping(hdrColor, texcoord);
-    hdrColor = ApplyBloom(hdrColor, texcoord);
 
     if (EnableDithering)
     {
         hdrColor = ApplyDithering(hdrColor, texcoord, DitherStrength);
     }
 
+    return float4(saturate(hdrColor), 1.0);
+}
+
+float4 Composite_PS(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
+{
+    float3 hdrColor = tex2D(sFakeHDR, uv).rgb;
     return float4(saturate(hdrColor), 1.0);
 }
 
@@ -316,5 +254,11 @@ technique uFakeHDR
     {
         VertexShader = PostProcessVS;
         PixelShader = uFakeHDRPass;
+        RenderTarget = FakeHDRTex;
+    }
+    pass
+    {
+        VertexShader = PostProcessVS;
+        PixelShader = Composite_PS;
     }
 }
