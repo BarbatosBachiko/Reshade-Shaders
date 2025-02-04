@@ -2,13 +2,18 @@
 | :: Description :: |
 '-------------------/
 
-    Emboss (Version 1.0)
+    Emboss
 
+    Version 1.1
     Author: Barbatos Bachiko 
     License: MIT
 
-    About:
-    That applies an emboss effect with adjustable parameters.
+    About: Emboss effect.
+    History:
+    (*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
+     
+    Version 1.1
+    + Code Clean
 */
 
 #include "ReShade.fxh"
@@ -63,21 +68,10 @@ uniform int direction_mode
 >
 = 3;
 
-/*---------------.
-| :: Textures :: |
-'---------------*/
-
-texture2D BackBufferTex : COLOR;
-sampler BackBuffer
-{
-    Texture = BackBufferTex;
-};
-
 /*----------------.
 | :: Functions :: |
 '----------------*/
 
-// Predefined kernels for different emboss 
 void get_kernel(int type, out float kernel[9])
 {
     if (type == 0) // Normal
@@ -129,14 +123,13 @@ void get_kernel(int type, out float kernel[9])
         kernel[8] = 2;
     }
 
-    // Apply kernel scaling
     for (int i = 0; i < 9; i++)
     {
         kernel[i] *= kernel_scale;
     }
 }
 
-// Sampling offsets for 3x3 kernel
+// 3x3 kernel
 static const float2 offsets[9] =
 {
     float2(-1, -1), float2(0, -1), float2(1, -1),
@@ -144,7 +137,6 @@ static const float2 offsets[9] =
     float2(-1, 1), float2(0, 1), float2(1, 1)
 };
 
-// Function to sampling based on direction
 bool is_sample_active(int index, int mode)
 {
     if (mode == 0) // Vertical
@@ -153,17 +145,16 @@ bool is_sample_active(int index, int mode)
         return (index == 3 || index == 4 || index == 5);
     else if (mode == 2) // Diagonal
         return (index == 0 || index == 2 || index == 6 || index == 8);
-    else // All directions
+    else
         return true;
 }
 
-// Main Pixel Shader
 float4 EmbossPS(float4 vpos : SV_Position, float2 texcoord : TexCoord) : SV_Target
 {
-    float4 color = tex2D(BackBuffer, texcoord);
+    float4 color = tex2D(ReShade::BackBuffer, texcoord);
     float kernel[9];
     get_kernel(kernel_type, kernel);
-
+    
     float3 result = 0.0;
 
     for (int i = 0; i < 9; i++)
@@ -171,8 +162,8 @@ float4 EmbossPS(float4 vpos : SV_Position, float2 texcoord : TexCoord) : SV_Targ
         if (is_sample_active(i, direction_mode))
         {
             float2 sampleCoord = texcoord + offsets[i] * 0.001;
-            sampleCoord = clamp(sampleCoord, 0.0, 1.0); 
-            result += tex2D(BackBuffer, sampleCoord).rgb * kernel[i];
+            sampleCoord = clamp(sampleCoord, 0.0, 1.0);
+            result += tex2D(ReShade::BackBuffer, sampleCoord).rgb * kernel[i];
         }
     }
 
