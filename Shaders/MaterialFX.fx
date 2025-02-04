@@ -70,9 +70,10 @@ sampler sMaterial
     Texture = MaterialTex;
 };
 
-/*---------------.
-| :: Shader Pass :: |
-'---------------*/
+/*----------------.
+| :: Functions :: |
+'----------------*/
+
 float4 MaterialFXPass(float4 pos : SV_Position, float2 texcoord : TexCoord) : SV_Target
 {
     float4 color = tex2D(ReShade::BackBuffer, texcoord);
