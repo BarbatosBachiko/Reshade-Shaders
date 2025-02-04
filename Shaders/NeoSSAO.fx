@@ -2,9 +2,11 @@
 | :: Description :: |
 '-------------------/
 
-NeoSSAO
-                                                                                       
-    Version 1.1
+_  _ ____ ____ ____ ____ ____ ____ 
+|\ | |___ |  | [__  [__  |__| |  | 
+| \| |___ |__| ___] ___] |  | |__| 
+                                                                       
+    Version 1.1.1
 	Author: Barbatos Bachiko
 	License: MIT
 
@@ -12,11 +14,11 @@ NeoSSAO
 	History:
 	(*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
 	
-	Version 1.1
-    + New textures
-    - Render Scale to 0.333
+	Version 1.1.1
+    + Code optimization
 */ 
-
+namespace NEOSSAOMEGAETC
+{
 #ifndef RENDER_SCALE
 #define RENDER_SCALE 0.333
 #endif
@@ -30,7 +32,6 @@ NeoSSAO
 '-------------------*/
 
 #include "ReShade.fxh"
-#include "ReShadeUI.fxh"
 
 /*-------------------.
 | :: Settings ::    |
@@ -115,8 +116,6 @@ uniform float4 OcclusionColor
 | :: Textures :: |
 '---------------*/
 
-namespace NEOSSAOMEGAETC
-{
     texture2D SSAOTex
     {
         Width = BUFFER_WIDTH;
@@ -129,22 +128,12 @@ namespace NEOSSAOMEGAETC
         Texture = SSAOTex;
     };
 
-    texture DepthTex : DEPTH;
-    
-    sampler2D DepthSampler
-    {
-        Texture = DepthTex;
-    };
-    
     /*----------------.
     | :: Functions :: |
     '----------------*/
 
-    float GetLinearDepth(float2 coords, int mipLevel = 0)
+    float GetLinearDepth(float2 coords)
     {
-        float depth = (mipLevel > 0)
-            ? tex2Dlod(DepthSampler, float4(coords, 0, mipLevel)).r
-            : tex2D(DepthSampler, coords).r;
         return ReShade::GetLinearizedDepth(coords) * DepthMultiplier;
     }
 
@@ -173,7 +162,7 @@ namespace NEOSSAOMEGAETC
         while (currentPos < maxDistance)
         {
             float2 sampleCoord = clamp(texcoord + rayDir.xy * currentPos, 0.0, 1.0);
-            float sampleDepth = GetLinearDepth(sampleCoord, mipLevel);
+            float sampleDepth = GetLinearDepth(sampleCoord);
         
             if (sampleDepth < depthValue)
             {
@@ -212,7 +201,7 @@ namespace NEOSSAOMEGAETC
         float3 normal = GetNormalFromDepth(uv);
 
          // View modes: Normal, AO Debug, Depth, Sky Debug
-        if (ViewMode == 0) 
+        if (ViewMode == 0)
         {
             if (depthValue >= DepthThreshold)
             {
@@ -220,21 +209,21 @@ namespace NEOSSAOMEGAETC
             }
             return originalColor * (1.0 - saturate(occlusion)) + OcclusionColor * saturate(occlusion);
         }
-        else if (ViewMode == 1) 
+        else if (ViewMode == 1)
         {
             return float4(saturate(occlusion), saturate(occlusion), saturate(occlusion), 1.0);
         }
-        else if (ViewMode == 2) 
+        else if (ViewMode == 2)
         {
             return float4(depthValue, depthValue, depthValue, 1.0);
         }
-        else if (ViewMode == 3) 
+        else if (ViewMode == 3)
         {
             return (depthValue >= DepthThreshold)
                 ? float4(1.0, 0.0, 0.0, 1.0)
                 : float4(depthValue, depthValue, depthValue, 1.0);
         }
-        else if (ViewMode == 4) 
+        else if (ViewMode == 4)
         {
             return float4(normal * 0.5 + 0.5, 1.0);
         }
