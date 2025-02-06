@@ -49,7 +49,7 @@ uniform float LongEdgeSampleSize <
     ui_min = 2.0; 
     ui_max = 12.0; 
     ui_default = 5.0; 
-> = 5.0;
+> = 6.0;
 
 uniform int PixelWidth < 
     ui_category = "DLAA";
@@ -57,7 +57,7 @@ uniform int PixelWidth <
     ui_items = "1\0 16\0 32\0 64\0 128\0"; 
     ui_label = "Pixel Width"; 
     ui_tooltip = "Select the pixel width."; 
-> =0; 
+> =1; 
 
 uniform float sharpness < 
     ui_category = "Plus";
