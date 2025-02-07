@@ -2,20 +2,22 @@
 | :: Description :: |
 '-------------------/
 
-_  _ ____ ____ ____ ____ ____ ____ 
+_  _ ____ ____ ____ ____ ____ ____
 |\ | |___ |  | [__  [__  |__| |  | 
 | \| |___ |__| ___] ___] |  | |__| 
                                                                        
-    Version 1.1.1
-	Author: Barbatos Bachiko
-	License: MIT
+    Version 1.2
+    Author: Barbatos Bachiko
+    License: MIT
 
-	About: Screen-Space Ambient Occlusion using ray marching.
-	History:
-	(*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
-	
-	Version 1.1.1
-    + Code optimization
+    About: Screen-Space Ambient Occlusion using ray marching.
+    History:
+    (*) Feature (+) Improvement    (x) Bugfix (-) Information (!) Compatibility
+    
+    Version 1.2
+    + Added 3 quality modes: Ultra, Extreme and Insane 
+    + Code optimization and new Angle Modes: Unilateral and Bidirectional
+    x incorrect coordinates in garry's mod
 */ 
 namespace NEOSSAOMEGAETC
 {
@@ -37,8 +39,8 @@ namespace NEOSSAOMEGAETC
 | :: Settings ::    |
 '-------------------*/
 
-uniform int ViewMode
-<
+    uniform int ViewMode
+< 
     ui_type = "combo";
     ui_label = "View Mode";
     ui_tooltip = "Select the view mode for SSAO";
@@ -46,16 +48,16 @@ uniform int ViewMode
 >
 = 0;
 
-uniform int QualityLevel
+    uniform int QualityLevel
 <
     ui_type = "combo";
     ui_label = "Quality Level";
     ui_tooltip = "Select quality level for ambient occlusion";
-    ui_items = "Low\0Medium\0High\0";
+    ui_items = "Low\0Medium\0High\0Ultra\0Extreme\0Insane\0";
 >
 = 2; 
 
-uniform float Intensity
+    uniform float Intensity
 <
     ui_type = "slider";
     ui_label = "Occlusion Intensity";
@@ -64,7 +66,7 @@ uniform float Intensity
 >
 = 0.2; 
 
-uniform float SampleRadius
+    uniform float SampleRadius
 <
     ui_type = "slider";
     ui_label = "Sample Radius";
@@ -73,7 +75,7 @@ uniform float SampleRadius
 >
 = 1.0; 
 
-uniform float MaxRayDistance
+    uniform float MaxRayDistance
 <
     ui_type = "slider";
     ui_category = "Ray Marching";
@@ -83,7 +85,7 @@ uniform float MaxRayDistance
 >
 = 0.010;
 
-uniform float DepthMultiplier
+    uniform float DepthMultiplier
 <
     ui_type = "slider";
     ui_category = "Depth";
@@ -91,9 +93,9 @@ uniform float DepthMultiplier
     ui_tooltip = "Adjust the depth multiplier";
     ui_min = 0.1; ui_max = 5.0; ui_step = 0.1;
 >
-= 1.0;
+= 0.5;
 
-uniform float DepthThreshold
+    uniform float DepthThreshold
 <
     ui_type = "slider";
     ui_category = "Depth";
@@ -103,7 +105,7 @@ uniform float DepthThreshold
 >
 = 0.95; 
 
-uniform float4 OcclusionColor
+    uniform float4 OcclusionColor
 <
     ui_category = "Extra";
     ui_type = "color";
@@ -111,6 +113,15 @@ uniform float4 OcclusionColor
     ui_tooltip = "Select the color for ambient occlusion.";
 >
 = float4(0.0, 0.0, 0.0, 1.0);
+
+    uniform int AngleMode
+<
+    ui_type = "combo";
+    ui_label = "Angle Mode";
+    ui_tooltip = "Horizon Only, Vertical Only, Unilateral or Bidirectional";
+    ui_items = "Horizon Only\0Vertical Only\0Unilateral\0Bidirectional\0";
+>
+= 3;
 
 /*---------------.
 | :: Textures :: |
@@ -128,9 +139,9 @@ uniform float4 OcclusionColor
         Texture = SSAOTex;
     };
 
-    /*----------------.
-    | :: Functions :: |
-    '----------------*/
+/*----------------.
+| :: Functions :: |
+'----------------*/
 
     float GetLinearDepth(float2 coords)
     {
@@ -154,22 +165,20 @@ uniform float4 OcclusionColor
     {
         float occlusion = 0.0;
         float depthValue = GetLinearDepth(texcoord);
-        float currentPos = 0.0;
         float stepSize = ReShade::PixelSize / RENDER_SCALE;
-        float maxDistance = MaxRayDistance;
-        int mipLevel = clamp(int(log2(SampleRadius)), 0, 5);
+        int numSteps = max(int(MaxRayDistance / stepSize), 2);
 
-        while (currentPos < maxDistance)
+        for (int i = 0; i < numSteps; i++)
         {
-            float2 sampleCoord = clamp(texcoord + rayDir.xy * currentPos, 0.0, 1.0);
+            float t = float(i) / float(numSteps - 1);
+            float sampleDistance = pow(t, 2.0) * MaxRayDistance;
+            float2 sampleCoord = clamp(texcoord + rayDir.xy * sampleDistance, 0.0, 1.0);
             float sampleDepth = GetLinearDepth(sampleCoord);
         
             if (sampleDepth < depthValue)
             {
-                occlusion += (1.0 - (currentPos / maxDistance));
+                occlusion += (1.0 - (sampleDistance / MaxRayDistance));
             }
-
-            currentPos += stepSize;
         }
 
         return occlusion;
@@ -181,13 +190,53 @@ uniform float4 OcclusionColor
         float3 normal = GetNormalFromDepth(uv);
         float occlusion = 0.0;
 
-        int sampleCount = (QualityLevel == 0) ? 8 : (QualityLevel == 1) ? 16 : 32;
-        for (int i = 0; i < sampleCount; i++)
+        int sampleCount = QualityLevel == 0 ? 8 :
+                          QualityLevel == 1 ? 16 :
+                          QualityLevel == 2 ? 32 :
+                          QualityLevel == 3 ? 48 :
+                          QualityLevel == 4 ? 64 : 96;
+
+        if (AngleMode == 3)
         {
-            float phi = (i + 0.5) * 6.28318530718 / sampleCount;
-            float theta = acos(2.0 * frac(sin(phi) * 0.5 + 0.5) - 1.0);
-            float3 sampleDir = float3(sin(theta) * cos(phi), sin(theta) * sin(phi), cos(theta));
-            occlusion += RayMarching(uv, sampleDir * SampleRadius, normal);
+            int halfCount = sampleCount / 2;
+            for (int i = 0; i < halfCount; i++)
+            {
+                float phi = (i + 0.5) * 6.28318530718 / halfCount;
+                float3 sampleDir1 = float3(cos(phi), sin(phi), 0.0);
+                float3 sampleDir2 = -sampleDir1;
+                occlusion += RayMarching(uv, sampleDir1 * SampleRadius, normal);
+                occlusion += RayMarching(uv, sampleDir2 * SampleRadius, normal);
+            }
+            if (sampleCount % 2 != 0)
+            {
+                float3 sampleDir = float3(1.0, 0.0, 0.0);
+                occlusion += RayMarching(uv, sampleDir * SampleRadius, normal);
+            }
+        }
+        else
+        {
+            for (int i = 0; i < sampleCount; i++)
+            {
+                float3 sampleDir;
+                if (AngleMode == 0)
+                {
+                    // Horizon Only: distribute samples in a full circle (horizontal plane)
+                    float phi = (i + 0.5) * 6.28318530718 / sampleCount;
+                    sampleDir = float3(cos(phi), sin(phi), 0.0);
+                }
+                else if (AngleMode == 1)
+                {
+                    // Vertical Only: alternate samples up and down
+                    sampleDir = (i % 2 == 0) ? float3(0.0, 1.0, 0.0) : float3(0.0, -1.0, 0.0);
+                }
+                else if (AngleMode == 2)
+                {
+                    // Unilateral: distribute samples uniformly in a semicircle
+                    float phi = (i + 0.5) * 3.14159265359 / sampleCount;
+                    sampleDir = float3(cos(phi), sin(phi), 0.0);
+                }
+                occlusion += RayMarching(uv, sampleDir * SampleRadius, normal);
+            }
         }
         occlusion = (occlusion / sampleCount) * Intensity;
         return float4(occlusion, occlusion, occlusion, 1.0);
@@ -200,13 +249,9 @@ uniform float4 OcclusionColor
         float depthValue = GetLinearDepth(uv);
         float3 normal = GetNormalFromDepth(uv);
 
-         // View modes: Normal, AO Debug, Depth, Sky Debug
+        // View modes: Normal, AO Debug, Depth, Sky Debug, Normal Debug
         if (ViewMode == 0)
         {
-            if (depthValue >= DepthThreshold)
-            {
-                return originalColor * (1.0 - saturate(occlusion)) + OcclusionColor * saturate(occlusion);
-            }
             return originalColor * (1.0 - saturate(occlusion)) + OcclusionColor * saturate(occlusion);
         }
         else if (ViewMode == 1)
@@ -230,9 +275,9 @@ uniform float4 OcclusionColor
         return originalColor;
     }
 
-    /*-------------------.
-    | :: Techniques ::   |
-    '-------------------*/
+/*-------------------.
+| :: Techniques ::   |
+'-------------------*/
 
     technique NeoSSAO
     {
