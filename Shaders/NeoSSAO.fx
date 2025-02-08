@@ -6,7 +6,7 @@ _  _ ____ ____ ____ ____ ____ ____
 |\ | |___ |  | [__  [__  |__| |  | 
 | \| |___ |__| ___] ___] |  | |__| 
                                                                        
-    Version 1.2
+    Version 1.2.1
     Author: Barbatos Bachiko
     License: MIT
 
@@ -14,10 +14,8 @@ _  _ ____ ____ ____ ____ ____ ____
     History:
     (*) Feature (+) Improvement    (x) Bugfix (-) Information (!) Compatibility
     
-    Version 1.2
-    + Added 3 quality modes: Ultra, Extreme and Insane 
-    + Code optimization and new Angle Modes: Unilateral and Bidirectional
-    x incorrect coordinates in garry's mod
+    Version 1.2.1
+    x Pixel Size
 */ 
 namespace NEOSSAOMEGAETC
 {
@@ -165,7 +163,7 @@ namespace NEOSSAOMEGAETC
     {
         float occlusion = 0.0;
         float depthValue = GetLinearDepth(texcoord);
-        float stepSize = ReShade::PixelSize / RENDER_SCALE;
+        float stepSize = ReShade::PixelSize.x / RENDER_SCALE;
         int numSteps = max(int(MaxRayDistance / stepSize), 2);
 
         for (int i = 0; i < numSteps; i++)
