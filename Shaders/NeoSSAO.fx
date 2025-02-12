@@ -6,7 +6,7 @@ _  _ ____ ____ ____ ____ ____ ____
 |\ | |___ |  | [__  [__  |__| |  | 
 | \| |___ |__| ___] ___] |  | |__| 
                                                                        
-    Version 1.2.1
+    Version 1.2.5
     Author: Barbatos Bachiko
     License: MIT
 
@@ -14,8 +14,8 @@ _  _ ____ ____ ____ ____ ____ ____
     History:
     (*) Feature (+) Improvement    (x) Bugfix (-) Information (!) Compatibility
     
-    Version 1.2.1
-    x Pixel Size
+    Version 1.2.5
+    * Implemented Fade Start, End.
 */ 
 namespace NEOSSAOMEGAETC
 {
@@ -83,6 +83,24 @@ namespace NEOSSAOMEGAETC
 >
 = 0.010;
 
+    uniform float FadeStart
+<
+    ui_type = "slider";
+    ui_label = "Fade Start";
+    ui_tooltip = "Distance at which SSAO starts to fade out.";
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+>
+= 0.0;
+
+    uniform float FadeEnd
+<
+    ui_type = "slider";
+    ui_label = "Fade End";
+    ui_tooltip = "Distance at which SSAO completely fades out.";
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+>
+= 0.5;
+    
     uniform float DepthMultiplier
 <
     ui_type = "slider";
@@ -189,10 +207,10 @@ namespace NEOSSAOMEGAETC
         float occlusion = 0.0;
 
         int sampleCount = QualityLevel == 0 ? 8 :
-                          QualityLevel == 1 ? 16 :
-                          QualityLevel == 2 ? 32 :
-                          QualityLevel == 3 ? 48 :
-                          QualityLevel == 4 ? 64 : 96;
+                      QualityLevel == 1 ? 16 :
+                      QualityLevel == 2 ? 32 :
+                      QualityLevel == 3 ? 48 :
+                      QualityLevel == 4 ? 64 : 96;
 
         if (AngleMode == 3)
         {
@@ -216,27 +234,33 @@ namespace NEOSSAOMEGAETC
             for (int i = 0; i < sampleCount; i++)
             {
                 float3 sampleDir;
+                // Horizon Only: distribute samples in a full circle (horizontal plane)
                 if (AngleMode == 0)
                 {
-                    // Horizon Only: distribute samples in a full circle (horizontal plane)
                     float phi = (i + 0.5) * 6.28318530718 / sampleCount;
                     sampleDir = float3(cos(phi), sin(phi), 0.0);
                 }
+                // Vertical Only: alternate samples up and down
                 else if (AngleMode == 1)
                 {
-                    // Vertical Only: alternate samples up and down
                     sampleDir = (i % 2 == 0) ? float3(0.0, 1.0, 0.0) : float3(0.0, -1.0, 0.0);
                 }
+                // Unilateral: distribute samples uniformly in a semicircle
                 else if (AngleMode == 2)
                 {
-                    // Unilateral: distribute samples uniformly in a semicircle
                     float phi = (i + 0.5) * 3.14159265359 / sampleCount;
                     sampleDir = float3(cos(phi), sin(phi), 0.0);
                 }
                 occlusion += RayMarching(uv, sampleDir * SampleRadius, normal);
             }
         }
+
         occlusion = (occlusion / sampleCount) * Intensity;
+
+        // Apply fade based on depth (add in Ver 1.2.5)
+        float fade = saturate((FadeEnd - depthValue) / (FadeEnd - FadeStart));
+        occlusion *= fade;
+
         return float4(occlusion, occlusion, occlusion, 1.0);
     }
 
