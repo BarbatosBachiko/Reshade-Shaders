@@ -6,7 +6,7 @@ _  _ ____ ____ ____ ____ ____ ____
 |\ | |___ |  | [__  [__  |__| |  | 
 | \| |___ |__| ___] ___] |  | |__| 
                                                                        
-    Version 1.2.5
+    Version 1.2.6
     Author: Barbatos Bachiko
     License: MIT
 
@@ -147,7 +147,7 @@ namespace NEOSSAOMEGAETC
     {
         Width = BUFFER_WIDTH;
         Height = BUFFER_HEIGHT;
-        Format = RGBA16F;
+        Format = RGBA8;
     };
 
     sampler2D sSSAO
@@ -190,10 +190,13 @@ namespace NEOSSAOMEGAETC
             float sampleDistance = pow(t, 2.0) * MaxRayDistance;
             float2 sampleCoord = clamp(texcoord + rayDir.xy * sampleDistance, 0.0, 1.0);
             float sampleDepth = GetLinearDepth(sampleCoord);
-        
+
+            float3 sampleNormal = GetNormalFromDepth(sampleCoord);
+            float angleFactor = saturate(dot(normal, sampleNormal));
+
             if (sampleDepth < depthValue)
             {
-                occlusion += (1.0 - (sampleDistance / MaxRayDistance));
+                occlusion += (1.0 - (sampleDistance / MaxRayDistance)) * angleFactor;
             }
         }
 
@@ -234,7 +237,7 @@ namespace NEOSSAOMEGAETC
             for (int i = 0; i < sampleCount; i++)
             {
                 float3 sampleDir;
-                // Horizon Only: distribute samples in a full circle (horizontal plane)
+                 // Horizon Only: distribute samples in a full circle (horizontal plane)
                 if (AngleMode == 0)
                 {
                     float phi = (i + 0.5) * 6.28318530718 / sampleCount;
@@ -257,7 +260,6 @@ namespace NEOSSAOMEGAETC
 
         occlusion = (occlusion / sampleCount) * Intensity;
 
-        // Apply fade based on depth (add in Ver 1.2.5)
         float fade = saturate((FadeEnd - depthValue) / (FadeEnd - FadeStart));
         occlusion *= fade;
 
@@ -278,7 +280,7 @@ namespace NEOSSAOMEGAETC
         }
         else if (ViewMode == 1)
         {
-            return float4(saturate(occlusion), saturate(occlusion), saturate(occlusion), 1.0);
+            return tex2D(sSSAO, uv);
         }
         else if (ViewMode == 2)
         {
@@ -287,13 +289,14 @@ namespace NEOSSAOMEGAETC
         else if (ViewMode == 3)
         {
             return (depthValue >= DepthThreshold)
-                ? float4(1.0, 0.0, 0.0, 1.0)
-                : float4(depthValue, depthValue, depthValue, 1.0);
+            ? float4(1.0, 0.0, 0.0, 1.0)
+            : float4(depthValue, depthValue, depthValue, 1.0);
         }
         else if (ViewMode == 4)
         {
             return float4(normal * 0.5 + 0.5, 1.0);
         }
+
         return originalColor;
     }
 
@@ -303,13 +306,13 @@ namespace NEOSSAOMEGAETC
 
     technique NeoSSAO
     {
-        pass SSAOPass
+        pass
         {
             VertexShader = PostProcessVS;
             PixelShader = SSAO_PS;
             RenderTarget = SSAOTex;
         }
-        pass Composite
+        pass
         {
             VertexShader = PostProcessVS;
             PixelShader = Composite_PS;
