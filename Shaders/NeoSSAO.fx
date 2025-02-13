@@ -6,7 +6,7 @@ _  _ ____ ____ ____ ____ ____ ____
 |\ | |___ |  | [__  [__  |__| |  | 
 | \| |___ |__| ___] ___] |  | |__| 
                                                                        
-    Version 1.3.1
+    Version 1.3.5
     Author: Barbatos Bachiko
     License: MIT
 
@@ -14,13 +14,11 @@ _  _ ____ ____ ____ ____ ____ ____
     History:
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
     
-    Version 1.3.1
-    + Improve Perfomance
-
-    Version 1.3
-    * Bright Threshold
-    + Improved Debug
-
+    Version 1.3.5
+    + New Normal
+    + Formating
+    x fix Sky Depth
+    
 */ 
 namespace NEOSSAOMEGAETC
 {
@@ -121,16 +119,16 @@ namespace NEOSSAOMEGAETC
     ui_type = "slider";
     ui_category = "Depth";
     ui_label = "Depth Threshold (Sky)";
-    ui_tooltip = "Set the depth threshold to ignore the sky during occlusion.";
-    ui_min = 0.9; ui_max = 1.0; ui_step = 0.01;
+    ui_tooltip = "Set the depth threshold to ignore the sky.";
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
 >
-= 0.95; 
+= 0.50; 
 
     uniform bool EnableBrightnessThreshold
 < 
     ui_type = "checkbox";
     ui_label = "Enable Brightness Threshold"; 
-    ui_tooltip = "Enable or disable the brightness threshold effect on occlusion.";
+    ui_tooltip = "Enable or disable the brightness threshold.";
 > 
 = false;
 
@@ -165,16 +163,16 @@ namespace NEOSSAOMEGAETC
 | :: Textures :: |
 '---------------*/
 
-    texture2D SSAOTex
+    texture2D AOTex
     {
         Width = BUFFER_WIDTH;
         Height = BUFFER_HEIGHT;
         Format = RGBA8;
     };
 
-    sampler2D sSSAO
+    sampler2D sAO
     {
-        Texture = SSAOTex;
+        Texture = AOTex;
     };
 
 /*----------------.
@@ -186,18 +184,21 @@ namespace NEOSSAOMEGAETC
         return ReShade::GetLinearizedDepth(coords) * DepthMultiplier;
     }
 
-    float3 GetNormalFromDepth(float2 coords)
+    //From DisplayDepth.fx
+    float3 GetScreenSpaceNormal(float2 texcoord)
     {
-        float2 texelSize = 1.0 / float2(BUFFER_WIDTH, BUFFER_HEIGHT);
-        float depthCenter = GetLinearDepth(coords);
-        float depthX = GetLinearDepth(coords + float2(texelSize.x, 0.0));
-        float depthY = GetLinearDepth(coords + float2(0.0, texelSize.y));
-        float3 deltaX = float3(texelSize.x, 0.0, depthX - depthCenter);
-        float3 deltaY = float3(0.0, texelSize.y, depthY - depthCenter);
-        float3 normal = normalize(cross(deltaX, deltaY));
-        return normal;
-    }
+        float3 offset = float3(BUFFER_PIXEL_SIZE, 0.0);
+        float2 posCenter = texcoord.xy;
+        float2 posNorth = posCenter - offset.zy;
+        float2 posEast = posCenter + offset.xz;
 
+        float3 vertCenter = float3(posCenter - 0.5, 1) * GetLinearDepth(posCenter);
+        float3 vertNorth = float3(posNorth - 0.5, 1) * GetLinearDepth(posNorth);
+        float3 vertEast = float3(posEast - 0.5, 1) * GetLinearDepth(posEast);
+
+        return normalize(cross(vertCenter - vertNorth, vertCenter - vertEast)) * 0.5 + 0.5;
+    }
+    
     // Ray marching to calculate occlusion
     float RayMarching(float2 texcoord, float3 rayDir, float3 normal)
     {
@@ -213,7 +214,7 @@ namespace NEOSSAOMEGAETC
             float2 sampleCoord = clamp(texcoord + rayDir.xy * sampleDistance, 0.0, 1.0);
             float sampleDepth = GetLinearDepth(sampleCoord);
 
-            float3 sampleNormal = GetNormalFromDepth(sampleCoord);
+            float3 sampleNormal = GetScreenSpaceNormal(sampleCoord);
             float angleFactor = saturate(dot(normal, sampleNormal));
 
             if (sampleDepth < depthValue)
@@ -230,10 +231,10 @@ namespace NEOSSAOMEGAETC
         return dot(color.rgb, float3(0.2126, 0.7152, 0.0722));
     }
     
-    float4 SSAO_PS(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
+    float4 PS_SSAO(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
         float depthValue = GetLinearDepth(uv);
-        float3 normal = GetNormalFromDepth(uv);
+        float3 normal = GetScreenSpaceNormal(uv);
         float occlusion = 0.0;
 
         float3 originalColor = tex2D(ReShade::BackBuffer, uv).rgb;
@@ -293,36 +294,33 @@ namespace NEOSSAOMEGAETC
         return float4(occlusion, occlusion, occlusion, 1.0);
     }
 
-    float4 Composite_PS(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
+    float4 PS_Composite(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
         float4 originalColor = tex2D(ReShade::BackBuffer, uv);
-        float occlusion = tex2D(sSSAO, uv).r;
+        float occlusion = tex2D(sAO, uv).r;
         float depthValue = GetLinearDepth(uv);
-        float3 normal = GetNormalFromDepth(uv);
+        float3 normal = GetScreenSpaceNormal(uv);
 
-        // View modes: Normal, AO Debug, Depth, Sky Debug, Normal Debug
-        if (ViewMode == 0)
+        switch (ViewMode)
         {
-            return originalColor * (1.0 - saturate(occlusion)) + OcclusionColor * saturate(occlusion);
-        }
-        else if (ViewMode == 1)
-        {
-            float aoValue = tex2D(sSSAO, uv).r;
-            return float4(1.0 - aoValue, 1.0 - aoValue, 1.0 - aoValue, 1.0);
-        }
-        else if (ViewMode == 2)
-        {
-            return float4(depthValue, depthValue, depthValue, 1.0);
-        }
-        else if (ViewMode == 3)
-        {
-            return (depthValue >= DepthThreshold)
-            ? float4(1.0, 0.0, 0.0, 1.0)
-            : float4(depthValue, depthValue, depthValue, 1.0);
-        }
-        else if (ViewMode == 4)
-        {
-            return float4(normal * 0.5 + 0.5, 1.0);
+            case 0: // Normal
+                return (depthValue >= DepthThreshold)
+                ? originalColor
+                : originalColor * (1.0 - saturate(occlusion)) + OcclusionColor * saturate(occlusion);
+        
+            case 1: // AO Debug
+                return float4(1.0 - occlusion, 1.0 - occlusion, 1.0 - occlusion, 1.0);
+
+            case 2: // Depth
+                return float4(depthValue, depthValue, depthValue, 1.0);
+
+            case 3: // Sky Debug
+                return (depthValue >= DepthThreshold)
+                ? float4(1.0, 0.0, 0.0, 1.0)
+                : float4(depthValue, depthValue, depthValue, 1.0);
+
+            case 4: // Normal Debug
+                return float4(normal * 0.5 + 0.5, 1.0);
         }
 
         return originalColor;
@@ -337,13 +335,13 @@ namespace NEOSSAOMEGAETC
         pass
         {
             VertexShader = PostProcessVS;
-            PixelShader = SSAO_PS;
-            RenderTarget = SSAOTex;
+            PixelShader = PS_SSAO;
+            RenderTarget = AOTex;
         }
         pass
         {
             VertexShader = PostProcessVS;
-            PixelShader = Composite_PS;
+            PixelShader = PS_Composite;
         }
     }
 } // https://www.comp.nus.edu.sg/~lowkl/publications/mssao_visual_computer_2012.pdf (this is just my study material, it doesn't mean there are implementations from here)
