@@ -23,7 +23,7 @@ _  _ ____ ____ ____ ____ ____ ____
 namespace NEOSSAOMEGAETC
 {
 #ifndef RENDER_SCALE
-#define RENDER_SCALE 0.499
+#define RENDER_SCALE 0.333
 #endif
 #define INPUT_WIDTH BUFFER_WIDTH 
 #define INPUT_HEIGHT BUFFER_HEIGHT 
