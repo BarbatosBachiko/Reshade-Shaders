@@ -6,22 +6,26 @@ _  _ ____ ____ ____ ____ ____ ____
 |\ | |___ |  | [__  [__  |__| |  | 
 | \| |___ |__| ___] ___] |  | |__| 
                                                                        
-    Version 1.3
+    Version 1.3.1
     Author: Barbatos Bachiko
     License: MIT
 
     About: Screen-Space Ambient Occlusion using ray marching.
     History:
-    (*) Feature (+) Improvement    (x) Bugfix (-) Information (!) Compatibility
+    (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
     
+    Version 1.3.1
+    + Improve Perfomance
+
     Version 1.3
     * Bright Threshold
     + Improved Debug
+
 */ 
 namespace NEOSSAOMEGAETC
 {
 #ifndef RENDER_SCALE
-#define RENDER_SCALE 0.333
+#define RENDER_SCALE 0.499
 #endif
 #define INPUT_WIDTH BUFFER_WIDTH 
 #define INPUT_HEIGHT BUFFER_HEIGHT 
@@ -52,9 +56,9 @@ namespace NEOSSAOMEGAETC
     ui_type = "combo";
     ui_label = "Quality Level";
     ui_tooltip = "Select quality level for ambient occlusion";
-    ui_items = "Low\0Medium\0High\0Ultra\0Extreme\0Insane\0";
+    ui_items = "Low\0Medium\0High\0"; 
 >
-= 2; 
+= 2;
 
     uniform float Intensity
 <
@@ -63,7 +67,7 @@ namespace NEOSSAOMEGAETC
     ui_tooltip = "Adjust the intensity of ambient occlusion";
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.05;
 >
-= 0.2; 
+= 0.4; 
 
     uniform float SampleRadius
 <
@@ -82,7 +86,7 @@ namespace NEOSSAOMEGAETC
     ui_tooltip = "Maximum distance for ray marching";
     ui_min = 0.0; ui_max = 0.1; ui_step = 0.001;
 >
-= 0.010;
+= 0.005;
 
     uniform float FadeStart
 <
@@ -236,14 +240,11 @@ namespace NEOSSAOMEGAETC
         float brightness = CalculateBrightness(originalColor);
         float brightnessFactor = EnableBrightnessThreshold ? saturate(1.0 - smoothstep(BrightnessThreshold - 0.1, BrightnessThreshold + 0.1, brightness)) : 1.0;
 
+        int sampleCount = QualityLevel == 0 ? 8 : // Low
+                     QualityLevel == 1 ? 16 : // Medium
+                     32; // High
 
-        int sampleCount = QualityLevel == 0 ? 8 :
-                      QualityLevel == 1 ? 16 :
-                      QualityLevel == 2 ? 32 :
-                      QualityLevel == 3 ? 48 :
-                      QualityLevel == 4 ? 64 : 96;
-
-        if (AngleMode == 3)
+        if (AngleMode == 3) // Bidirectional
         {
             int halfCount = sampleCount / 2;
             for (int i = 0; i < halfCount; i++)
@@ -265,19 +266,16 @@ namespace NEOSSAOMEGAETC
             for (int i = 0; i < sampleCount; i++)
             {
                 float3 sampleDir;
-                // Horizon Only: distribute samples in a full circle (horizontal plane)
-                if (AngleMode == 0)
+                if (AngleMode == 0) // Horizon Only
                 {
                     float phi = (i + 0.5) * 6.28318530718 / sampleCount;
                     sampleDir = float3(cos(phi), sin(phi), 0.0);
                 }
-                // Vertical Only: alternate samples up and down
-                else if (AngleMode == 1)
+                else if (AngleMode == 1) // Vertical Only
                 {
                     sampleDir = (i % 2 == 0) ? float3(0.0, 1.0, 0.0) : float3(0.0, -1.0, 0.0);
                 }
-                // Unilateral: distribute samples uniformly in a semicircle
-                else if (AngleMode == 2)
+                else if (AngleMode == 2) // Unilateral
                 {
                     float phi = (i + 0.5) * 3.14159265359 / sampleCount;
                     sampleDir = float3(cos(phi), sin(phi), 0.0);
@@ -312,7 +310,6 @@ namespace NEOSSAOMEGAETC
             float aoValue = tex2D(sSSAO, uv).r;
             return float4(1.0 - aoValue, 1.0 - aoValue, 1.0 - aoValue, 1.0);
         }
-
         else if (ViewMode == 2)
         {
             return float4(depthValue, depthValue, depthValue, 1.0);
