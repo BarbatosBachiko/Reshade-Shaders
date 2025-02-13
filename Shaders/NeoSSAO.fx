@@ -6,7 +6,7 @@ _  _ ____ ____ ____ ____ ____ ____
 |\ | |___ |  | [__  [__  |__| |  | 
 | \| |___ |__| ___] ___] |  | |__| 
                                                                        
-    Version 1.2.6
+    Version 1.3
     Author: Barbatos Bachiko
     License: MIT
 
@@ -14,8 +14,9 @@ _  _ ____ ____ ____ ____ ____ ____
     History:
     (*) Feature (+) Improvement    (x) Bugfix (-) Information (!) Compatibility
     
-    Version 1.2.5
-    * Implemented Fade Start, End.
+    Version 1.3
+    * Bright Threshold
+    + Improved Debug
 */ 
 namespace NEOSSAOMEGAETC
 {
@@ -121,6 +122,23 @@ namespace NEOSSAOMEGAETC
 >
 = 0.95; 
 
+    uniform bool EnableBrightnessThreshold
+< 
+    ui_type = "checkbox";
+    ui_label = "Enable Brightness Threshold"; 
+    ui_tooltip = "Enable or disable the brightness threshold effect on occlusion.";
+> 
+= false;
+
+    uniform float BrightnessThreshold
+<
+    ui_type = "slider";
+    ui_label = "Brightness Threshold";
+    ui_tooltip = "Pixels with brightness above this threshold will have reduced occlusion.";
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+>
+= 0.8; 
+    
     uniform float4 OcclusionColor
 <
     ui_category = "Extra";
@@ -203,11 +221,21 @@ namespace NEOSSAOMEGAETC
         return occlusion;
     }
 
+    float CalculateBrightness(float3 color)
+    {
+        return dot(color.rgb, float3(0.2126, 0.7152, 0.0722));
+    }
+    
     float4 SSAO_PS(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
         float depthValue = GetLinearDepth(uv);
         float3 normal = GetNormalFromDepth(uv);
         float occlusion = 0.0;
+
+        float3 originalColor = tex2D(ReShade::BackBuffer, uv).rgb;
+        float brightness = CalculateBrightness(originalColor);
+        float brightnessFactor = EnableBrightnessThreshold ? saturate(1.0 - smoothstep(BrightnessThreshold - 0.1, BrightnessThreshold + 0.1, brightness)) : 1.0;
+
 
         int sampleCount = QualityLevel == 0 ? 8 :
                       QualityLevel == 1 ? 16 :
@@ -237,7 +265,7 @@ namespace NEOSSAOMEGAETC
             for (int i = 0; i < sampleCount; i++)
             {
                 float3 sampleDir;
-                 // Horizon Only: distribute samples in a full circle (horizontal plane)
+                // Horizon Only: distribute samples in a full circle (horizontal plane)
                 if (AngleMode == 0)
                 {
                     float phi = (i + 0.5) * 6.28318530718 / sampleCount;
@@ -259,6 +287,7 @@ namespace NEOSSAOMEGAETC
         }
 
         occlusion = (occlusion / sampleCount) * Intensity;
+        occlusion *= brightnessFactor;
 
         float fade = saturate((FadeEnd - depthValue) / (FadeEnd - FadeStart));
         occlusion *= fade;
@@ -280,8 +309,10 @@ namespace NEOSSAOMEGAETC
         }
         else if (ViewMode == 1)
         {
-            return tex2D(sSSAO, uv);
+            float aoValue = tex2D(sSSAO, uv).r;
+            return float4(1.0 - aoValue, 1.0 - aoValue, 1.0 - aoValue, 1.0);
         }
+
         else if (ViewMode == 2)
         {
             return float4(depthValue, depthValue, depthValue, 1.0);
