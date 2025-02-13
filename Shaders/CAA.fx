@@ -2,18 +2,19 @@
 | :: Description :: |
 '-------------------/
 
-   Convolution Anti-Aliasing (Version 1.2)
+   Convolution Anti-Aliasing
 
+    Version 1.2
     Author: Barbatos Bachiko
     License: MIT
 
-    About: Implements an anti-aliasing technique using a local convolution filter and pixel warping if necessary for smoothing.
+    About: Implements an anti-aliasing technique using a local convolution filter.
 
     History:
     (*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
 	
     Version 1.2
-    + Improve Convolution AA with Grid-based Sampling
+    + Added Debug Mode
 */
 
 #include "ReShade.fxh"
@@ -31,14 +32,14 @@ uniform float EdgeThreshold <
     ui_default = 0.15; 
 > = 0.15;
 
-uniform float DistortionStrength < 
+uniform float ArtifactStrength < 
     ui_type = "slider";
-    ui_label = "Distortion Strength"; 
-    ui_tooltip = "Strength of pixel distortion for anti-aliasing.";
+    ui_label = "Artifact Strength"; 
+    ui_tooltip = "Strength of pixel distortion."; 
     ui_min = 0.0; 
     ui_max = 1.0; 
-    ui_default = 0.0; 
-> = 0.0;
+    ui_default = 0.15; 
+> = 0.15;
 
 uniform int KernelSize < 
     ui_type = "slider";
@@ -47,17 +48,14 @@ uniform int KernelSize <
     ui_min = 3; 
     ui_max = 11; 
     ui_default = 3; 
-> = 3;
+> = 7;
 
-/*---------------.
-| :: Textures :: |
-'---------------*/
-
-texture2D BackBufferTex : COLOR;
-sampler2D BackBuffer
-{
-    Texture = BackBufferTex;
-};
+uniform bool DebugMode <
+    ui_type = "checkbox";
+    ui_label = "Debug Mode";
+    ui_tooltip = "Enable debug visualization of edges or variance.";
+    ui_default = false;
+> = false;
 
 #define PI 3.14159265358979323846
 
@@ -68,7 +66,7 @@ sampler2D BackBuffer
 // Loads a pixel from the texture
 float4 LoadPixel(float2 texcoord)
 {
-    return tex2D(BackBuffer, texcoord);
+    return tex2D(ReShade::BackBuffer, texcoord);
 }
 
 // Calculates the variance between the pixel and its neighbors based on luminance
@@ -94,7 +92,6 @@ float GetPixelVariance(float2 texcoord)
     return variance / (KernelSize * KernelSize);
 }
 
-// Applies adaptive convolution
 float4 AdaptiveConvolutionAA(float2 texcoord)
 {
     float variance = GetPixelVariance(texcoord);
@@ -103,43 +100,73 @@ float4 AdaptiveConvolutionAA(float2 texcoord)
     float2 offset = float2(1.0 / BUFFER_WIDTH, 1.0 / BUFFER_HEIGHT);
     int halfSize = (KernelSize - 1) / 2;
 
-    float4 smoothedPixel = 0.0;
-    float totalWeight = 0.0;
+    float kernelWeights[121]; 
+    float sigma = float(halfSize) / 2.0; 
+    float weightSum = 0.0;
 
-    // Grid-based sampling
-    int fixedGridSize = 3;
-    for (int y = -fixedGridSize; y <= fixedGridSize; y++)
+    // Precompute Gaussian weights
+    for (int y = -halfSize; y <= halfSize; y++)
     {
-        for (int x = -fixedGridSize; x <= fixedGridSize; x++)
+        for (int x = -halfSize; x <= halfSize; x++)
         {
-            if (abs(x) + abs(y) <= halfSize)
-            {
-                float2 sampleOffset = float2(x * offset.x, y * offset.y);
-                smoothedPixel += LoadPixel(texcoord + sampleOffset);
-                totalWeight += 1.0;
-            }
+            float dist = sqrt(x * x + y * y);
+            float gaussianWeight = exp(-(dist * dist) / (2.0 * sigma * sigma)) / (2.0 * PI * sigma * sigma);
+            int index = (y + halfSize) * KernelSize + (x + halfSize);
+            kernelWeights[index] = gaussianWeight;
+            weightSum += gaussianWeight;
         }
     }
-    smoothedPixel /= totalWeight;
 
-    // Apply distortion if necessary
-    float2 distortionOffset = float2(sin(texcoord.x * PI * 2.0), cos(texcoord.y * PI * 2.0)) * DistortionStrength;
-    texcoord += distortionOffset * weight;
+    for (int i = 0; i < KernelSize * KernelSize; i++)
+    {
+        kernelWeights[i] /= weightSum;
+    }
     
+    float4 smoothedPixel = 0.0;
+    for (int y = -halfSize; y <= halfSize; y++)
+    {
+        for (int x = -halfSize; x <= halfSize; x++) 
+        {
+            float2 sampleOffset = float2(x * offset.x, y * offset.y);
+            float4 neighbor = LoadPixel(texcoord + sampleOffset);
+            int index = (y + halfSize) * KernelSize + (x + halfSize); 
+            float gaussianWeight = kernelWeights[index];
+            smoothedPixel += neighbor * gaussianWeight;
+        }
+    }
+
+    float2 distortionOffset = float2(sin(texcoord.x * PI * 2.0), cos(texcoord.y * PI * 2.0)) * ArtifactStrength;
+    texcoord += distortionOffset * weight;
+
     return lerp(LoadPixel(texcoord), smoothedPixel, weight);
 }
 
-// Main function
-float4 Out(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
+float4 Debug(float2 texcoord)
 {
-    return AdaptiveConvolutionAA(texcoord);
+    float variance = GetPixelVariance(texcoord);
+    float edgeMask = smoothstep(EdgeThreshold, EdgeThreshold + 0.1, variance);
+
+    // Visualize edges in red
+    if (edgeMask > 0.5)
+    {
+        return float4(1.0, 0.0, 0.0, 1.0); 
+    }
+    else
+    {
+        return float4(variance, variance, variance, 1.0);
+    }
 }
 
-// Vertex shader to cover the entire screen
-void CustomPostProcessVS(in uint id : SV_VertexID, out float4 position : SV_Position, out float2 texcoord : TEXCOORD)
+float4 Out(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
 {
-    texcoord = float2((id == 2) ? 2.0 : 0.0, (id == 1) ? 2.0 : 0.0);
-    position = float4(texcoord * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
+    if (DebugMode)
+    {
+        return Debug(texcoord);
+    }
+    else
+    {
+        return AdaptiveConvolutionAA(texcoord);
+    }
 }
 
 /*-----------------.
@@ -150,7 +177,7 @@ technique CAA
 {
     pass
     {
-        VertexShader = CustomPostProcessVS;
+        VertexShader = PostProcessVS;
         PixelShader = Out;
     }
 }
