@@ -84,7 +84,7 @@ namespace NEOSSAOMEGAETC
     ui_tooltip = "Maximum distance for ray marching";
     ui_min = 0.0; ui_max = 0.1; ui_step = 0.001;
 >
-= 0.005;
+= 0.010;
 
     uniform float FadeStart
 <
