@@ -23,7 +23,7 @@ _  _ ____ ____ ____ ____ ____ ____
 namespace NEOSSAOMEGAETC
 {
 #ifndef RENDER_SCALE
-#define RENDER_SCALE 0.333
+#define RENDER_SCALE 0.111
 #endif
 #define INPUT_WIDTH BUFFER_WIDTH 
 #define INPUT_HEIGHT BUFFER_HEIGHT 
@@ -56,7 +56,7 @@ namespace NEOSSAOMEGAETC
     ui_tooltip = "Select quality level for ambient occlusion";
     ui_items = "Low\0Medium\0High\0"; 
 >
-= 2;
+= 1;
 
     uniform float Intensity
 <
@@ -84,7 +84,7 @@ namespace NEOSSAOMEGAETC
     ui_tooltip = "Maximum distance for ray marching";
     ui_min = 0.0; ui_max = 0.1; ui_step = 0.001;
 >
-= 0.010;
+= 0.011;
 
     uniform float FadeStart
 <
@@ -120,7 +120,7 @@ namespace NEOSSAOMEGAETC
     ui_category = "Depth";
     ui_label = "Depth Threshold (Sky)";
     ui_tooltip = "Set the depth threshold to ignore the sky.";
-    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.001;
 >
 = 0.50; 
 
@@ -130,7 +130,7 @@ namespace NEOSSAOMEGAETC
     ui_label = "Enable Brightness Threshold"; 
     ui_tooltip = "Enable or disable the brightness threshold.";
 > 
-= false;
+= true;
 
     uniform float BrightnessThreshold
 <
