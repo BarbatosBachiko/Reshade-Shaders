@@ -6,7 +6,7 @@ _  _ ____ ____ ____ ____ ____ ____
 |\ | |___ |  | [__  [__  |__| |  | 
 | \| |___ |__| ___] ___] |  | |__| 
                                                                        
-    Version 1.3.5
+    Version 1.3.6
     Author: Barbatos Bachiko
     License: MIT
 
@@ -14,22 +14,22 @@ _  _ ____ ____ ____ ____ ____ ____
     History:
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
     
-    Version 1.3.5
-    + New Normal
-    + Formating
-    x fix Sky Depth
-    
+    Version 1.3.6
+    + add resolution scale for AO Texture
 */ 
 namespace NEOSSAOMEGAETC
 {
-#ifndef RENDER_SCALE
-#define RENDER_SCALE 0.111
+#ifndef RAY_SCALE
+#define RAY_SCALE 0.111
 #endif
 #define INPUT_WIDTH BUFFER_WIDTH 
 #define INPUT_HEIGHT BUFFER_HEIGHT 
-#define RENDER_WIDTH (INPUT_WIDTH * RENDER_SCALE)
-#define RENDER_HEIGHT (INPUT_HEIGHT * RENDER_SCALE) 
 
+#ifndef RES_SCALE
+#define RES_SCALE 0.9
+#endif
+#define RES_WIDTH (INPUT_WIDTH * RES_SCALE)
+#define RES_HEIGHT (INPUT_HEIGHT * RES_SCALE) 
 /*-------------------.
 | :: Includes ::    |
 '-------------------*/
@@ -165,8 +165,8 @@ namespace NEOSSAOMEGAETC
 
     texture2D AOTex
     {
-        Width = BUFFER_WIDTH;
-        Height = BUFFER_HEIGHT;
+        Width = RES_WIDTH;
+        Height = RES_HEIGHT;
         Format = RGBA8;
     };
 
@@ -204,7 +204,7 @@ namespace NEOSSAOMEGAETC
     {
         float occlusion = 0.0;
         float depthValue = GetLinearDepth(texcoord);
-        float stepSize = ReShade::PixelSize.x / RENDER_SCALE;
+        float stepSize = ReShade::PixelSize.x / RAY_SCALE;
         int numSteps = max(int(MaxRayDistance / stepSize), 2);
 
         for (int i = 0; i < numSteps; i++)
