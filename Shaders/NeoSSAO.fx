@@ -20,7 +20,7 @@ _  _ ____ ____ ____ ____ ____ ____
 namespace NEOSSAOMEGAETC
 {
 #ifndef RAY_SCALE
-#define RAY_SCALE 0.111
+#define RAY_SCALE 0.222
 #endif
 #define INPUT_WIDTH BUFFER_WIDTH 
 #define INPUT_HEIGHT BUFFER_HEIGHT 
