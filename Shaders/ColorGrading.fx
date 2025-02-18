@@ -2,30 +2,24 @@
 | :: Description :: |
 '-------------------/
 
-	Color Grading (version 1.0)
+    Color Grading 
 
-	Author: BarbatosBachiko
-        License: MIT
+    Version 1.1
+    Author: Barbatos Bachiko
+    License: MIT
 
-	About:
-	This shader adjusts brightness, saturation, and contrast and color grading interpolation.
+    About:
+    This shader adjusts brightness, saturation, contrast, and performs color grading interpolation.
 
-	Ideas for future improvement:
+    History:
+    (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
 
-        History:
-        (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
-	
-	Version 1.0
-	* Release
+    Version 1.1
+    + Warm, Vibrante and Teal and Orange
 
 */
 
-/*---------------.
-| :: Includes :: |
-'---------------*/
-
 #include "ReShade.fxh"
-#include "ReShadeUI.fxh"
 
 /*---------------.
 | :: Settings :: |
@@ -71,21 +65,93 @@ uniform float Contrast <
     ui_max = 2.0; 
 > = 1.0;
 
-/*---------------.
-| :: Textures :: |
-'---------------*/
-
-texture2D BackBufferTex : COLOR;
-sampler BackBuffer
-{
-    Texture = BackBufferTex;
-};
-
 /*----------------.
 | :: Functions :: |
 '----------------*/
 
-// Function to apply a color gradient style
+// Function to convert from RGB to HSL
+float3 RGBtoHSL(float3 color)
+{
+    float3 hsl;
+    float minVal = min(color.r, min(color.g, color.b));
+    float maxVal = max(color.r, max(color.g, color.b));
+    float delta = maxVal - minVal;
+
+    // Luminosity (L)
+    hsl.z = (maxVal + minVal) / 2.0;
+
+    if (delta == 0.0) 
+    {
+        hsl.x = 0.0; 
+        hsl.y = 0.0; 
+    }
+    else
+    {
+        // Saturation (S)
+        if (hsl.z < 0.5)
+            hsl.y = delta / (maxVal + minVal);
+        else
+            hsl.y = delta / (2.0 - maxVal - minVal);
+
+        // Hue (H)
+        if (maxVal == color.r)
+            hsl.x = (color.g - color.b) / delta;
+        else if (maxVal == color.g)
+            hsl.x = (color.b - color.r) / delta + 2.0;
+        else
+            hsl.x = (color.r - color.g) / delta + 4.0;
+
+        hsl.x /= 6.0;
+        if (hsl.x < 0.0)
+            hsl.x += 1.0;
+    }
+
+    return hsl;
+}
+
+// Helper function to calculate RGB value from HSL
+float HueToRGB(float temp1, float temp2, float h)
+{
+    if (h < 0.0)
+        h += 1.0;
+    if (h > 1.0)
+        h -= 1.0;
+    if (h < 1.0 / 6.0)
+        return temp1 + (temp2 - temp1) * 6.0 * h;
+    if (h < 0.5)
+        return temp2;
+    if (h < 2.0 / 3.0)
+        return temp1 + (temp2 - temp1) * (2.0 / 3.0 - h) * 6.0;
+    return temp1;
+}
+
+// HSL to RGB
+float3 HSLtoRGB(float3 hsl)
+{
+    float3 rgb;
+    if (hsl.y == 0.0)
+    {
+        rgb = float3(hsl.z, hsl.z, hsl.z);
+    }
+    else
+    {
+        float temp2;
+        float temp1;
+        if (hsl.z < 0.5)
+            temp2 = hsl.z * (1.0 + hsl.y);
+        else
+            temp2 = (hsl.z + hsl.y) - (hsl.y * hsl.z);
+
+        temp1 = 2.0 * hsl.z - temp2;
+
+        rgb.r = HueToRGB(temp1, temp2, hsl.x + 1.0 / 3.0);
+        rgb.g = HueToRGB(temp1, temp2, hsl.x);
+        rgb.b = HueToRGB(temp1, temp2, hsl.x - 1.0 / 3.0);
+    }
+
+    return rgb;
+}
+
 float3 ApplyColorGradingStyle(float3 color, int method)
 {
     float3 gradedColor = color;
@@ -94,7 +160,14 @@ float3 ApplyColorGradingStyle(float3 color, int method)
         return color;
     
     if (method == 1) // Warm
-        return color * float3(1.2, 1.1, 0.9);
+    {
+        const float3x3 warmMatrix = float3x3(
+            1.2, 0.1, 0.0,
+            0.1, 1.1, 0.0,
+            0.0, 0.0, 0.9
+        );
+        return mul(warmMatrix, color);
+    }
     
     if (method == 2) // Cool
         return color * float3(0.9, 1.1, 1.2);
@@ -114,7 +187,16 @@ float3 ApplyColorGradingStyle(float3 color, int method)
         return color * float3(1.0, 0.9, 0.8) * 0.8 + float3(0.1, 0.05, 0.05);
     
     if (method == 6) // Vibrant
-        return pow(color, float3(0.8, 1.0, 0.9));
+    {
+        float3 hsl = RGBtoHSL(color);
+        hsl.y = clamp(hsl.y * 1.5, 0.0, 1.0);
+        color = HSLtoRGB(hsl);
+
+        // Contrast adjustment
+        color = (color - 0.5) * 1.1 + 0.5;
+
+        return color;
+    }
     
     if (method == 7) // Horror
         return float3(color.r * 0.5, color.g * 0.2, color.b * 0.2);
@@ -122,20 +204,26 @@ float3 ApplyColorGradingStyle(float3 color, int method)
     if (method == 8) // Cine Style
         return float3(color.r * 1.1, color.g * 0.95, color.b * 0.85);
 
-    if (method == 9) // Teal and Orange
-        return float3(color.r * 0.3 + color.g * 0.5 + color.b * 0.2, color.g * 0.6 + color.b * 0.4, color.b * 0.8);
+    if (method == 9) // Teal and Orange (Split-Toning)
+    {
+        float luminance = dot(color, float3(0.2989, 0.5870, 0.1140));
+        float3 shadows = float3(0.0, 0.3, 0.3); // Teal
+        float3 highlights = float3(0.8, 0.4, 0.0); // Orange
+        float t = smoothstep(0.2, 0.8, luminance);
+        return lerp(shadows * color, highlights * color, t);
+    }
 
     return gradedColor;
 }
 
-// // Function to adjust brightness and contrast
+// Brightness and Contrast
 float3 AdjustBrightnessContrast(float3 color, float brightness, float contrast)
 {
-    color += brightness; 
+    color += brightness;
     return ((color - 0.5) * contrast) + 0.5;
 }
 
-// Color grading function with interpolation
+// Color grading with interpolation
 float3 ApplyInterpolatedColorGrading(float3 color)
 {
     float3 startGrading = ApplyColorGradingStyle(color, StartColorGradingMethod);
@@ -146,14 +234,13 @@ float3 ApplyInterpolatedColorGrading(float3 color)
     return AdjustBrightnessContrast(interpolatedColor, Brightness, Contrast);
 }
 
-// Main Color Grading Pass
 float4 ColorGradingPass(float4 position : SV_Position, float2 texcoord : TexCoord) : SV_Target
 {
-    float3 color = tex2D(BackBuffer, texcoord).rgb;
+    float3 color = tex2D(ReShade::BackBuffer, texcoord).rgb;
     
     color = ApplyInterpolatedColorGrading(color);
     
-    return float4(saturate(color), 1.0); 
+    return float4(saturate(color), 1.0);
 }
 
 /*-----------------.
@@ -162,7 +249,7 @@ float4 ColorGradingPass(float4 position : SV_Position, float2 texcoord : TexCoor
 
 technique ColorGrading
 {
-    pass 
+    pass
     {
         VertexShader = PostProcessVS;
         PixelShader = ColorGradingPass;
