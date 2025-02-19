@@ -2,7 +2,7 @@
 
 **Welcome to the BaBa Reshade-Shaders wiki!**
 
-**Anti Aliasing Shaders**
+**Anti Aliasing Shaders** (Outdated)
 
 Comparative:
 ([https://imgsli.com/MzIxMDA0/0/4](https://imgsli.com/MzIxMDA0/0/4]))
