@@ -6,7 +6,7 @@ _  _ ____ ____ ____ ____ ____ ____
 |\ | |___ |  | [__  [__  |__| |  | 
 | \| |___ |__| ___] ___] |  | |__| 
                                                                        
-    Version 1.3.6
+    Version 1.4
     Author: Barbatos Bachiko
     License: MIT
 
@@ -14,19 +14,18 @@ _  _ ____ ____ ____ ____ ____ ____
     History:
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
     
-    Version 1.3.6
-    + add resolution scale for AO Texture
+    Version 1.4
+    + Performance
+    + Ray Marching
+    x Blocks Artifacts
 */ 
-namespace NEOSSAOMEGAETC
+namespace NEOSSAO
 {
-#ifndef RAY_SCALE
-#define RAY_SCALE 0.222
-#endif
 #define INPUT_WIDTH BUFFER_WIDTH 
 #define INPUT_HEIGHT BUFFER_HEIGHT 
 
 #ifndef RES_SCALE
-#define RES_SCALE 0.9
+#define RES_SCALE 0.888
 #endif
 #define RES_WIDTH (INPUT_WIDTH * RES_SCALE)
 #define RES_HEIGHT (INPUT_HEIGHT * RES_SCALE) 
@@ -42,6 +41,7 @@ namespace NEOSSAOMEGAETC
 
     uniform int ViewMode
 < 
+    ui_category = "Geral";
     ui_type = "combo";
     ui_label = "View Mode";
     ui_tooltip = "Select the view mode for SSAO";
@@ -51,6 +51,7 @@ namespace NEOSSAOMEGAETC
 
     uniform int QualityLevel
 <
+    ui_category = "Geral";
     ui_type = "combo";
     ui_label = "Quality Level";
     ui_tooltip = "Select quality level for ambient occlusion";
@@ -60,21 +61,23 @@ namespace NEOSSAOMEGAETC
 
     uniform float Intensity
 <
+    ui_category = "Geral";
     ui_type = "slider";
     ui_label = "Occlusion Intensity";
     ui_tooltip = "Adjust the intensity of ambient occlusion";
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.05;
 >
-= 0.4; 
+= 0.2; 
 
     uniform float SampleRadius
 <
+    ui_category = "Geral";
     ui_type = "slider";
     ui_label = "Sample Radius";
     ui_tooltip = "Adjust the radius of the samples for SSAO";
     ui_min = 0.001; ui_max = 5.0; ui_step = 0.001;
 >
-= 1.0; 
+= 0.5; 
 
     uniform float MaxRayDistance
 <
@@ -86,8 +89,29 @@ namespace NEOSSAOMEGAETC
 >
 = 0.011;
 
+    uniform float RayScale
+    <
+        ui_category = "Ray Marching";
+        ui_type = "slider";
+        ui_label = "Ray Scale";
+        ui_tooltip = "Adjust the ray scale";
+        ui_min = 0.01; ui_max = 1.0; ui_step = 0.001;
+    >
+    = 0.222;
+    
+    uniform int AngleMode
+<
+    ui_category = "Ray Marching";
+    ui_type = "combo";
+    ui_label = "Angle Mode";
+    ui_tooltip = "Horizon Only, Vertical Only, Unilateral or Bidirectional";
+    ui_items = "Horizon Only\0Vertical Only\0Unilateral\0Bidirectional\0";
+>
+= 3;
+    
     uniform float FadeStart
 <
+    ui_category = "Fade";
     ui_type = "slider";
     ui_label = "Fade Start";
     ui_tooltip = "Distance at which SSAO starts to fade out.";
@@ -97,6 +121,7 @@ namespace NEOSSAOMEGAETC
 
     uniform float FadeEnd
 <
+    ui_category = "Fade";
     ui_type = "slider";
     ui_label = "Fade End";
     ui_tooltip = "Distance at which SSAO completely fades out.";
@@ -114,6 +139,15 @@ namespace NEOSSAOMEGAETC
 >
 = 0.5;
 
+    uniform float DepthSmoothEpsilon
+    <
+    ui_type = "slider";
+    ui_category = "Depth";
+    ui_label = "Depth Smooth Epsilon";
+    ui_tooltip = "Controls the smoothing of depth comparison";
+    ui_min = 0.0001; ui_max = 0.01; ui_step = 0.0001;
+    > = 0.0001;
+    
     uniform float DepthThreshold
 <
     ui_type = "slider";
@@ -126,14 +160,16 @@ namespace NEOSSAOMEGAETC
 
     uniform bool EnableBrightnessThreshold
 < 
+    ui_category = "Extra";
     ui_type = "checkbox";
     ui_label = "Enable Brightness Threshold"; 
     ui_tooltip = "Enable or disable the brightness threshold.";
 > 
-= true;
+= false;
 
     uniform float BrightnessThreshold
 <
+    ui_category = "Extra";
     ui_type = "slider";
     ui_label = "Brightness Threshold";
     ui_tooltip = "Pixels with brightness above this threshold will have reduced occlusion.";
@@ -149,15 +185,6 @@ namespace NEOSSAOMEGAETC
     ui_tooltip = "Select the color for ambient occlusion.";
 >
 = float4(0.0, 0.0, 0.0, 1.0);
-
-    uniform int AngleMode
-<
-    ui_type = "combo";
-    ui_label = "Angle Mode";
-    ui_tooltip = "Horizon Only, Vertical Only, Unilateral or Bidirectional";
-    ui_items = "Horizon Only\0Vertical Only\0Unilateral\0Bidirectional\0";
->
-= 3;
 
 /*---------------.
 | :: Textures :: |
@@ -199,33 +226,42 @@ namespace NEOSSAOMEGAETC
         return normalize(cross(vertCenter - vertNorth, vertCenter - vertEast)) * 0.5 + 0.5;
     }
     
-    // Ray marching to calculate occlusion
+    // Ray Marching
     float RayMarching(float2 texcoord, float3 rayDir, float3 normal)
     {
         float occlusion = 0.0;
         float depthValue = GetLinearDepth(texcoord);
-        float stepSize = ReShade::PixelSize.x / RAY_SCALE;
+        float stepSize = ReShade::PixelSize.x / RayScale;
         int numSteps = max(int(MaxRayDistance / stepSize), 2);
+        float invNumSteps = rcp(float(numSteps - 1));
 
+        bool hitDetected = false;
+    
+    [loop]
         for (int i = 0; i < numSteps; i++)
         {
-            float t = float(i) / float(numSteps - 1);
-            float sampleDistance = pow(t, 2.0) * MaxRayDistance;
-            float2 sampleCoord = clamp(texcoord + rayDir.xy * sampleDistance, 0.0, 1.0);
+            float t = float(i) * invNumSteps;
+            float sampleDistance = mad(t, t * MaxRayDistance, 0.0);
+            float2 sampleCoord = mad(rayDir.xy, sampleDistance, texcoord);
+    
+            if (any(sampleCoord < 0.0) || any(sampleCoord > 1.0))
+                break;
+
             float sampleDepth = GetLinearDepth(sampleCoord);
-
-            float3 sampleNormal = GetScreenSpaceNormal(sampleCoord);
-            float angleFactor = saturate(dot(normal, sampleNormal));
-
-            if (sampleDepth < depthValue)
+            float depthDiff = depthValue - sampleDepth;
+            float hitFactor = saturate(depthDiff * rcp(DepthSmoothEpsilon + 1e-6));
+            if (hitFactor > 0.01)
             {
-                occlusion += (1.0 - (sampleDistance / MaxRayDistance)) * angleFactor;
+                occlusion += (1.0 - (sampleDistance / MaxRayDistance)) * AngleMode * hitFactor;
+            
+                if (hitFactor < 0.001)
+                    break;
             }
         }
 
         return occlusion;
     }
-
+    
     float CalculateBrightness(float3 color)
     {
         return dot(color.rgb, float3(0.2126, 0.7152, 0.0722));
@@ -240,25 +276,20 @@ namespace NEOSSAOMEGAETC
         float3 originalColor = tex2D(ReShade::BackBuffer, uv).rgb;
         float brightness = CalculateBrightness(originalColor);
         float brightnessFactor = EnableBrightnessThreshold ? saturate(1.0 - smoothstep(BrightnessThreshold - 0.1, BrightnessThreshold + 0.1, brightness)) : 1.0;
-
-        int sampleCount = QualityLevel == 0 ? 8 : // Low
-                     QualityLevel == 1 ? 16 : // Medium
-                     32; // High
+        
+        int sampleCount = (QualityLevel == 0) ? 4 : (QualityLevel == 1) ? 8 : 16;
+        float invSampleCount = 1.0 / sampleCount;
+        float stepPhi = 6.28318530718 / sampleCount;
 
         if (AngleMode == 3) // Bidirectional
         {
-            int halfCount = sampleCount / 2;
-            for (int i = 0; i < halfCount; i++)
+            float3 tangent = normalize(cross(normal, float3(0.0, 0.0, 1.0)));
+            float3 bitangent = cross(normal, tangent);
+        
+            for (int i = 0; i < sampleCount; i++)
             {
-                float phi = (i + 0.5) * 6.28318530718 / halfCount;
-                float3 sampleDir1 = float3(cos(phi), sin(phi), 0.0);
-                float3 sampleDir2 = -sampleDir1;
-                occlusion += RayMarching(uv, sampleDir1 * SampleRadius, normal);
-                occlusion += RayMarching(uv, sampleDir2 * SampleRadius, normal);
-            }
-            if (sampleCount % 2 != 0)
-            {
-                float3 sampleDir = float3(1.0, 0.0, 0.0);
+                float phi = (i + 0.5) * stepPhi;
+                float3 sampleDir = tangent * cos(phi) + bitangent * sin(phi);
                 occlusion += RayMarching(uv, sampleDir * SampleRadius, normal);
             }
         }
@@ -266,10 +297,10 @@ namespace NEOSSAOMEGAETC
         {
             for (int i = 0; i < sampleCount; i++)
             {
+                float phi = (i + 0.5) * stepPhi;
                 float3 sampleDir;
                 if (AngleMode == 0) // Horizon Only
                 {
-                    float phi = (i + 0.5) * 6.28318530718 / sampleCount;
                     sampleDir = float3(cos(phi), sin(phi), 0.0);
                 }
                 else if (AngleMode == 1) // Vertical Only
