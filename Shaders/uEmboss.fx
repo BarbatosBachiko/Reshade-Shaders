@@ -2,7 +2,7 @@
 | :: Description :: |
 '-------------------/
 
-    Emboss
+    uEmboss
 
     Version 1.1
     Author: Barbatos Bachiko 
