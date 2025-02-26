@@ -4,7 +4,7 @@
 
 uFakeHDR 
 
-Version 1.3
+Version 1.3.1
 Author: BarbatosBachiko
 License: MIT
 
@@ -12,8 +12,8 @@ About: This shader simulates HDR effects (expected by me) for SDR.
 History:
 (*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
 
-Version 1.3:
-+ Code clean, new texture, fixes and remove bloom.
+Version 1.3.1:
++ Code clean
 
 */
 
@@ -80,11 +80,12 @@ uniform float Luminance <
 /*---------------.
 | :: Textures :: |
 '---------------*/
+
 texture FakeHDRTex
 {
     Width = BUFFER_WIDTH;
     Height = BUFFER_HEIGHT;
-    Format = RGBA16F;
+    Format = RGBA8;
 };
 sampler sFakeHDR
 {
@@ -141,14 +142,6 @@ float3 ReinhardToneMapping(float3 color)
     float3 mapped = color * (normalizedLuminance / (normalizedLuminance + 1.0));
     mapped *= 1.2;
     
-    return saturate(mapped);
-}
-
-float3 ACESFilmicToneMapping(float3 color)
-{
-    const float A = 2.51;
-    const float B = 0.03;
-    float3 mapped = (color * (color * A + B)) / (color * (A - 1.0) + 1.0);
     return saturate(mapped);
 }
 
