@@ -194,7 +194,7 @@ namespace NEOSSAO
         ui_tooltip = "Adjust the blurring amount for denoising";
         ui_min = 0.1; ui_max = 10.0; ui_step = 0.1;
     >
-    = 1.0;
+    = 0.5;
 
     /*---------------.
     | :: Textures :: |
