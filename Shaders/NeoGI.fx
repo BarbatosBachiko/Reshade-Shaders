@@ -4,14 +4,17 @@
 
     NeoGI
 
-    Version 1.0
+    Version 1.1
     Author: Barbatos Bachiko
     License: MIT
 
-    About: Simple Indirect lighting using ray marching.
+    About: Simple Indirect/Direct lighting using ray marching.
 
     History:
     (*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
+    
+    Version 1.1
+    + Improve Ray Marching Perfomance
 
 */
 #include "ReShade.fxh"
@@ -303,7 +306,7 @@ namespace NEOSPACEG
         }
         else if (colorSpace == 1)
         {
-            return (color < 0.5) ? (color * 2.0) : (exp(color* 1.0 / 2.4)); // Custom
+            return (color < 0.5) ? (color * 2.0) : (exp(color * 1.0 / 2.4)); // Custom
         }
         else
         {
@@ -321,10 +324,7 @@ namespace NEOSPACEG
         float invNumSteps = rcp(float(numSteps - 1));
         float depthEpsilon = rcp(DepthSmoothEpsilon + 1e-6);
 
-        float3 lightDir = normalize(LightDirection);
-        float3 lightColor = LightColor;
-
-        [loop]
+    [loop]
         for (int i = 0; i < numSteps; i++)
         {
             float t = float(i) * invNumSteps;
@@ -340,10 +340,11 @@ namespace NEOSPACEG
             {
                 float4 sampleData = tex2Dlod(ReShade::BackBuffer, float4(sampleCoord, 0, 0));
                 float3 sampleColor = ApplyGammaCorrection(sampleData.rgb, colorSpace);
-                float3 sampleNormal = GetScreenSpaceNormal(sampleCoord);
-                float lambertian = max(dot(sampleNormal, lightDir), 0.0);
             
-                giAccum += sampleColor * lambertian * lightColor * hitFactor;
+                float3 lightDir = normalize(LightDirection);
+                float diffuse = max(dot(normal, lightDir), 0.0);
+
+                giAccum += sampleColor * hitFactor * diffuse * LightColor;
 
                 if (hitFactor < 0.001)
                     break;
