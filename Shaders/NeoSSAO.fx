@@ -6,7 +6,7 @@ _  _ ____ ____ ____ ____ ____ ____
 |\ | |___ |  | [__  [__  |__| |  | 
 | \| |___ |__| ___] ___] |  | |__| 
                                                                        
-    Version 1.5.1
+    Version 1.6
     Author: Barbatos Bachiko
     License: MIT
 
@@ -14,10 +14,9 @@ _  _ ____ ____ ____ ____ ____ ____
     History:
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
     
-    Version 1.5.1
-    * Denoising - 1.5.0
-    - Adjust settings - 1.5.0
-    + Structure
+    Version 1.6
+    + General Perfomance
+    + Removed Denoise
 */ 
 
 namespace NEOSSAO
@@ -50,32 +49,29 @@ namespace NEOSSAO
     >
     = 0;
 
-    uniform int QualityLevel
+    uniform int SampleCount
     <
         ui_category = "Geral";
-        ui_type = "combo";
-        ui_label = "Quality Level";
-        ui_tooltip = "Select quality level for ambient occlusion";
-        ui_items = "Low\0Medium\0High\0"; 
+        ui_type = "slider";
+        ui_label = "SampleCount";
+        ui_min = 0.0; ui_max = 16.0; ui_step = 1.0;
     >
-    = 1;
+    = 10.0;
 
     uniform float Intensity
     <
         ui_category = "Geral";
         ui_type = "slider";
         ui_label = "Occlusion Intensity";
-        ui_tooltip = "Adjust the intensity of ambient occlusion";
-        ui_min = 0.0; ui_max = 1.0; ui_step = 0.05;
+        ui_min = 0.0; ui_max = 2.0; ui_step = 0.01;
     >
-    = 0.2; 
+    = 1.0; 
 
     uniform float SampleRadius
     <
         ui_category = "Geral";
         ui_type = "slider";
         ui_label = "Sample Radius";
-        ui_tooltip = "Adjust the radius of the samples for SSAO";
         ui_min = 0.001; ui_max = 5.0; ui_step = 0.001;
     >
     = 1.0; 
@@ -105,7 +101,6 @@ namespace NEOSSAO
         ui_category = "Ray Marching";
         ui_type = "combo";
         ui_label = "Angle Mode";
-        ui_tooltip = "Horizon Only, Vertical Only, Unilateral ou Bidirectional";
         ui_items = "Horizon Only\0Vertical Only\0Unilateral\0Bidirectional\0";
     >
     = 3;
@@ -115,7 +110,7 @@ namespace NEOSSAO
         ui_category = "Fade";
         ui_type = "slider";
         ui_label = "Fade Start";
-        ui_tooltip = "Distance at which SSAO starts to fade out.";
+        ui_tooltip = "Distance at which AO starts to fade out.";
         ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
     >
     = 0.0;
@@ -125,7 +120,7 @@ namespace NEOSSAO
         ui_category = "Fade";
         ui_type = "slider";
         ui_label = "Fade End";
-        ui_tooltip = "Distance at which SSAO completely fades out.";
+        ui_tooltip = "Distance at which AO completely fades out.";
         ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
     >
     = 1.0;
@@ -135,7 +130,6 @@ namespace NEOSSAO
         ui_type = "slider";
         ui_category = "Depth";
         ui_label = "Depth Multiplier";
-        ui_tooltip = "Adjust the depth multiplier";
         ui_min = 0.1; ui_max = 5.0; ui_step = 0.1;
     >
     = 0.5;
@@ -187,16 +181,6 @@ namespace NEOSSAO
     >
     = float4(0.0, 0.0, 0.0, 1.0);
 
-    uniform float BLURING_AMOUNT
-    <
-        ui_category = "Denoise";
-        ui_type = "slider";
-        ui_label = "Blurring Amount";
-        ui_tooltip = "Adjust the blurring amount for denoising";
-        ui_min = 0.1; ui_max = 10.0; ui_step = 0.1;
-    >
-    = 0.5;
-
     /*---------------.
     | :: Textures :: |
     '---------------*/
@@ -208,15 +192,12 @@ namespace NEOSSAO
         Format = RGBA8;
     };
 
-
     texture2D blurTexture0
     {
         Width = RES_WIDTH;
         Height = RES_HEIGHT;
         Format = RGBA8;
     };
-
-
 
     texture2D blurTexture1
     {
@@ -234,14 +215,15 @@ namespace NEOSSAO
     sampler2D sBlur0
     {
         Texture = blurTexture0;
-        SRGBTexture = false; 
+        SRGBTexture = false;
     };
 
     sampler2D sBlur1
     {
         Texture = blurTexture1;
-        SRGBTexture = false; 
+        SRGBTexture = false;
     };
+    
     /*----------------.
     | :: Functions :: |
     '----------------*/
@@ -270,7 +252,12 @@ namespace NEOSSAO
         return normalize(cross(vertCenter - vertNorth, vertCenter - vertEast)) * 0.5 + 0.5;
     }
     
-    // Ray Marching
+    float CalculateBrightness(float3 color)
+    {
+        return dot(color.rgb, float3(0.2126, 0.7152, 0.0722));
+    }
+    
+    // Ray Marching 
     struct RayMarchData
     {
         float occlusion;
@@ -281,8 +268,7 @@ namespace NEOSSAO
         float3 rayDir;
         float3 normal;
     };
-    
-    // Ray Marching
+
     float RayMarching(in float2 texcoord, in float3 rayDir, in float3 normal)
     {
         RayMarchData data;
@@ -294,8 +280,6 @@ namespace NEOSSAO
         data.rayDir = rayDir;
         data.normal = normal;
 
-        bool hitDetected = false;
-
     [loop]
         for (int i = 0; i < data.numSteps; i++)
         {
@@ -303,27 +287,21 @@ namespace NEOSSAO
             float sampleDistance = mad(t, t * MaxRayDistance, 0.0);
             float2 sampleCoord = mad(data.rayDir.xy, sampleDistance, data.texcoord);
 
-            if (any(sampleCoord < 0.0) || any(sampleCoord > 1.0))
-                break;
+            sampleCoord = clamp(sampleCoord, 0.0, 1.0);
 
             float sampleDepth = GetLinearDepth(sampleCoord);
             float depthDiff = data.depthValue - sampleDepth;
             float hitFactor = saturate(depthDiff * rcp(DepthSmoothEpsilon + 1e-6));
+
             if (hitFactor > 0.01)
             {
-                data.occlusion += (1.0 - (sampleDistance / MaxRayDistance)) * AngleMode * hitFactor;
-
+                data.occlusion += (1.0 - (sampleDistance / MaxRayDistance)) * hitFactor;
                 if (hitFactor < 0.001)
                     break;
             }
         }
 
         return data.occlusion;
-    }
-    
-    float CalculateBrightness(float3 color)
-    {
-        return dot(color.rgb, float3(0.2126, 0.7152, 0.0722));
     }
     
     float4 PS_SSAO(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
@@ -335,50 +313,44 @@ namespace NEOSSAO
         float3 originalColor = tex2D(ReShade::BackBuffer, uv).rgb;
         float brightness = CalculateBrightness(originalColor);
         float brightnessFactor = EnableBrightnessThreshold ? saturate(1.0 - smoothstep(BrightnessThreshold - 0.1, BrightnessThreshold + 0.1, brightness)) : 1.0;
-        
-        int sampleCount = (QualityLevel == 0) ? 4 : (QualityLevel == 1) ? 8 : 16;
+
+        int sampleCount = clamp(SampleCount, 1, 16);
         float invSampleCount = 1.0 / sampleCount;
         float stepPhi = 6.28318530718 / sampleCount;
 
-        if (AngleMode == 3) // Bidirectional
+        float3 tangent = normalize(cross(normal, float3(0.0, 0.0, 1.0)));
+        float3 bitangent = cross(normal, tangent);
+
+        for (int i = 0; i < sampleCount; i++)
         {
-            float3 tangent = normalize(cross(normal, float3(0.0, 0.0, 1.0)));
-            float3 bitangent = cross(normal, tangent);
-        
-            for (int i = 0; i < sampleCount; i++)
+            float phi = (i + 0.5) * stepPhi;
+
+            float3 sampleDir;
+            if (AngleMode == 3) // Bidirectional
             {
-                float phi = (i + 0.5) * stepPhi;
-                float3 sampleDir = tangent * cos(phi) + bitangent * sin(phi);
-                occlusion += RayMarching(uv, sampleDir * SampleRadius, normal);
+                sampleDir = tangent * cos(phi) + bitangent * sin(phi);
             }
-        }
-        else
-        {
-            for (int i = 0; i < sampleCount; i++)
+            else if (AngleMode == 0) // Horizon Only
             {
-                float phi = (i + 0.5) * stepPhi;
-                float3 sampleDir;
-                if (AngleMode == 0) // Horizon Only
-                {
-                    sampleDir = float3(cos(phi), sin(phi), 0.0);
-                }
-                else if (AngleMode == 1) // Vertical Only
-                {
-                    sampleDir = (i % 2 == 0) ? float3(0.0, 1.0, 0.0) : float3(0.0, -1.0, 0.0);
-                }
-                else if (AngleMode == 2) // Unilateral
-                {
-                    float phi = (i + 0.5) * 3.14159265359 / sampleCount;
-                    sampleDir = float3(cos(phi), sin(phi), 0.0);
-                }
-                occlusion += RayMarching(uv, sampleDir * SampleRadius, normal);
+                sampleDir = float3(cos(phi), sin(phi), 0.0);
             }
+            else if (AngleMode == 1) // Vertical Only
+            {
+                sampleDir = (i % 2 == 0) ? float3(0.0, 1.0, 0.0) : float3(0.0, -1.0, 0.0);
+            }
+            else // Unilateral
+            {
+                float phi = (i + 0.5) * 3.14159265359 / sampleCount;
+                sampleDir = float3(cos(phi), sin(phi), 0.0);
+            }
+
+            occlusion += RayMarching(uv, sampleDir * SampleRadius, normal);
         }
 
         occlusion = (occlusion / sampleCount) * Intensity;
         occlusion *= brightnessFactor;
 
-        float fade = saturate((FadeEnd - depthValue) / (FadeEnd - FadeStart));
+        float fade = (depthValue < FadeStart) ? 1.0 : saturate((FadeEnd - depthValue) / (FadeEnd - FadeStart));
         occlusion *= fade;
 
         return float4(occlusion, occlusion, occlusion, 1.0);
@@ -416,76 +388,6 @@ namespace NEOSSAO
         return originalColor;
     }
 
-    // Denoise Functions
-    float4 Downsample0(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
-    {
-        const float kernelWeights[5] = { 1.0 / 16.0, 4.0 / 16.0, 6.0 / 16.0, 4.0 / 16.0, 1.0 / 16.0 };
-        const float stepSize = 1.0 * BLURING_AMOUNT;
-        const float2 pixelSize = ReShade::PixelSize;
-        
-        float4 color = 0;
-        
-        [unroll]
-        for (int x = -2; x <= 2; x++)
-        {
-            [unroll]
-            for (int y = -2; y <= 2; y++)
-            {
-                float2 offset = float2(x, y) * stepSize * pixelSize;
-                float weight = kernelWeights[x + 2] * kernelWeights[y + 2];
-                color += tex2D(sAO, texcoord + offset) * weight;
-            }
-        }
-        
-        return color;
-    }
-
-    float4 Downsample1(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
-    {
-        const float kernelWeights[5] = { 1.0 / 16.0, 4.0 / 16.0, 6.0 / 16.0, 4.0 / 16.0, 1.0 / 16.0 };
-        const float stepSize = 2.0 * BLURING_AMOUNT;
-        const float2 pixelSize = ReShade::PixelSize;
-        
-        float4 color = 0;
-        
-        [unroll]
-        for (int x = -2; x <= 2; x++)
-        {
-            [unroll]
-            for (int y = -2; y <= 2; y++)
-            {
-                float2 offset = float2(x, y) * stepSize * pixelSize;
-                float weight = kernelWeights[x + 2] * kernelWeights[y + 2];
-                color += tex2D(sBlur0, texcoord + offset) * weight;
-            }
-        }
-        
-        return color;
-    }
-
-    float4 Downsample2(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
-    {
-        const float kernelWeights[5] = { 1.0 / 16.0, 4.0 / 16.0, 6.0 / 16.0, 4.0 / 16.0, 1.0 / 16.0 };
-        const float stepSize = 4.0 * BLURING_AMOUNT;
-        const float2 pixelSize = ReShade::PixelSize;
-        
-        float4 color = 0;
-        
-        [unroll]
-        for (int x = -2; x <= 2; x++)
-        {
-            [unroll]
-            for (int y = -2; y <= 2; y++)
-            {
-                float2 offset = float2(x, y) * stepSize * pixelSize;
-                float weight = kernelWeights[x + 2] * kernelWeights[y + 2];
-                color += tex2D(sBlur1, texcoord + offset) * weight;
-            }
-        }
-        
-        return color;
-    }
-
     /*-------------------.
     | :: Techniques ::   |
     '-------------------*/
@@ -498,27 +400,6 @@ namespace NEOSSAO
             PixelShader = PS_SSAO;
             RenderTarget = AOTex;
             ClearRenderTargets = true;
-        }
-        pass
-        {
-            VertexShader = PostProcessVS;
-            PixelShader = Downsample0;
-            RenderTarget = blurTexture0;
-            ClearRenderTargets = false;
-        }
-        pass
-        {
-            VertexShader = PostProcessVS;
-            PixelShader = Downsample1;
-            RenderTarget = blurTexture1;
-            ClearRenderTargets = false;
-        }
-        pass
-        {
-            VertexShader = PostProcessVS;
-            PixelShader = Downsample2;
-            ClearRenderTargets = false;
-            RenderTarget = AOTex;
         }
         pass
         {
