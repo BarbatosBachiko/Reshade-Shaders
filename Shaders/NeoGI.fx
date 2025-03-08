@@ -2,9 +2,8 @@
 | :: Description :: |
 '-------------------/
 
-    NeoGI
-
-    Version 1.1
+    NeoGI 
+    Version 1.2
     Author: Barbatos Bachiko
     License: MIT
 
@@ -12,15 +11,17 @@
 
     History:
     (*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
-    
-    Version 1.1
-    + Improve Ray Marching Perfomance
 
+    Version 1.2
+    * Temporal Filter
+    - Removed Blur
+    + Manual SampleCount
 */
+
 #include "ReShade.fxh"
+
 namespace NEOSPACEG
 {
-    
 #define INPUT_WIDTH BUFFER_WIDTH 
 #define INPUT_HEIGHT BUFFER_HEIGHT 
 
@@ -32,11 +33,11 @@ namespace NEOSPACEG
 
 #define TWO_PI 6.28318530718
 #define PI 3.14159265359
-    
+
     /*-------------------.
     | :: Settings ::    |
     '-------------------*/
-
+    
     uniform int ViewMode
     < 
         ui_type = "combo";
@@ -47,15 +48,14 @@ namespace NEOSPACEG
     >
     = 0;
 
-    uniform int QualityLevel
+    uniform int SampleCount
     <
-        ui_type = "combo";
         ui_category = "Geral";
-        ui_label = "Quality Level";
-        ui_tooltip = "Select quality level";
-        ui_items = "Low\0Medium\0High\0"; 
+        ui_type = "slider";
+        ui_label = "SampleCount";
+        ui_min = 0.0; ui_max = 32.0; ui_step = 1.0;
     >
-    = 1;
+    = 10.0;
 
     uniform float Intensity
     <
@@ -139,12 +139,31 @@ namespace NEOSPACEG
     
     uniform float DepthSmoothEpsilon
     <
-    ui_type = "slider";
-    ui_category = "Depth";
-    ui_label = "Depth Smooth Epsilon";
-    ui_tooltip = "Controls the smoothing of depth comparison";
-    ui_min = 0.0001; ui_max = 0.01; ui_step = 0.0001;
-    > = 0.0001;
+        ui_type = "slider";
+        ui_category = "Depth";
+        ui_label = "Depth Smooth Epsilon";
+        ui_tooltip = "Controls the smoothing of depth comparison";
+        ui_min = 0.0001; ui_max = 0.01; ui_step = 0.0001;
+    >
+    = 0.0001;
+    
+    uniform bool EnableTemporal
+    <
+        ui_category = "Temporal";
+        ui_type = "checkbox";
+        ui_label = "Temporal Filtering";
+    >
+    = false;
+
+    uniform float TemporalFilterStrength
+    <
+        ui_category = "Temporal";
+        ui_type = "slider";
+        ui_label = "Temporal Filter Strength";
+        ui_tooltip = "Blend factor between current GI and history";
+        ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+    >
+    = 0.5;
 
     uniform int BlendMode
     <
@@ -157,7 +176,7 @@ namespace NEOSPACEG
     = 1;
     
     uniform int colorSpace
-        <
+    <
         ui_category = "Advanced";
         ui_type = "combo";
         ui_label = "Color Space";
@@ -174,38 +193,33 @@ namespace NEOSPACEG
     >
     = 3;
     
-    uniform float3 LightDirection < 
+    uniform float3 LightDirection
+    < 
         ui_category = "Advanced";
         ui_label = "Light Direction";
         ui_type = "slider"; 
         ui_min = -1.0; 
         ui_max = 1.0; 
-    > = float3(0.3, 0.6, 1.0);
+    >
+    = float3(0.3, 0.6, 1.0);
 
-    uniform float3 LightColor < 
+    uniform float3 LightColor
+    < 
         ui_category = "Advanced";
         ui_label = "Light Color";
         ui_type = "color"; 
-    > = float3(1.0, 1.0, 1.0);
-    
-    uniform float Blur_Amount <
-	    ui_type = "drag";
-	    ui_min = 0.0; ui_max = 8.0;
-        ui_step = 0.1;
-        ui_label = "Bluring amount";
-	    ui_tooltip = "Less noise but less details";
-        ui_category = "Filtering";
-    > = 0.5;
- 
+    >
+    = float3(1.0, 1.0, 1.0);
+
     uniform float SampleJitter
-<
-    ui_category = "Filtering";
-    ui_type = "slider";
-    ui_label = "Sample Jitter";
-    ui_tooltip = "Controls the amount of jitter in the Sample Radius";
-    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
->
-= 0.0;
+    <
+        ui_category = "Advanced";
+        ui_type = "slider";
+        ui_label = "Sample Jitter";
+        ui_tooltip = "Controls the amount of jitter in the Sample Radius";
+        ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+    >
+    = 0.0;
     
     /*---------------.
     | :: Textures :: |
@@ -225,27 +239,20 @@ namespace NEOSPACEG
         Format = RGBA16F;
     };
 
-    texture fBlurTexture0
+    texture2D giTemporal
     {
         Width = RES_WIDTH;
         Height = RES_HEIGHT;
         Format = RGBA8;
     };
-    
-    texture fBlurTexture1
+
+    texture2D giHistory
     {
         Width = RES_WIDTH;
         Height = RES_HEIGHT;
         Format = RGBA8;
     };
-    
-    texture fBlurTexture2
-    {
-        Width = RES_WIDTH;
-        Height = RES_HEIGHT;
-        Format = RGBA8;
-    };
-    
+
     sampler2D sGI
     {
         Texture = GITex;
@@ -256,22 +263,16 @@ namespace NEOSPACEG
         Texture = NormalTex;
     };
 
-
-    sampler blurTexture0
+    sampler2D sGITemporal
     {
-        Texture = fBlurTexture0;
-    };
-    
-
-    sampler blurTexture1
-    {
-        Texture = fBlurTexture1;
+        Texture = giTemporal;
+        SRGBTexture = false;
     };
 
-  
-    sampler blurTexture2
+    sampler2D sGIHistory
     {
-        Texture = fBlurTexture2;
+        Texture = giHistory;
+        SRGBTexture = false;
     };
 
     /*----------------.
@@ -306,7 +307,7 @@ namespace NEOSPACEG
         }
         else if (colorSpace == 1)
         {
-            return (color < 0.5) ? (color * 2.0) : (exp(color * 1.0 / 2.4)); // Custom
+            return (color < 0.5) ? (color * 2.0) : (exp(color * 1.0 / 2.4));
         }
         else
         {
@@ -358,7 +359,7 @@ namespace NEOSPACEG
         float depthValue = GetLinearDepth(uv);
         float3 normal = GetScreenSpaceNormal(uv);
         float3 giColor = float3(0.0, 0.0, 0.0);
-        int sampleCount = (QualityLevel == 0) ? 4 : (QualityLevel == 1) ? 8 : 16;
+        int sampleCount = clamp(SampleCount, 1, 32);
         float invSampleCount = 1.0 / sampleCount;
         float stepPhiLocal = (AngleMode == 2) ? (PI / sampleCount) : (TWO_PI / sampleCount);
 
@@ -422,87 +423,68 @@ namespace NEOSPACEG
         return float4(giColor, 1.0);
     }
 
-    //Normals
+    // Normals Debug
     float4 PS_Normals(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
         float3 normal = GetScreenSpaceNormal(uv);
         return float4(normal, 1.0);
     }
-    
-    //Final Image
+
+    // Temporal
+    float4 PS_Temporal_GI(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
+    {
+        float3 currentGI = tex2D(sGI, uv).rgb;
+        float3 historyGI = tex2D(sGIHistory, uv).rgb;
+        float3 gi = EnableTemporal ? lerp(currentGI, historyGI, TemporalFilterStrength) : currentGI;
+        return float4(gi, 1.0);
+    }
+
+    // History
+    float4 PS_SaveHistory_GI(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
+    {
+        float3 gi = EnableTemporal ? tex2D(sGITemporal, uv).rgb : tex2D(sGI, uv).rgb;
+        return float4(gi, 1.0);
+    }
+
+    // Final Image
     float4 PS_GI_Composite(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
         float4 originalColor = tex2D(ReShade::BackBuffer, uv);
-        float3 giColor = tex2D(blurTexture2, uv).rgb;
+        float3 giColor = EnableTemporal ? tex2D(sGITemporal, uv).rgb : tex2D(sGI, uv).rgb;
         float greyValue = dot(giColor, float3(0.299, 0.587, 0.114));
         float3 grey = float3(greyValue, greyValue, greyValue);
         giColor = lerp(grey, giColor, Saturation);
 
-        switch (ViewMode)
+        if (ViewMode == 0)
         {
-            case 0:
-                switch (BlendMode)
-                {
-                    case 0: // Additive
-                        return float4(originalColor.rgb + giColor, originalColor.a);
-
-                    case 1: // Multiplicative
-                        return float4(1.0 - (1.0 - originalColor.rgb) * (1.0 - giColor), originalColor.a);
-
-                    case 2: // Alpha Blend
-                        float blendFactor = saturate(giColor.r);
-                        return float4(lerp(originalColor.rgb, giColor, blendFactor), originalColor.a);
-                }
-                break;
-            case 1: // GI Debug
-                return float4(giColor, 1.0);
-            case 2: // Normal Debug
-                float3 normal = GetScreenSpaceNormal(uv);
-                return float4(normal * 0.5 + 0.5, 1.0);
-            case 3: // Depth Debug
-                float depth = GetLinearDepth(uv);
-                return float4(depth, depth, depth, 1.0);
+            if (BlendMode == 0) // Additive
+                return float4(originalColor.rgb + giColor, originalColor.a);
+            else if (BlendMode == 1) // Multiplicative
+                return float4(1.0 - (1.0 - originalColor.rgb) * (1.0 - giColor), originalColor.a);
+            else if (BlendMode == 2) // Alpha Blend
+            {
+                float blendFactor = saturate(giColor.r);
+                return float4(lerp(originalColor.rgb, giColor, blendFactor), originalColor.a);
+            }
+        }
+        else if (ViewMode == 1) // GI Debug
+            return float4(giColor, 1.0);
+        else if (ViewMode == 2) // Normal Debug
+        {
+            float3 normal = GetScreenSpaceNormal(uv);
+            return float4(normal * 0.5 + 0.5, 1.0);
+        }
+        else if (ViewMode == 3) // Depth Debug
+        {
+            float depth = GetLinearDepth(uv);
+            return float4(depth, depth, depth, 1.0);
         }
         return originalColor;
     }
 
-    // Downsampling Function - 0
-    float4 Downsample0(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
-    {
-        float2 pixelSize = ReShade::PixelSize * Blur_Amount;
-        float4 color = tex2D(sGI, texcoord + float2(-pixelSize.x, -pixelSize.y));
-        color += tex2D(sGI, texcoord + float2(pixelSize.x, -pixelSize.y));
-        color += tex2D(sGI, texcoord + float2(-pixelSize.x, pixelSize.y));
-        color += tex2D(sGI, texcoord + float2(pixelSize.x, pixelSize.y));
-        color *= 0.25;
-        return color;
-    }
-
-    // Downsampling Function - 1
-    float4 Downsample1(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
-    {
-        float2 pixelSize = ReShade::PixelSize * 2 * Blur_Amount;
-        float4 color = tex2D(blurTexture0, texcoord + float2(-pixelSize.x, -pixelSize.y));
-        color += tex2D(blurTexture0, texcoord + float2(pixelSize.x, -pixelSize.y));
-        color += tex2D(blurTexture0, texcoord + float2(-pixelSize.x, pixelSize.y));
-        color += tex2D(blurTexture0, texcoord + float2(pixelSize.x, pixelSize.y));
-        color *= 0.25;
-        return color;
-    }
-
-    // Downsampling Function - 2
-    float4 Downsample2(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
-    {
-        float2 pixelSize = ReShade::PixelSize * 4 * Blur_Amount;
-        float4 color = tex2D(blurTexture1, texcoord + float2(-pixelSize.x, -pixelSize.y));
-        color += tex2D(blurTexture1, texcoord + float2(pixelSize.x, -pixelSize.y));
-        color += tex2D(blurTexture1, texcoord + float2(-pixelSize.x, pixelSize.y));
-        color += tex2D(blurTexture1, texcoord + float2(pixelSize.x, pixelSize.y));
-        color *= 0.25;
-        return color;
-    }
-
-    // Techniques
+    /*----------------.
+    | :: Techniques :: |
+    '----------------*/
     technique NeoGI
     {
         pass Normal
@@ -517,30 +499,25 @@ namespace NEOSPACEG
             PixelShader = PS_GI;
             RenderTarget = GITex;
         }
-        pass
+        pass Temporal
         {
             VertexShader = PostProcessVS;
-            PixelShader = Downsample0;
-            RenderTarget0 = fBlurTexture0;
+            PixelShader = PS_Temporal_GI;
+            RenderTarget = giTemporal;
+            ClearRenderTargets = true;
         }
-
-        pass
+        pass SaveHistory
         {
             VertexShader = PostProcessVS;
-            PixelShader = Downsample1;
-            RenderTarget0 = fBlurTexture1;
+            PixelShader = PS_SaveHistory_GI;
+            RenderTarget = giHistory;
         }
-
-        pass
-        {
-            VertexShader = PostProcessVS;
-            PixelShader = Downsample2;
-            RenderTarget0 = fBlurTexture2;
-        }
-        pass
+        pass Composite
         {
             VertexShader = PostProcessVS;
             PixelShader = PS_GI_Composite;
+            SRGBWriteEnable = false;
+            BlendEnable = false;
         }
     }
 }
