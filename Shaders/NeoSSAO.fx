@@ -65,7 +65,7 @@ namespace NEOSSAO
         ui_label = "Occlusion Intensity";
         ui_min = 0.0; ui_max = 2.0; ui_step = 0.01;
     >
-    = 1.0; 
+    = 0.5; 
 
     uniform float SampleRadius
     <
@@ -216,7 +216,6 @@ namespace NEOSSAO
         Width = RES_WIDTH;
         Height = RES_HEIGHT;
         Format = RGBA8;
-        pooled = true;
     };
 
     texture2D ssaoHistory
@@ -224,7 +223,6 @@ namespace NEOSSAO
         Width = RES_WIDTH;
         Height = RES_HEIGHT;
         Format = RGBA8;
-        pooled = true;
     };
 
     sampler2D sAO
