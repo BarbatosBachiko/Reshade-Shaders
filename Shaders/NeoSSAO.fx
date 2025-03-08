@@ -6,7 +6,7 @@ _  _ ____ ____ ____ ____ ____ ____
 |\ | |___ |  | [__  [__  |__| |  | 
 | \| |___ |__| ___] ___] |  | |__| 
                                                                        
-    Version 1.6
+    Version 1.7
     Author: Barbatos Bachiko
     License: MIT
 
@@ -14,9 +14,9 @@ _  _ ____ ____ ____ ____ ____ ____
     History:
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
     
-    Version 1.6
-    + General Perfomance
-    + Removed Denoise
+    Version 1.7
+    * Temporal Filter
+    - delete unused textures
 */ 
 
 namespace NEOSSAO
@@ -152,6 +152,24 @@ namespace NEOSSAO
         ui_min = 0.0; ui_max = 1.0; ui_step = 0.001;
     >
     = 0.50; 
+    
+    uniform bool EnableTemporal
+    <
+        ui_category = "Temporal";
+        ui_type = "checkbox";
+        ui_label = "Temporal Filtering";
+    >
+    = false;
+
+    uniform float TemporalFilterStrength
+    <
+        ui_category = "Temporal";
+        ui_type = "slider";
+        ui_label = "Temporal Filter";
+        ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+        ui_tooltip = "Blend factor between current SSAO and history.";
+    >
+    = 0.5;
 
     uniform bool EnableBrightnessThreshold
     < 
@@ -180,6 +198,7 @@ namespace NEOSSAO
         ui_tooltip = "Select the color for ambient occlusion.";
     >
     = float4(0.0, 0.0, 0.0, 1.0);
+    
 
     /*---------------.
     | :: Textures :: |
@@ -192,18 +211,20 @@ namespace NEOSSAO
         Format = RGBA8;
     };
 
-    texture2D blurTexture0
+    texture2D ssaoTemporal
     {
         Width = RES_WIDTH;
         Height = RES_HEIGHT;
         Format = RGBA8;
+        pooled = true;
     };
 
-    texture2D blurTexture1
+    texture2D ssaoHistory
     {
         Width = RES_WIDTH;
         Height = RES_HEIGHT;
         Format = RGBA8;
+        pooled = true;
     };
 
     sampler2D sAO
@@ -212,15 +233,15 @@ namespace NEOSSAO
         SRGBTexture = false;
     };
 
-    sampler2D sBlur0
+    sampler2D sTemporal
     {
-        Texture = blurTexture0;
+        Texture = ssaoTemporal;
         SRGBTexture = false;
     };
 
-    sampler2D sBlur1
+    sampler2D sSSAOHistory
     {
-        Texture = blurTexture1;
+        Texture = ssaoHistory;
         SRGBTexture = false;
     };
     
@@ -356,10 +377,27 @@ namespace NEOSSAO
         return float4(occlusion, occlusion, occlusion, 1.0);
     }
 
+    // Temporal
+    float4 PS_Temporal(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
+    {
+        float currentOcclusion = tex2D(sAO, uv).r;
+        float historyOcclusion = tex2D(sSSAOHistory, uv).r;
+        float occlusion = EnableTemporal ? lerp(currentOcclusion, historyOcclusion, TemporalFilterStrength) : currentOcclusion;
+        return float4(occlusion, occlusion, occlusion, 1.0);
+    }
+
+    // History
+    float4 PS_SaveHistory(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
+    {
+        float occlusion = EnableTemporal ? tex2D(sTemporal, uv).r : tex2D(sAO, uv).r;
+        return float4(occlusion, occlusion, occlusion, 1.0);
+    }
+    
+    // Final Image
     float4 PS_Composite(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
         float4 originalColor = tex2D(ReShade::BackBuffer, uv);
-        float occlusion = tex2D(sAO, uv).r;
+        float occlusion = EnableTemporal ? tex2D(sTemporal, uv).r : tex2D(sAO, uv).r;
         float depthValue = GetLinearDepth(uv);
         float3 normal = GetScreenSpaceNormal(uv);
 
@@ -392,16 +430,32 @@ namespace NEOSSAO
     | :: Techniques ::   |
     '-------------------*/
 
-    technique NeoSSAO < ui_tooltip = "Screen Space Ambient Occlusion using ray marching"; >
+    technique NeoSSAO
+    <
+        ui_tooltip = "Screen Space Ambient Occlusion using ray marching";
+    >
     {
-        pass
+        pass SSAO
         {
             VertexShader = PostProcessVS;
             PixelShader = PS_SSAO;
             RenderTarget = AOTex;
             ClearRenderTargets = true;
         }
-        pass
+        pass Temporal
+        {
+            VertexShader = PostProcessVS;
+            PixelShader = PS_Temporal;
+            RenderTarget = ssaoTemporal;
+            ClearRenderTargets = true;
+        }
+        pass SaveHistory
+        {
+            VertexShader = PostProcessVS;
+            PixelShader = PS_SaveHistory;
+            RenderTarget = ssaoHistory;
+        }
+        pass Composite
         {
             VertexShader = PostProcessVS;
             PixelShader = PS_Composite;
@@ -409,4 +463,4 @@ namespace NEOSSAO
             BlendEnable = false;
         }
     }
-} // https://www.comp.nus.edu.sg/~lowkl/publications/mssao_visual_computer_2012.pdf (this is just my study material, it doesn't mean there are implementations from here)
+} 
