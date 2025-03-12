@@ -4,21 +4,20 @@
 
     RCAS
     
-    Version 1.2
+    Version 1.2.1
     Author: Barbatos Bachiko
     License: MIT
+
     About: Adaptive Sharpening filter.
 
     History:
     (*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
 
-    Version 1.2
-    * Removed code referring to JakobPCoder, inserted source code "40163650
-FSRForReShade"
+    Version 1.2.1
+    x Sharpness on "0" Sharpness Intenisty.
+
 
 */
-namespace RCASisCool
-{
 #define FSR_RCAS_LIMIT (0.18 - (1.0/16.0))
 #include "ReShade.fxh"
 /*---------------.
@@ -54,8 +53,9 @@ namespace RCASisCool
 
     float FsrRcasCon(float sharpness)
     {
-        return exp2(sharpness);
+        return sharpness > 0.0 ? exp2(sharpness) : 0.0;
     }
+
 
     float3 FsrRcasF(
     float2 ip, // Integer pixel position in output.
@@ -135,4 +135,3 @@ namespace RCASisCool
             PixelShader = Out;
         }
     }
-}
