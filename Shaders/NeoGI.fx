@@ -145,7 +145,7 @@ namespace NEOSPACEG
         ui_tooltip = "Controls the smoothing of depth comparison";
         ui_min = 0.0001; ui_max = 0.01; ui_step = 0.0001;
     >
-    = 0.0001;
+    = 0.0005;
     
     uniform bool EnableTemporal
     <
@@ -153,7 +153,7 @@ namespace NEOSPACEG
         ui_type = "checkbox";
         ui_label = "Temporal Filtering";
     >
-    = false;
+    = true;
 
     uniform float TemporalFilterStrength
     <
@@ -163,7 +163,7 @@ namespace NEOSPACEG
         ui_tooltip = "Blend factor between current GI and history";
         ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
     >
-    = 0.5;
+    = 0.3;
 
     uniform int BlendMode
     <
@@ -173,7 +173,7 @@ namespace NEOSPACEG
         ui_tooltip = "Select the blend mode for GI";
         ui_items = "Additive\0Multiplicative\0Alpha Blend\0";
     >
-    = 1;
+    = 2;
     
     uniform int colorSpace
     <
