@@ -41,7 +41,7 @@
         ui_max = 2.0;
         ui_step = 0.01;
         ui_default = 0.75;
-    > = 0.75;
+    > = 0.60;
 
     uniform float BlurRadius <
         ui_type = "slider";
