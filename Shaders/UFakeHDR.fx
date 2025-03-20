@@ -1,84 +1,38 @@
-/*------------------.
-| :: Description :: |
-'-------------------/
- 
+/*
+
 uFakeHDR
 
-Version 1.3.2
+Version 1.4
 Author: Barbatos Bachiko
 License: MIT
  
-About: This shader simulates HDR effects (expected by me) for SDR. 
+About : This shader simulates HDR effects(expected byme) for SDR. 
 
 History:
-(*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
+(*) Feature (+) Improvement	(x) Bugfix (-) Information (!)Compatibility
 
-Version 1.3.2:
-+ Optimization
+Version 1.4:
+* Multiple Exposures
+x Fix Bug for Directx 9
++ code reduction
 
-/*---------------.
-| :: Includes :: |
-'---------------*/
+*/
+
+ //: Includes
 #include "ReShade.fxh"
 #include "ReShadeUI.fxh"
- 
-/*---------------.
-| :: Settings :: |
-'---------------*/
-uniform float HDRPower < 
-    ui_type = "slider";
-    ui_label = "HDR Power"; 
-    ui_min = 1.0; 
-    ui_max = 4.0; 
-> = 1.150;
- 
-uniform int ToneMappingMethod < 
-    ui_type = "combo";
-    ui_label = "Tone Mapping Method"; 
-    ui_items = "Reinhard\0Filmic\0ACES\0BT.709\0Logarithmic\0Adaptive\0";
-> = 5;
- 
-uniform bool EnableDithering < 
-    ui_category = "Dithering";
-    ui_type = "checkbox";
-    ui_label = "Enable Dithering"; 
-> = false;
- 
-uniform float DitherStrength < 
-    ui_category = "Dithering";
-    ui_type = "slider";
-    ui_label = "Dither Strength"; 
-    ui_min = 0.0; 
-    ui_max = 1.0; 
-> = 0.05;
- 
-uniform float NoiseScale < 
-    ui_category = "Dithering";
-    ui_type = "slider";
-    ui_label = "Noise Scale"; 
-    ui_min = 0.1; 
-    ui_max = 10.0; 
-> = 1.0;
- 
-uniform float NoiseSeed < 
-    ui_category = "Dithering";
-    ui_type = "slider";
-    ui_label = "Noise Seed"; 
-    ui_min = 1.0; 
-    ui_max = 100000.0; 
-> = 43758.5453;
- 
-uniform float Luminance < 
-    ui_category = "Luminance (only for Adaptive)";
-    ui_type = "slider";
-    ui_label = "Luminance"; 
-    ui_min = 0.01; 
-    ui_max = 1.0; 
-> = 0.1;
- 
-/*---------------.
-| :: Textures :: |
-'---------------*/
+
+//: Settings
+uniform float HDRPower < ui_type="slider";ui_label="HDR Power"; ui_min=1.0; ui_max=4.0; > = 1.150;
+uniform int ToneMappingMethod < ui_type="combo";ui_label="Tone Mapping Method"; ui_items="Reinhard\0Filmic\0ACES\0BT.709\0Logarithmic\0Adaptive\0"; > = 5;
+uniform int Extra < ui_type="combo";ui_label="Extra"; ui_items="None\0Multiple Exposures\0"; > = 0;
+uniform bool EnableDithering < ui_category="Dithering";ui_type="checkbox"; ui_label="Enable Dithering"; > = false;
+uniform float DitherStrength < ui_category="Dithering";ui_type="slider"; ui_label="Dither Strength"; ui_min=0.0; ui_max=1.0; > = 0.05;
+uniform float NoiseScale < ui_category="Dithering";ui_type="slider"; ui_label="Noise Scale"; ui_min=0.1; ui_max=10.0; > = 1.0;
+uniform float NoiseSeed < ui_category="Dithering";ui_type="slider"; ui_label="Noise Seed"; ui_min=1.0; ui_max=100000.0; > = 43758.5453;
+uniform float Luminance < ui_category="Luminance (only for Adaptive)";ui_type="slider"; ui_label="Luminance"; ui_min=0.01; ui_max=1.0; > = 0.1;
+
+//: Textures
 texture FakeHDRTex
 {
     Width = BUFFER_WIDTH;
@@ -89,139 +43,92 @@ sampler sFakeHDR
 {
     Texture = FakeHDRTex;
 };
- 
-#define textureSize float2(BUFFER_WIDTH, BUFFER_HEIGHT)
+
+//: Functions
 static float lastSceneLuminance = 0.0;
- 
-/*----------------.
-| :: Functions :: |
-'----------------*/
- 
-float CalculateSceneLuminance(float2 texcoord)
+
+float CalculateSceneLuminance(float2 uv)
 {
-    float3 sampleColor = tex2D(sFakeHDR, texcoord).rgb;
-    float currentLuminance = dot(sampleColor, float3(0.2126, 0.7152, 0.0722));
-    lastSceneLuminance = lerp(lastSceneLuminance, currentLuminance, Luminance);
+    float lum = dot(tex2Dlod(sFakeHDR, float4(uv, 0, 0)).rgb, float3(0.2126, 0.7152, 0.0722));
+    lastSceneLuminance = lerp(lastSceneLuminance, lum, Luminance);
     return lastSceneLuminance;
 }
- 
-float3 ReinhardToneMapping(float3 color)
+
+float3 ReinhardToneMapping(float3 c)
 {
-    const float a = 0.25;
-    const float maxLum = 1.0;
- 
-    float luminance = max(dot(color, float3(0.2126, 0.7152, 0.0722)) * 1.2, 0.0001);
-    float normalizedLuminance = clamp(luminance / (a * maxLum), 0.0, 1.0);
- 
-    float3 mapped = color * (normalizedLuminance / (normalizedLuminance + 1.0)) * 1.2;
-    return saturate(mapped);
+    float lum = max(dot(c, float3(0.2126, 0.7152, 0.0722)) * 1.2, 0.0001);
+    float nLum = clamp(lum / (0.25 * 1.0), 0.0, 1.0);
+    return saturate(c * (nLum / (nLum + 1.0)) * 1.2);
 }
- 
-float3 FilmicToneMapping(float3 color)
+
+float3 FilmicToneMapping(float3 c)
 {
-    float3 mapped = (color * (color * 0.6 + 0.4)) / (color + 0.6);
-    return saturate(mapped * 1.5);
+    return saturate((c * (c * 0.6 + 0.4)) / (c + 0.6) * 1.5);
 }
- 
-float3 ACESToneMapping(float3 color)
+float3 ACESToneMapping(float3 c)
 {
-    float3 mapped = (color * (color + 0.0245786) - (color * color * 0.000093607)) / (color + 0.000009);
-    return saturate(mapped);
+    return saturate((c * (c + 0.0245786) - (c * c * 0.000093607)) / (c + 0.000009));
 }
- 
-float3 BTToneMapping(float3 color)
+float3 BTToneMapping(float3 c)
 {
-    float3 mapped = color * (color * 0.7 + 0.3);
-    return saturate(mapped);
+    return saturate(c * (c * 0.7 + 0.3));
 }
- 
-float3 LogarithmicToneMapping(float3 color)
+float3 LogarithmicToneMapping(float3 c)
 {
-    return saturate(log(color + 1.0) / log(2.0));
+    return saturate(log(c + 1.0) / log(2.0));
 }
- 
-float3 AdaptiveToneMapping(float3 color, float sceneLuminance)
+float3 AdaptiveToneMapping(float3 c, float sceneLum)
 {
-    float targetLuminance = 0.5;
-    float minAdjustment = 0.5;
-    float maxAdjustment = 2.0;
- 
-    float luminanceAdjustment = clamp(targetLuminance / (sceneLuminance + 0.001), minAdjustment, maxAdjustment);
-    float adjustmentFactor = lerp(1.0, luminanceAdjustment, Luminance);
- 
-    color *= adjustmentFactor;
-    return saturate(color);
+    float adjust = lerp(1.0, clamp(0.5 / (sceneLum + 0.001), 0.5, 2.0), Luminance);
+    return saturate(c * adjust);
 }
- 
-float3 ApplyToneMapping(float3 color, float2 texcoord)
+float3 MultipleExposuresHDR(float3 c)
 {
-    if (ToneMappingMethod == 5)
-    {
-        float sceneLuminance = CalculateSceneLuminance(texcoord);
-        return AdaptiveToneMapping(color, sceneLuminance);
-    }
-    else if (ToneMappingMethod == 0)
-    {
-        return ReinhardToneMapping(color);
-    }
-    else if (ToneMappingMethod == 1)
-    {
-        return FilmicToneMapping(color);
-    }
-    else if (ToneMappingMethod == 2)
-    {
-        return ACESToneMapping(color);
-    }
-    else if (ToneMappingMethod == 3)
-    {
-        return BTToneMapping(color);
-    }
-    else if (ToneMappingMethod == 4)
-    {
-        return LogarithmicToneMapping(color);
-    }
-    else
-    {
-        return color;
-    }
+    return saturate(max(max(pow(c, 2.0), c), pow(c, 0.5)));
 }
- 
 float make_noise(float2 uv)
 {
     return frac(sin(dot(uv * NoiseScale, float2(12.9898, 78.233))) * NoiseSeed);
 }
- 
-float3 ApplyDithering(float3 color, float2 texcoord, float ditherStrength)
+float3 ApplyDithering(float3 c, float2 uv)
 {
-    float noise = make_noise(texcoord);
-    color += (noise - 0.5) * ditherStrength;
-    return saturate(color);
+    return saturate(c + (make_noise(uv) - 0.5) * DitherStrength);
 }
- 
-float4 uFakeHDRPass(float4 position : SV_Position, float2 texcoord : TexCoord) : SV_Target
+
+float3 ApplyToneMapping(float3 c, float2 uv)
 {
-    float3 color = tex2D(ReShade::BackBuffer, texcoord).rgb;
-    float3 hdrColor = pow(color, HDRPower);
- 
-    hdrColor = ApplyToneMapping(hdrColor, texcoord);
- 
+    if (ToneMappingMethod == 5)
+        return AdaptiveToneMapping(c, CalculateSceneLuminance(uv));
+    else if (ToneMappingMethod == 0)
+        return ReinhardToneMapping(c);
+    else if (ToneMappingMethod == 1)
+        return FilmicToneMapping(c);
+    else if (ToneMappingMethod == 2)
+        return ACESToneMapping(c);
+    else if (ToneMappingMethod == 3)
+        return BTToneMapping(c);
+    else if (ToneMappingMethod == 4)
+        return LogarithmicToneMapping(c);
+    return c;
+}
+
+float4 uFakeHDRPass(float4 pos : SV_Position, float2 uv : TexCoord) : SV_Target
+{
+    float3 c = pow(tex2Dlod(ReShade::BackBuffer, float4(uv, 0, 0)).rgb, HDRPower);
+    c = ApplyToneMapping(c, uv);
+    if (Extra == 1)
+        c = MultipleExposuresHDR(c);
     if (EnableDithering)
-    {
-        hdrColor = ApplyDithering(hdrColor, texcoord, DitherStrength);
-    }
- 
-    return float4(saturate(hdrColor), 1.0);
+        c = ApplyDithering(c, uv);
+    return float4(saturate(c), 1.0);
 }
- 
+
 float4 Composite_PS(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
 {
-    float3 hdrColor = tex2D(sFakeHDR, uv).rgb;
-    return float4(saturate(hdrColor), 1.0);
+    return float4(saturate(tex2Dlod(sFakeHDR, float4(uv, 0, 0)).rgb), 1.0);
 }
- 
-/*-----------------.
-| :: Techniques :: |
-'-----------------*/
+
+//: Techniques
 technique uFakeHDR
 {
     pass
