@@ -632,4 +632,4 @@ technique SSRT <
         RenderTarget0 = fGiTexture1;
     }
   }
-}
+} //<--- REMOVE
