@@ -2,35 +2,31 @@
 | :: Description :: |
 '-------------------/
 
-    Shading (only for DX11 and above) 
+    Shading
     
-    Version 1.4
+    Version 1.6
     Author: Barbatos Bachiko
     License: MIT
 
-    About: Shading.
+    About: Outline Shading
     History:
-	(*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
+    (*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
 
-    Version 1.4
-    + Code optimization, Render Scale (used only for increasing, you gain nothing by decreasing)
+    Version 1.5
+    x Fix for Directx9
 */
 
-namespace ShadingNamespace
-{
 #ifndef RENDER_SCALE
 #define RENDER_SCALE 1.0
 #endif
-#define INPUT_WIDTH BUFFER_RCP_WIDTH 
-#define INPUT_HEIGHT BUFFER_RCP_HEIGHT
-#define RENDER_WIDTH (INPUT_WIDTH * RENDER_SCALE)
-#define RENDER_HEIGHT (INPUT_HEIGHT * RENDER_SCALE) 
+#define RENDER_WIDTH (BUFFER_RCP_WIDTH  * RENDER_SCALE)
+#define RENDER_HEIGHT (BUFFER_RCP_HEIGHT * RENDER_SCALE)
+
 /*---------------.
 | :: Includes :: |
 '---------------*/
 
 #include "ReShade.fxh"
-#include "ReShadeUI.fxh"
 
 /*---------------.
 | :: Settings :: |
@@ -109,79 +105,82 @@ namespace ShadingNamespace
         return normal;
     }
 
-    float4 ApplySharpness(float4 color, float2 texcoord)
-    {
-        float4 left = tex2D(ReShade::BackBuffer, texcoord + float2(-1.0 * float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT).x, 0));
-        float4 right = tex2D(ReShade::BackBuffer, texcoord + float2(1.0 * float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT).x, 0));
-        float4 top = tex2D(ReShade::BackBuffer, texcoord + float2(0, -1.0 * float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT).y));
-        float4 bottom = tex2D(ReShade::BackBuffer, texcoord + float2(0, 1.0 * float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT).y));
+float4 ApplySharpness(float4 color, float2 texcoord)
+{
+    float2 pixelSize = float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT);
 
-        float4 sharpened = color * (1.0 + sharpness) - (left + right + top + bottom) * (sharpness * 0.25);
-        return clamp(sharpened, 0.0, 1.0);
+    float4 left = tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(-1.0 * pixelSize.x, 0), 0.0, 0.0));
+    float4 right = tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(1.0 * pixelSize.x, 0), 0.0, 0.0));
+    float4 top = tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(0, -1.0 * pixelSize.y), 0.0, 0.0));
+    float4 bottom = tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(0, 1.0 * pixelSize.y), 0.0, 0.0));
+
+    float4 sharpened = color * (1.0 + sharpness) - (left + right + top + bottom) * (sharpness * 0.25);
+    return clamp(sharpened, 0.0, 1.0);
+}
+
+float4 ApplyShading(float4 color, float2 texcoord)
+{
+    float2 bufferSize = float2(RENDER_WIDTH, RENDER_HEIGHT);
+    float4 totalDiff = float4(0.0, 0.0, 0.0, 0.0);
+    int count = 0;
+
+    float3 currentNormal = GetNormalFromDepth(texcoord);
+
+    int sampleOffset = (SamplingArea == 0) ? 1 :
+                   (SamplingArea == 1) ? 2 :
+                   (SamplingArea == 2) ? 3 :
+                   (SamplingArea == 3) ? 4 : 5;
+
+    for (int x = -sampleOffset; x <= sampleOffset; ++x)
+    {
+        for (int y = -sampleOffset; y <= sampleOffset; ++y)
+        {
+            if (x == 0 && y == 0)
+                continue;
+
+            float2 sampleCoord = texcoord + float2(x * bufferSize.x, y * bufferSize.y);
+            float4 neighborColor = tex2Dlod(ReShade::BackBuffer, float4(sampleCoord, 0.0, 0.0));
+            
+            float4 diff = abs(neighborColor - color);
+            float3 neighborNormal = GetNormalFromDepth(sampleCoord);
+            float normalInfluence = max(dot(currentNormal, neighborNormal), 0.0);
+
+            totalDiff += diff * normalInfluence;
+            count++;
+        }
     }
 
-    float4 ApplyShading(float4 color, float2 texcoord)
+    float complexity = dot(totalDiff.rgb, float3(1.0, 1.0, 1.0)) / count;
+    float shadingFactor = max(1.0 - (complexity * ShadingIntensity), 0.0);
+
+    if (EnableMixWithSceneColor)
     {
-        float2 bufferSize = float2(RENDER_WIDTH, RENDER_HEIGHT);
-        float4 totalDiff = float4(0.0, 0.0, 0.0, 0.0);
-        int count = 0;
-
-        float3 currentNormal = GetNormalFromDepth(texcoord);
-
-        int sampleOffset = (SamplingArea == 0) ? 1 :
-                       (SamplingArea == 1) ? 2 :
-                       (SamplingArea == 2) ? 3 :
-                       (SamplingArea == 3) ? 4 : 5;
-    
-        for (int x = -sampleOffset; x <= sampleOffset; ++x)
-        {
-            for (int y = -sampleOffset; y <= sampleOffset; ++y)
-            {
-                if (x == 0 && y == 0)
-                    continue;
-
-                float4 neighborColor = LoadPixel(ReShade::BackBuffer, texcoord + float2(x * bufferSize.x, y * bufferSize.y));
-                float4 diff = abs(neighborColor - color);
-                float3 neighborNormal = GetNormalFromDepth(texcoord + float2(x * bufferSize.x, y * bufferSize.y));
-                float normalInfluence = max(dot(currentNormal, neighborNormal), 0.0);
-
-                totalDiff += diff * normalInfluence;
-                count++;
-            }
-        }
-
-        float complexity = dot(totalDiff.rgb, float3(1.0, 1.0, 1.0)) / count;
-        float shadingFactor = max(1.0 - (complexity * ShadingIntensity), 0.0);
-
-        if (EnableMixWithSceneColor)
-        {
-            return lerp(color, color * shadingFactor, 0.5);
-        }
-
-        return color * shadingFactor;
+        return lerp(color, color * shadingFactor, 0.5);
     }
 
-    float4 ShadingPS(float4 vpos : SV_Position, float2 texcoord : TexCoord) : SV_Target
-    {
-        float4 color = tex2D(ReShade::BackBuffer, texcoord);
+    return color * shadingFactor;
+}
 
-        switch (viewMode)
-        {
-            case 1: // Normals
-                float3 normal = GetNormalFromDepth(texcoord);
-                return float4(normal * 0.5 + 0.5, 1.0);
+float4 ShadingPS(float4 vpos : SV_Position, float2 texcoord : TexCoord) : SV_Target
+{
+    float4 color = tex2Dlod(ReShade::BackBuffer, float4(texcoord, 0.0, 0.0));
+
+    switch (viewMode)
+    {
+        case 1: // Normals
+            float3 normal = GetNormalFromDepth(texcoord);
+            return float4(normal * 0.5 + 0.5, 1.0);
         
-            case 2: // Depth
-                float depth = GetLinearDepth(texcoord);
-                return float4(depth, depth, depth, 1.0);
+        case 2: // Depth
+            float depth = GetLinearDepth(texcoord);
+            return float4(depth, depth, depth, 1.0);
 
-            default:
-                color = ApplyShading(color, texcoord);
-                color = ApplySharpness(color, texcoord);
-                return color;
-        }
+        default:
+            color = ApplyShading(color, texcoord);
+            color = ApplySharpness(color, texcoord);
+            return color;
     }
-
+}
 /*-----------------.
 | :: Techniques :: |
 '-----------------*/
@@ -194,4 +193,3 @@ namespace ShadingNamespace
             PixelShader = ShadingPS;
         }
     }
-}
