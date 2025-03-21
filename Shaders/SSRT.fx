@@ -2,6 +2,8 @@
 | :: Description :: |
 '-------------------/
 
+remove the last character to use the shader, it is currently not compiling in Directx9 and I still haven't figured out why
+
     SSRT
 
     Version 1.1
@@ -285,7 +287,7 @@ float nrand(float2 uv)
 
 float3 rand3d(float2 uv)
 {
-    return tex2D(noiseTexture, uv.xy).rgb;
+    return tex2Dlod(noiseTexture, float4(uv.xy, 0.0, 0.0)).rgb;
 }
 
 float2 getPixelSize()
@@ -418,8 +420,8 @@ float4 Denoise(float4 position : SV_Position, float2 texcoord : TEXCOORD, sample
     const float2 pixelSize = ReShade::PixelSize;
     const int radius = 2;
     
-    float4 centerColor = tex2D(sourceSampler, texcoord);
-    float4 centerEdge = tex2D(edgeTexture, texcoord);
+    float4 centerColor = tex2Dlod(sourceSampler, float4(texcoord, 0.0, 0.0));
+    float4 centerEdge = tex2Dlod(edgeTexture, float4(texcoord, 0.0, 0.0));
     float centerDepth = centerEdge.a;
     float3 centerNormal = centerEdge.rgb;
     
@@ -433,8 +435,8 @@ float4 Denoise(float4 position : SV_Position, float2 texcoord : TEXCOORD, sample
             float2 offset = float2(x, y) * stepSize * pixelSize;
             float2 sampleCoord = texcoord + offset;
             
-            float4 sampleColor = tex2D(sourceSampler, sampleCoord);
-            float4 sampleEdge = tex2D(edgeTexture, sampleCoord);
+            float4 sampleColor = tex2Dlod(sourceSampler, float4(sampleCoord, 0.0, 0.0));
+            float4 sampleEdge = tex2Dlod(edgeTexture, float4(sampleCoord, 0.0, 0.0));
             
             // Edge stopping functions based on depth and normal
             float depthWeight = exp(-abs(centerDepth - sampleEdge.a) / (EDGE_STOPPING_DEPTH * 0.1 + 0.0001));
@@ -485,7 +487,8 @@ float4 Downsample0(float4 position : SV_Position, float2 texcoord : TEXCOORD) : 
         {
             const float2 offset = float2(x, y) * stepSize * pixelSize;
             const float weight = kernelWeights[x + 2] * kernelWeights[y + 2];
-            color += tex2D(giTexture0, texcoord + offset) * weight;
+            
+            color += tex2Dlod(giTexture0, float4(texcoord + offset, 0.0, 0.0)) * weight;
         }
     }
     
@@ -508,7 +511,7 @@ float4 Downsample1(float4 position : SV_Position, float2 texcoord : TEXCOORD) : 
         {
             const float2 offset = float2(x, y) * stepSize * pixelSize;
             const float weight = kernelWeights[x + 2] * kernelWeights[y + 2];
-            color += tex2D(blurTexture0, texcoord + offset) * weight;
+            color += tex2Dlod(blurTexture0, float4(texcoord + offset, 0.0, 0.0)) * weight;
         }
     }
     
@@ -531,7 +534,7 @@ float4 Downsample2(float4 position : SV_Position, float2 texcoord : TEXCOORD) : 
         {
             const float2 offset = float2(x, y) * stepSize * pixelSize;
             const float weight = kernelWeights[x + 2] * kernelWeights[y + 2];
-            color += tex2D(blurTexture1, texcoord + offset) * weight;
+            color += tex2Dlod(blurTexture1, float4(texcoord + offset, 0.0, 0.0)) * weight;
         }
     }
     
@@ -542,7 +545,7 @@ float4 Combine(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_T
 {
     if (ViewMode == 1)
     {
-        float3 gi = tex2D(blurTexture2, texcoord.xy).rgb * EFFECT_INTENSITY;
+        float3 gi = tex2Dlod(blurTexture2, float4(texcoord.xy, 0.0, 0.0)).rgb * EFFECT_INTENSITY;
         return float4(gi, 1.0);
     }
     else if (ViewMode == 2)
@@ -559,8 +562,8 @@ float4 Combine(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_T
     else
     {
         float depth = GetLinearizedDepth(texcoord).x;
-        float3 color = tex2D(ReShade::BackBuffer, texcoord.xy).rgb;
-        float3 gi = tex2D(blurTexture2, texcoord.xy).rgb * EFFECT_INTENSITY;
+        float3 color = tex2Dlod(ReShade::BackBuffer, float4(texcoord.xy, 0.0, 0.0)).rgb;
+        float3 gi = tex2Dlod(blurTexture2, float4(texcoord.xy, 0.0, 0.0)).rgb * EFFECT_INTENSITY;
         
         color = lerp(color, color + gi, TONE);
         
@@ -570,7 +573,7 @@ float4 Combine(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_T
 
 float4 SaveGI(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
 {
-    return tex2D(giTexture0, texcoord);
+    return tex2Dlod(giTexture0, float4(texcoord, 0.0, 0.0));
 }
 
 /*------------------.
@@ -628,4 +631,5 @@ technique SSRT <
         PixelShader = SaveGI;
         RenderTarget0 = fGiTexture1;
     }
+  }
 }
