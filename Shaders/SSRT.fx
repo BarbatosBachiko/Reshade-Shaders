@@ -2,8 +2,6 @@
 | :: Description :: |
 '-------------------/
 
-remove the last character to use the shader, it is currently not compiling in Directx9 and I still haven't figured out why
-
     SSRT
 
     Version 1.1
@@ -328,7 +326,6 @@ float4 Trace(in float4 position : SV_Position, in float2 texcoord : TEXCOORD) : 
                                  centredTexCoord.y * depth * perspectiveCoeff,
                                  depth);
     
-    [loop]
     for (int j = 0; j < RAYS_AMOUNT; j++)
     {
         float j1 = j + 1.0;
@@ -342,7 +339,6 @@ float4 Trace(in float4 position : SV_Position, in float2 texcoord : TEXCOORD) : 
         
         bool hitFound = false;
         
-        [loop]
         for (int i = 0; i < STEPS_PER_RAY; i++)
         {
             currentPosition += step;
@@ -479,10 +475,8 @@ float4 Downsample0(float4 position : SV_Position, float2 texcoord : TEXCOORD) : 
     
     float4 color = 0;
     
-    [unroll]
     for (int x = -2; x <= 2; x++)
     {
-        [unroll]
         for (int y = -2; y <= 2; y++)
         {
             const float2 offset = float2(x, y) * stepSize * pixelSize;
@@ -503,10 +497,8 @@ float4 Downsample1(float4 position : SV_Position, float2 texcoord : TEXCOORD) : 
     
     float4 color = 0;
     
-    [unroll]
     for (int x = -2; x <= 2; x++)
     {
-        [unroll]
         for (int y = -2; y <= 2; y++)
         {
             const float2 offset = float2(x, y) * stepSize * pixelSize;
@@ -526,10 +518,8 @@ float4 Downsample2(float4 position : SV_Position, float2 texcoord : TEXCOORD) : 
     
     float4 color = 0;
     
-    [unroll]
     for (int x = -2; x <= 2; x++)
     {
-        [unroll]
         for (int y = -2; y <= 2; y++)
         {
             const float2 offset = float2(x, y) * stepSize * pixelSize;
