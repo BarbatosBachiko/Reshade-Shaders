@@ -89,7 +89,7 @@ uniform float SharpnessStrength
     ui_label = "Sharpness Strength";
     ui_min = 0.0; ui_max = 2.0; ui_step = 0.01;
     ui_category = "Sharpness";
-> = 0.2;
+> = 0.0;
 
 uniform float ContrastThreshold
 <
