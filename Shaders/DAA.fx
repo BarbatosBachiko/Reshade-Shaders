@@ -4,7 +4,7 @@
 
     Directional Anti-Aliasing (DAA)
     
-    Version 1.0
+    Version 1.1
     Author: Barbatos Bachiko
     License: MIT
 
@@ -14,14 +14,17 @@
     History:
     (*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
 
-    Version 1.0
+    Version 1.1
+    + Improve TAA
     - Motion vectors support is currently incomplete.
 
 */
 
 #include "ReShade.fxh"
 
-//: Settings
+    /*-------------------.
+    | :: Settings ::    |
+    '-------------------*/
 
 uniform int View_Mode
 <
@@ -99,7 +102,9 @@ uniform float ContrastThreshold
     ui_category = "Sharpness";
 > = 0.0;
 
-//: Textures
+    /*---------------.
+    | :: Textures :: |
+    '---------------*/
     
 texture2D DAATemporal
 {
@@ -152,7 +157,9 @@ sampler sTexMotionVectorsSampler
 };
 #endif
 
-//: Functions
+    /*----------------.
+    | :: Functions :: |
+    '----------------*/
 
 float GetLuminance(float3 color)
 {
@@ -262,19 +269,34 @@ float2 GetMotionVector(float2 texcoord)
 float4 PS_TemporalDAA(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
 {
     float2 motion = GetMotionVector(texcoord);
-        
+    
     if (View_Mode == 3)
     {
         return float4(motion * 0.5 + 0.5, 0.0, 1.0);
     }
-      
+    
     float4 current = DirectionalAA(texcoord);
-        
+    
+    // Reproject the texcoord based on the motion vector
     float2 reprojectedTexcoord = texcoord + motion * ReShade::PixelSize.xy;
-    float4 history = tex2D(sDAAHistory, reprojectedTexcoord);
-        
+    
+    // Define offsets for directions
+    float2 offsetUp = float2(0.0, -ReShade::PixelSize.y);
+    float2 offsetDown = float2(0.0, ReShade::PixelSize.y);
+    float2 offsetLeft = float2(-ReShade::PixelSize.x, 0.0);
+    float2 offsetRight = float2(ReShade::PixelSize.x, 0.0);
+    
+    // Samples the history texture in different directions
+    float4 historyCenter = tex2D(sDAAHistory, reprojectedTexcoord);
+    float4 historyUp = tex2D(sDAAHistory, reprojectedTexcoord + offsetUp);
+    float4 historyDown = tex2D(sDAAHistory, reprojectedTexcoord + offsetDown);
+    float4 historyLeft = tex2D(sDAAHistory, reprojectedTexcoord + offsetLeft);
+    float4 historyRight = tex2D(sDAAHistory, reprojectedTexcoord + offsetRight);
+    
+    float4 historyAvg = (historyCenter + historyUp + historyDown + historyLeft + historyRight) / 5.0;
+    
     float factor = EnableTemporalAA ? TemporalAAFactor : 0.0;
-    return lerp(current, history, factor);
+    return lerp(current, historyAvg, factor);
 }
 
 // History pass
@@ -290,7 +312,9 @@ float4 PS_CompositeDAA(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : S
     return tex2D(sDAATemporal, texcoord);
 }
 
-//: Techniques
+    /*-------------------.
+    | :: Techniques ::   |
+    '-------------------*/
 
 technique DAA
 {
