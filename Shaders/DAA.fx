@@ -4,7 +4,7 @@
 
     Directional Anti-Aliasing (DAA)
     
-    Version 1.1
+    Version 1.1.1
     Author: Barbatos Bachiko
     License: MIT
 
@@ -14,14 +14,18 @@
     History:
     (*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
 
-    Version 1.1
-    + Improve TAA
-    - Motion vectors support is currently incomplete.
+    Version 1.1.1
+    x Fix Motion Vectors
 
 */
 
 #include "ReShade.fxh"
-
+#ifndef USE_MARTY_LAUNCHPAD_MOTION
+ #define USE_MARTY_LAUNCHPAD_MOTION 0
+#endif
+#ifndef USE_VORT_MOTION
+ #define USE_VORT_MOTION 0
+#endif
     /*-------------------.
     | :: Settings ::    |
     '-------------------*/
@@ -30,7 +34,7 @@ uniform int View_Mode
 <
     ui_category = "Anti-Aliasing";
     ui_type = "combo";
-    ui_items = "DAA\0Edge Mask\0Gradient Direction\0Motion (dont work)\0";
+    ui_items = "DAA\0Edge Mask\0Gradient Direction\0Motion\0";
     ui_label = "View Mode";
     ui_tooltip = "Select normal or debug view output.";
 > = 0;
@@ -105,7 +109,9 @@ uniform float ContrastThreshold
     /*---------------.
     | :: Textures :: |
     '---------------*/
-    
+
+#define S_PC MagFilter=POINT;MinFilter=POINT;MipFilter= POINT;AddressU=Clamp;AddressV=Clamp;AddressW=Clamp;
+
 texture2D DAATemporal
 {
     Width = BUFFER_WIDTH;
@@ -130,14 +136,14 @@ sampler2D sDAAHistory
     Texture = DAAHistory;
 };
 
-#if defined(USE_MARTY_LAUNCHPAD_MOTION)
-    namespace Deferred {
-        texture MotionVectorsTex { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
-        sampler sMotionVectorsTex { Texture = MotionVectorsTex;  };
-    }
-#elif defined(USE_VORT_MOTION)
-        texture2D MotVectTexVort {  Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
-        sampler2D sMotVectTexVort { Texture = MotVectTexVort; S_PC  };
+#if USE_MARTY_LAUNCHPAD_MOTION
+namespace Deferred {
+    texture MotionVectorsTex { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
+    sampler sMotionVectorsTex { Texture = MotionVectorsTex;  };
+}
+#elif USE_VORT_MOTION
+    texture2D MotVectTexVort {  Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
+    sampler2D sMotVectTexVort { Texture = MotVectTexVort; S_PC  };
 #else
 texture texMotionVectors
 {
@@ -148,13 +154,7 @@ texture texMotionVectors
 sampler sTexMotionVectorsSampler
 {
     Texture = texMotionVectors;
-    MagFilter = POINT;
-    MinFilter = POINT;
-    MipFilter = POINT;
-    AddressU = Clamp;
-    AddressV = Clamp;
-    AddressW = Clamp;
-};
+    S_PC};
 #endif
 
     /*----------------.
@@ -254,16 +254,23 @@ float4 DirectionalAA(float2 texcoord)
     return originalColor;
 }
 
-// dont work
+// work ;)
 float2 GetMotionVector(float2 texcoord)
 {
-#if defined(USE_MARTY_LAUNCHPAD_MOTION)
-            return tex2D(Deferred::sMotionVectorsTex, texcoord).xy;
-#elif defined(USE_VORT_MOTION)
+#if USE_MARTY_LAUNCHPAD_MOTION
+    return tex2D(Deferred::sMotionVectorsTex, texcoord).xy;
+#elif USE_VORT_MOTION
             return tex2D(sMotVectTexVort, texcoord).xy;
 #else
     return tex2D(sTexMotionVectorsSampler, texcoord).xy;
 #endif
+}
+
+float3 HSVtoRGB(float3 c)
+{
+    float4 K = float4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+    float3 p = abs(frac(c.xxx + K.xyz) * 6.0 - K.www);
+    return c.z * lerp(K.xxx, saturate(p - K.xxx), c.y);
 }
 
 float4 PS_TemporalDAA(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
@@ -272,13 +279,21 @@ float4 PS_TemporalDAA(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV
     
     if (View_Mode == 3)
     {
-        return float4(motion * 0.5 + 0.5, 0.0, 1.0);
+        float2 motion = GetMotionVector(texcoord);
+        float magnitude = length(motion);
+        float angle = atan2(motion.y, motion.x); 
+        float hue = (angle + 3.14159265) / (2.0 * 3.14159265);
+        float saturation = 1.0;
+        float magnitudeScale = 5.0;
+        float value = saturate(magnitude * magnitudeScale);
+        float3 rgb = HSVtoRGB(float3(hue, saturation, value));
+        return float4(rgb, 1.0);
     }
     
     float4 current = DirectionalAA(texcoord);
     
     // Reproject the texcoord based on the motion vector
-    float2 reprojectedTexcoord = texcoord + motion * ReShade::PixelSize.xy;
+    float2 reprojectedTexcoord = texcoord + motion;
     
     // Define offsets for directions
     float2 offsetUp = float2(0.0, -ReShade::PixelSize.y);
