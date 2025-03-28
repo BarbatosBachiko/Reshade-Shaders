@@ -14,14 +14,15 @@
     History:
     (*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
 
-    Version 1.1.5
+    Version 1.1.6
     x Fix Motion Vectors
     - Adjust default Motion Vectors, add ui tool tip.
+    - Adjusts
 */
 
 #include "ReShade.fxh"
 #ifndef USE_MARTY_LAUNCHPAD_MOTION
- #define USE_MARTY_LAUNCHPAD_MOTION 1
+ #define USE_MARTY_LAUNCHPAD_MOTION 0
 #endif
 #ifndef USE_VORT_MOTION
  #define USE_VORT_MOTION 0
@@ -333,7 +334,7 @@ float4 PS_CompositeDAA(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : S
 
 technique DAA
 <
-    ui_tooltip = "Directional Anti-Aliasing. Enable IMMERSE Launchpad, Vort_Motion or DH_Uber_Motion for Temporal Anti-Aliasing";
+    ui_tooltip = "Directional Anti-Aliasing. Enable Quark_Motion or any Motion Vectors for Temporal Anti-Aliasing";
 >
 {
     pass Temporal
