@@ -145,7 +145,7 @@ namespace NEOSPACEG
         ui_tooltip = "Controls the smoothing of depth comparison";
         ui_min = 0.0000; ui_max = 0.01; ui_step = 0.0001;
     >
-    = 0.0001;
+    = 0.0010;
     
     uniform bool EnableTemporal
     <
