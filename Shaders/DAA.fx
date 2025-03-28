@@ -4,7 +4,7 @@
 
     Directional Anti-Aliasing (DAA)
     
-    Version 1.1.5
+    Version 1.2
     Author: Barbatos Bachiko
     License: MIT
 
@@ -14,18 +14,16 @@
     History:
     (*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
 
-    Version 1.1.6
-    x Fix Motion Vectors
-    - Adjust default Motion Vectors, add ui tool tip.
-    - Adjusts
+    Version 1.2
+    + Swap tex2d to tex2lod
 */
 
 #include "ReShade.fxh"
 #ifndef USE_MARTY_LAUNCHPAD_MOTION
- #define USE_MARTY_LAUNCHPAD_MOTION 0
+#define USE_MARTY_LAUNCHPAD_MOTION 0
 #endif
 #ifndef USE_VORT_MOTION
- #define USE_VORT_MOTION 0
+#define USE_VORT_MOTION 0
 #endif
     /*-------------------.
     | :: Settings ::    |
@@ -155,7 +153,8 @@ texture texMotionVectors
 sampler sTexMotionVectorsSampler
 {
     Texture = texMotionVectors;
-    S_PC};
+    S_PC
+};
 #endif
 
     /*----------------.
@@ -171,15 +170,15 @@ float GetLuminance(float3 color)
 float2 ComputeGradient(float2 texcoord)
 {
     const float2 offset = ReShade::PixelSize.xy * PixelWidth;
-    
-    float3 colorTL = tex2D(ReShade::BackBuffer, texcoord + float2(-offset.x, -offset.y)).rgb;
-    float3 colorT = tex2D(ReShade::BackBuffer, texcoord + float2(0, -offset.y)).rgb;
-    float3 colorTR = tex2D(ReShade::BackBuffer, texcoord + float2(offset.x, -offset.y)).rgb;
-    float3 colorL = tex2D(ReShade::BackBuffer, texcoord + float2(-offset.x, 0)).rgb;
-    float3 colorR = tex2D(ReShade::BackBuffer, texcoord + float2(offset.x, 0)).rgb;
-    float3 colorBL = tex2D(ReShade::BackBuffer, texcoord + float2(-offset.x, offset.y)).rgb;
-    float3 colorB = tex2D(ReShade::BackBuffer, texcoord + float2(0, offset.y)).rgb;
-    float3 colorBR = tex2D(ReShade::BackBuffer, texcoord + float2(offset.x, offset.y)).rgb;
+
+    float3 colorTL = tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(-offset.x, -offset.y), 0, 0)).rgb;
+    float3 colorT = tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(0, -offset.y), 0, 0)).rgb;
+    float3 colorTR = tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(offset.x, -offset.y), 0, 0)).rgb;
+    float3 colorL = tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(-offset.x, 0), 0, 0)).rgb;
+    float3 colorR = tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(offset.x, 0), 0, 0)).rgb;
+    float3 colorBL = tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(-offset.x, offset.y), 0, 0)).rgb;
+    float3 colorB = tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(0, offset.y), 0, 0)).rgb;
+    float3 colorBR = tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(offset.x, offset.y), 0, 0)).rgb;
 
     float lumTL = GetLuminance(colorTL);
     float lumT = GetLuminance(colorT);
@@ -200,10 +199,10 @@ float3 ApplySharpness(float2 texcoord, float3 color)
 {
     const float2 offset = ReShade::PixelSize.xy * PixelWidth;
 
-    float3 colorTL = tex2D(ReShade::BackBuffer, texcoord + float2(-offset.x, -offset.y)).rgb;
-    float3 colorTR = tex2D(ReShade::BackBuffer, texcoord + float2(offset.x, -offset.y)).rgb;
-    float3 colorBL = tex2D(ReShade::BackBuffer, texcoord + float2(-offset.x, offset.y)).rgb;
-    float3 colorBR = tex2D(ReShade::BackBuffer, texcoord + float2(offset.x, offset.y)).rgb;
+    float3 colorTL = tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(-offset.x, -offset.y), 0, 0)).rgb;
+    float3 colorTR = tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(offset.x, -offset.y), 0, 0)).rgb;
+    float3 colorBL = tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(-offset.x, offset.y), 0, 0)).rgb;
+    float3 colorBR = tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(offset.x, offset.y), 0, 0)).rgb;
 
     float3 averageColor = (colorTL + colorTR + colorBL + colorBR) * 0.25;
     float contrast = length(color - averageColor);
@@ -218,7 +217,7 @@ float3 ApplySharpness(float2 texcoord, float3 color)
 
 float4 DirectionalAA(float2 texcoord)
 {
-    float4 originalColor = tex2D(ReShade::BackBuffer, texcoord);
+    float4 originalColor = tex2Dlod(ReShade::BackBuffer, float4(texcoord, 0, 0));
     float2 gradient = ComputeGradient(texcoord);
     float edgeStrength = length(gradient);
     float weight = smoothstep(EdgeThreshold, EdgeThreshold + EdgeFalloff, edgeStrength);
@@ -238,10 +237,10 @@ float4 DirectionalAA(float2 texcoord)
         float2 blurDir = normalize(float2(-gradient.y, gradient.x));
         float2 blurOffset = blurDir * ReShade::PixelSize.xy * PixelWidth * DirectionalStrength;
 
-        float4 color1 = tex2D(ReShade::BackBuffer, texcoord + blurOffset * 0.5);
-        float4 color2 = tex2D(ReShade::BackBuffer, texcoord - blurOffset * 0.5);
-        float4 color3 = tex2D(ReShade::BackBuffer, texcoord + blurOffset);
-        float4 color4 = tex2D(ReShade::BackBuffer, texcoord - blurOffset);
+        float4 color1 = tex2Dlod(ReShade::BackBuffer, float4(texcoord + blurOffset * 0.5, 0, 0));
+        float4 color2 = tex2Dlod(ReShade::BackBuffer, float4(texcoord - blurOffset * 0.5, 0, 0));
+        float4 color3 = tex2Dlod(ReShade::BackBuffer, float4(texcoord + blurOffset, 0, 0));
+        float4 color4 = tex2Dlod(ReShade::BackBuffer, float4(texcoord - blurOffset, 0, 0));
         
         float4 smoothedColor = (color1 + color2) * 0.4 + (color3 + color4) * 0.1;
         float4 finalColor = lerp(originalColor, smoothedColor, weight);
@@ -259,11 +258,11 @@ float4 DirectionalAA(float2 texcoord)
 float2 GetMotionVector(float2 texcoord)
 {
 #if USE_MARTY_LAUNCHPAD_MOTION
-    return tex2D(Deferred::sMotionVectorsTex, texcoord).xy;
+    return tex2Dlod(Deferred::sMotionVectorsTex, float4(texcoord, 0, 0)).xy;
 #elif USE_VORT_MOTION
-            return tex2D(sMotVectTexVort, texcoord).xy;
+    return tex2Dlod(sMotVectTexVort, float4(texcoord, 0, 0)).xy;
 #else
-    return tex2D(sTexMotionVectorsSampler, texcoord).xy;
+    return tex2Dlod(sTexMotionVectorsSampler, float4(texcoord, 0, 0)).xy;
 #endif
 }
 
@@ -282,7 +281,7 @@ float4 PS_TemporalDAA(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV
     {
         float2 motion = GetMotionVector(texcoord);
         float magnitude = length(motion);
-        float angle = atan2(motion.y, motion.x); 
+        float angle = atan2(motion.y, motion.x);
         float hue = (angle + 3.14159265) / (2.0 * 3.14159265);
         float saturation = 1.0;
         float magnitudeScale = 5.0;
@@ -302,12 +301,12 @@ float4 PS_TemporalDAA(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV
     float2 offsetLeft = float2(-ReShade::PixelSize.x, 0.0);
     float2 offsetRight = float2(ReShade::PixelSize.x, 0.0);
     
-    // Samples the history texture in different directions
-    float4 historyCenter = tex2D(sDAAHistory, reprojectedTexcoord);
-    float4 historyUp = tex2D(sDAAHistory, reprojectedTexcoord + offsetUp);
-    float4 historyDown = tex2D(sDAAHistory, reprojectedTexcoord + offsetDown);
-    float4 historyLeft = tex2D(sDAAHistory, reprojectedTexcoord + offsetLeft);
-    float4 historyRight = tex2D(sDAAHistory, reprojectedTexcoord + offsetRight);
+    // Samples the history texture in different direction
+    float4 historyCenter = tex2Dlod(sDAAHistory, float4(reprojectedTexcoord, 0, 0));
+    float4 historyUp = tex2Dlod(sDAAHistory, float4(reprojectedTexcoord + offsetUp, 0, 0));
+    float4 historyDown = tex2Dlod(sDAAHistory, float4(reprojectedTexcoord + offsetDown, 0, 0));
+    float4 historyLeft = tex2Dlod(sDAAHistory, float4(reprojectedTexcoord + offsetLeft, 0, 0));
+    float4 historyRight = tex2Dlod(sDAAHistory, float4(reprojectedTexcoord + offsetRight, 0, 0));
     
     float4 historyAvg = (historyCenter + historyUp + historyDown + historyLeft + historyRight) / 5.0;
     
@@ -318,16 +317,16 @@ float4 PS_TemporalDAA(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV
 // History pass
 float4 PS_SaveHistoryDAA(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
 {
-    float4 temporalResult = tex2D(sDAATemporal, texcoord);
+    float4 temporalResult = tex2Dlod(sDAATemporal, float4(texcoord, 0, 0));
     return temporalResult;
 }
 
 // Composite pass
 float4 PS_CompositeDAA(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
 {
-    return tex2D(sDAATemporal, texcoord);
+    return tex2Dlod(sDAATemporal, float4(texcoord, 0, 0));
 }
-
+ 
     /*-------------------.
     | :: Techniques ::   |
     '-------------------*/
