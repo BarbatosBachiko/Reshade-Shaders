@@ -4,7 +4,7 @@
 
     Directional Anti-Aliasing (DAA)
     
-    Version 1.2
+    Version 1.3
     Author: Barbatos Bachiko
     License: MIT
 
@@ -14,8 +14,8 @@
     History:
     (*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
 
-    Version 1.2
-    + Swap tex2d to tex2lod
+    Version 1.3
+    * Two Temporal Methods
 */
 
 #include "ReShade.fxh"
@@ -37,7 +37,7 @@ uniform int View_Mode
     ui_label = "View Mode";
     ui_tooltip = "Select normal or debug view output.";
 > = 0;
-    
+
 uniform float DirectionalStrength
 <
     ui_type = "slider";
@@ -80,6 +80,15 @@ uniform bool EnableTemporalAA
     ui_tooltip = "Enable temporal anti-aliasing.";
 > = false;
 
+uniform int TemporalMode
+<
+    ui_category = "Temporal";
+    ui_type = "combo";
+    ui_items = "A\0B\0";
+    ui_label = "TemporalMode";
+    ui_tooltip = "";
+> = 1;
+
 uniform float TemporalAAFactor
 <
     ui_category = "Temporal";
@@ -87,7 +96,7 @@ uniform float TemporalAAFactor
     ui_label = "Temporal Strength";
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
     ui_tooltip = "Blend factor between current DAA and history.";
-> = 0.2;
+> = 0.5;
 
 uniform float SharpnessStrength
 <
@@ -273,13 +282,31 @@ float3 HSVtoRGB(float3 c)
     return c.z * lerp(K.xxx, saturate(p - K.xxx), c.y);
 }
 
+ // Convert RGB to YCoCg
+float3 RGBToYCoCg(float3 rgb)
+{
+    float Y = dot(rgb, float3(0.25, 0.5, 0.25));
+    float Co = dot(rgb, float3(0.5, 0.0, -0.5));
+    float Cg = dot(rgb, float3(-0.25, 0.5, -0.25));
+    return float3(Y, Co, Cg);
+}
+
+// Convert YCoCg back to RGB
+float3 YCoCgToRGB(float3 ycocg)
+{
+    float Y = ycocg.x;
+    float Co = ycocg.y;
+    float Cg = ycocg.z;
+    return float3(Y + Co - Cg, Y + Cg, Y - Co - Cg);
+}
+
+//Temporal DAA
 float4 PS_TemporalDAA(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
 {
     float2 motion = GetMotionVector(texcoord);
     
     if (View_Mode == 3)
     {
-        float2 motion = GetMotionVector(texcoord);
         float magnitude = length(motion);
         float angle = atan2(motion.y, motion.x);
         float hue = (angle + 3.14159265) / (2.0 * 3.14159265);
@@ -292,26 +319,41 @@ float4 PS_TemporalDAA(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV
     
     float4 current = DirectionalAA(texcoord);
     
-    // Reproject the texcoord based on the motion vector
-    float2 reprojectedTexcoord = texcoord + motion;
-    
-    // Define offsets for directions
-    float2 offsetUp = float2(0.0, -ReShade::PixelSize.y);
-    float2 offsetDown = float2(0.0, ReShade::PixelSize.y);
-    float2 offsetLeft = float2(-ReShade::PixelSize.x, 0.0);
-    float2 offsetRight = float2(ReShade::PixelSize.x, 0.0);
-    
-    // Samples the history texture in different direction
-    float4 historyCenter = tex2Dlod(sDAAHistory, float4(reprojectedTexcoord, 0, 0));
-    float4 historyUp = tex2Dlod(sDAAHistory, float4(reprojectedTexcoord + offsetUp, 0, 0));
-    float4 historyDown = tex2Dlod(sDAAHistory, float4(reprojectedTexcoord + offsetDown, 0, 0));
-    float4 historyLeft = tex2Dlod(sDAAHistory, float4(reprojectedTexcoord + offsetLeft, 0, 0));
-    float4 historyRight = tex2Dlod(sDAAHistory, float4(reprojectedTexcoord + offsetRight, 0, 0));
-    
-    float4 historyAvg = (historyCenter + historyUp + historyDown + historyLeft + historyRight) / 5.0;
-    
-    float factor = EnableTemporalAA ? TemporalAAFactor : 0.0;
-    return lerp(current, historyAvg, factor);
+    if (TemporalMode == 0) // Method A
+    {
+        float2 reprojectedTexcoord = texcoord + motion;
+        
+        // Define offsets for directions
+        float2 offsetUp = float2(0.0, -ReShade::PixelSize.y);
+        float2 offsetDown = float2(0.0, ReShade::PixelSize.y);
+        float2 offsetLeft = float2(-ReShade::PixelSize.x, 0.0);
+        float2 offsetRight = float2(ReShade::PixelSize.x, 0.0);
+        
+        // Samples the history
+        float4 historyCenter = tex2Dlod(sDAAHistory, float4(reprojectedTexcoord, 0, 0));
+        float4 historyUp = tex2Dlod(sDAAHistory, float4(reprojectedTexcoord + offsetUp, 0, 0));
+        float4 historyDown = tex2Dlod(sDAAHistory, float4(reprojectedTexcoord + offsetDown, 0, 0));
+        float4 historyLeft = tex2Dlod(sDAAHistory, float4(reprojectedTexcoord + offsetLeft, 0, 0));
+        float4 historyRight = tex2Dlod(sDAAHistory, float4(reprojectedTexcoord + offsetRight, 0, 0));
+        
+        float4 historyAvg = (historyCenter + historyUp + historyDown + historyLeft + historyRight) / 5.0;
+        
+        float factor = EnableTemporalAA ? TemporalAAFactor : 0.0;
+        return lerp(current, historyAvg, factor);
+    }
+    else // Method B
+    {
+        float3 currentYCoCg = RGBToYCoCg(current.rgb);
+        float2 reprojectedTexcoord = texcoord + motion;
+        float4 history = tex2D(sDAAHistory, reprojectedTexcoord);
+        float3 historyYCoCg = RGBToYCoCg(history.rgb);
+        
+        float factor = EnableTemporalAA ? TemporalAAFactor : 0.0;
+        float3 blendedYCoCg = lerp(currentYCoCg, historyYCoCg, factor);
+        float3 finalRGB = YCoCgToRGB(blendedYCoCg);
+        
+        return float4(finalRGB, current.a);
+    }
 }
 
 // History pass
