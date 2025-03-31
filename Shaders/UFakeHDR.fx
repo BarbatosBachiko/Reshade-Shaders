@@ -2,7 +2,7 @@
 
 uFakeHDR
 
-Version 1.4
+Version 1.5.0
 Author: Barbatos Bachiko
 License: MIT
  
@@ -11,16 +11,41 @@ About : This shader simulates HDR effects(expected byme) for SDR.
 History:
 (*) Feature (+) Improvement	(x) Bugfix (-) Information (!)Compatibility
 
-Version 1.4:
-* Multiple Exposures
-x Fix Bug for Directx 9
-+ code reduction
+Version 1.5.0:
++ Perfomance
+x RenderTarget Fix
+- Remove Unused Textures
 
 */
 
  //: Includes
 #include "ReShade.fxh"
 #include "ReShadeUI.fxh"
+
+// version-number.fxh
+#ifndef _VERSION_NUMBER_H
+#define _VERSION_NUMBER_H
+
+#define MAJOR_VERSION 1
+#define MINOR_VERSION 5
+#define PATCH_VERSION 0
+
+#define BUILD_DOT_VERSION_(mav, miv, pav) #mav "." #miv "." #pav
+#define BUILD_DOT_VERSION(mav, miv, pav) BUILD_DOT_VERSION_(mav, miv, pav)
+#define DOT_VERSION_STR BUILD_DOT_VERSION(MAJOR_VERSION, MINOR_VERSION, PATCH_VERSION)
+
+#define BUILD_UNDERSCORE_VERSION_(prefix, mav, miv, pav) prefix ## _ ## mav ## _ ## miv ## _ ## pav
+#define BUILD_UNDERSCORE_VERSION(p, mav, miv, pav) BUILD_UNDERSCORE_VERSION_(p, mav, miv, pav)
+#define APPEND_VERSION_SUFFIX(prefix) BUILD_UNDERSCORE_VERSION(prefix, MAJOR_VERSION, MINOR_VERSION, PATCH_VERSION)
+
+#endif  //  _VERSION_NUMBER_H
+
+uniform int APPEND_VERSION_SUFFIX(version) <
+    ui_text = "Version: "
+DOT_VERSION_STR;
+    ui_label = " ";
+    ui_type = "radio";
+>;
 
 //: Settings
 uniform float HDRPower < ui_type="slider";ui_label="HDR Power"; ui_min=1.0; ui_max=4.0; > = 1.150;
@@ -32,24 +57,12 @@ uniform float NoiseScale < ui_category="Dithering";ui_type="slider"; ui_label="N
 uniform float NoiseSeed < ui_category="Dithering";ui_type="slider"; ui_label="Noise Seed"; ui_min=1.0; ui_max=100000.0; > = 43758.5453;
 uniform float Luminance < ui_category="Luminance (only for Adaptive)";ui_type="slider"; ui_label="Luminance"; ui_min=0.01; ui_max=1.0; > = 0.1;
 
-//: Textures
-texture FakeHDRTex
-{
-    Width = BUFFER_WIDTH;
-    Height = BUFFER_HEIGHT;
-    Format = RGBA8;
-};
-sampler sFakeHDR
-{
-    Texture = FakeHDRTex;
-};
-
 //: Functions
 static float lastSceneLuminance = 0.0;
 
 float CalculateSceneLuminance(float2 uv)
 {
-    float lum = dot(tex2Dlod(sFakeHDR, float4(uv, 0, 0)).rgb, float3(0.2126, 0.7152, 0.0722));
+    float lum = dot(tex2Dlod(ReShade::BackBuffer, float4(uv, 0, 0)).rgb, float3(0.2126, 0.7152, 0.0722));
     lastSceneLuminance = lerp(lastSceneLuminance, lum, Luminance);
     return lastSceneLuminance;
 }
@@ -60,7 +73,6 @@ float3 ReinhardToneMapping(float3 c)
     float nLum = clamp(lum / (0.25 * 1.0), 0.0, 1.0);
     return saturate(c * (nLum / (nLum + 1.0)) * 1.2);
 }
-
 float3 FilmicToneMapping(float3 c)
 {
     return saturate((c * (c * 0.6 + 0.4)) / (c + 0.6) * 1.5);
@@ -123,11 +135,6 @@ float4 uFakeHDRPass(float4 pos : SV_Position, float2 uv : TexCoord) : SV_Target
     return float4(saturate(c), 1.0);
 }
 
-float4 Composite_PS(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
-{
-    return float4(saturate(tex2Dlod(sFakeHDR, float4(uv, 0, 0)).rgb), 1.0);
-}
-
 //: Techniques
 technique uFakeHDR
 {
@@ -135,11 +142,5 @@ technique uFakeHDR
     {
         VertexShader = PostProcessVS;
         PixelShader = uFakeHDRPass;
-        RenderTarget = FakeHDRTex;
-    }
-    pass
-    {
-        VertexShader = PostProcessVS;
-        PixelShader = Composite_PS;
     }
 }
