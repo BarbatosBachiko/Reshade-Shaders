@@ -4,27 +4,60 @@
 
     Directional Anti-Aliasing (DAA)
     
-    Version 1.3
+    Version 1.4.0
     Author: Barbatos Bachiko
     License: MIT
 
-    About: Directional Anti-Aliasing (DAA) is an edge-aware anti-aliasing technique 
+    About: Directional Anti-Aliasing (DAA) is an edge-aware spatiotemporal anti-aliasing technique 
     that smooths edges by applying directional blurring based on local gradient detection.
 
     History:
     (*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
 
-    Version 1.3
-    * Two Temporal Methods
+    Version 1.4.0
+    * New "Quality" mode with neighborhood clamping in YCoCg space
+    Details: AABB (Axis-Aligned Bounding Box) to minimize ghosting and artifacts and Dynamic adaptation of the blend factor based on movement speed.
+    + Renamed modes for better clarity: Blurry/Standard/Quality
 */
 
+// Includes
 #include "ReShade.fxh"
+#include "ReShadeUI.fxh"
+
+// Start Tesseract
 #ifndef USE_MARTY_LAUNCHPAD_MOTION
 #define USE_MARTY_LAUNCHPAD_MOTION 0
 #endif
 #ifndef USE_VORT_MOTION
 #define USE_VORT_MOTION 0
 #endif
+
+// version-number.fxh
+#ifndef _VERSION_NUMBER_H
+#define _VERSION_NUMBER_H
+
+#define MAJOR_VERSION 1
+#define MINOR_VERSION 4
+#define PATCH_VERSION 0
+
+#define BUILD_DOT_VERSION_(mav, miv, pav) #mav "." #miv "." #pav
+#define BUILD_DOT_VERSION(mav, miv, pav) BUILD_DOT_VERSION_(mav, miv, pav)
+#define DOT_VERSION_STR BUILD_DOT_VERSION(MAJOR_VERSION, MINOR_VERSION, PATCH_VERSION)
+
+#define BUILD_UNDERSCORE_VERSION_(prefix, mav, miv, pav) prefix ## _ ## mav ## _ ## miv ## _ ## pav
+#define BUILD_UNDERSCORE_VERSION(p, mav, miv, pav) BUILD_UNDERSCORE_VERSION_(p, mav, miv, pav)
+#define APPEND_VERSION_SUFFIX(prefix) BUILD_UNDERSCORE_VERSION(prefix, MAJOR_VERSION, MINOR_VERSION, PATCH_VERSION)
+
+#endif  //  _VERSION_NUMBER_H
+
+uniform int APPEND_VERSION_SUFFIX(version) <
+    ui_text = "Version: "
+DOT_VERSION_STR;
+    ui_label = " ";
+    ui_type = "radio";
+>;
+// End Tesseract
+
     /*-------------------.
     | :: Settings ::    |
     '-------------------*/
@@ -84,10 +117,10 @@ uniform int TemporalMode
 <
     ui_category = "Temporal";
     ui_type = "combo";
-    ui_items = "A\0B\0";
+    ui_items = "Blurry\0Standard\0Quality\0";
     ui_label = "TemporalMode";
     ui_tooltip = "";
-> = 1;
+> = 2;
 
 uniform float TemporalAAFactor
 <
@@ -113,6 +146,8 @@ uniform float ContrastThreshold
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
     ui_category = "Sharpness";
 > = 0.0;
+
+uniform uint framecount < source = "framecount"; >;
 
     /*---------------.
     | :: Textures :: |
@@ -319,7 +354,7 @@ float4 PS_TemporalDAA(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV
     
     float4 current = DirectionalAA(texcoord);
     
-    if (TemporalMode == 0) // Method A
+    if (TemporalMode == 0) // Method A - Basic neighborhood averaging = Blurry
     {
         float2 reprojectedTexcoord = texcoord + motion;
         
@@ -341,11 +376,11 @@ float4 PS_TemporalDAA(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV
         float factor = EnableTemporalAA ? TemporalAAFactor : 0.0;
         return lerp(current, historyAvg, factor);
     }
-    else // Method B
+    else if (TemporalMode == 1) // Method B - Simple YCoCg blending = Lite
     {
         float3 currentYCoCg = RGBToYCoCg(current.rgb);
         float2 reprojectedTexcoord = texcoord + motion;
-        float4 history = tex2D(sDAAHistory, reprojectedTexcoord);
+        float4 history = tex2Dlod(sDAAHistory, float4(reprojectedTexcoord, 0, 0));
         float3 historyYCoCg = RGBToYCoCg(history.rgb);
         
         float factor = EnableTemporalAA ? TemporalAAFactor : 0.0;
@@ -353,6 +388,42 @@ float4 PS_TemporalDAA(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV
         float3 finalRGB = YCoCgToRGB(blendedYCoCg);
         
         return float4(finalRGB, current.a);
+    }
+    else // Method C - Neighborhood clamping = Quality
+    {
+        float3 currentYCoCg = RGBToYCoCg(current.rgb);
+        float2 reprojectedTexcoord = texcoord + motion;
+        
+        // Sample current neighborhood for clamping
+        float2 offset = ReShade::PixelSize.xy;
+        float3 c00 = RGBToYCoCg(tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(-offset.x, -offset.y), 0, 0)).rgb);
+        float3 c10 = RGBToYCoCg(tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(0, -offset.y), 0, 0)).rgb);
+        float3 c20 = RGBToYCoCg(tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(offset.x, -offset.y), 0, 0)).rgb);
+        float3 c01 = RGBToYCoCg(tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(-offset.x, 0), 0, 0)).rgb);
+        float3 c21 = RGBToYCoCg(tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(offset.x, 0), 0, 0)).rgb);
+        float3 c02 = RGBToYCoCg(tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(-offset.x, offset.y), 0, 0)).rgb);
+        float3 c12 = RGBToYCoCg(tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(0, offset.y), 0, 0)).rgb);
+        float3 c22 = RGBToYCoCg(tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(offset.x, offset.y), 0, 0)).rgb);
+        
+        // Calculate AABB for neighborhood clamping
+        float3 minColor = min(min(min(c00, c10), min(c20, c01)), min(min(c21, c02), min(c12, c22)));
+        float3 maxColor = max(max(max(c00, c10), max(c20, c01)), max(max(c21, c02), max(c12, c22)));
+        float3 clampSize = maxColor - minColor;
+        minColor -= clampSize * 0.5;
+        maxColor += clampSize * 0.5;
+        
+        float3 historyYCoCg = RGBToYCoCg(tex2Dlod(sDAAHistory, float4(reprojectedTexcoord, 0, 0)).rgb);
+        historyYCoCg = clamp(historyYCoCg, minColor, maxColor);
+        
+        float motionLength = length(motion) * 100.0;
+        float blendFactor = EnableTemporalAA ? clamp(TemporalAAFactor * (1.0 - motionLength), 0.0, TemporalAAFactor) : 0.0;
+        
+        float3 resultYCoCg = lerp(currentYCoCg, historyYCoCg, blendFactor);
+        
+        // Convert back to RGB
+        float3 resultRGB = YCoCgToRGB(resultYCoCg);
+        
+        return float4(resultRGB, current.a);
     }
 }
 
