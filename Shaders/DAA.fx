@@ -4,7 +4,7 @@
 
     Directional Anti-Aliasing (DAA)
     
-    Version 1.4.0
+    Version 1.4.1
     Author: Barbatos Bachiko
     License: MIT
 
@@ -14,10 +14,8 @@
     History:
     (*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
 
-    Version 1.4.0
-    * New "Quality" mode with neighborhood clamping in YCoCg space
-    Details: AABB (Axis-Aligned Bounding Box) to minimize ghosting and artifacts and Dynamic adaptation of the blend factor based on movement speed.
-    + Renamed modes for better clarity: Blurry/Standard/Quality
+    Version 1.4.1
+    - Modify Constrast Threshold.
 */
 
 // Includes
@@ -38,7 +36,7 @@
 
 #define MAJOR_VERSION 1
 #define MINOR_VERSION 4
-#define PATCH_VERSION 0
+#define PATCH_VERSION 1
 
 #define BUILD_DOT_VERSION_(mav, miv, pav) #mav "." #miv "." #pav
 #define BUILD_DOT_VERSION(mav, miv, pav) BUILD_DOT_VERSION_(mav, miv, pav)
@@ -139,13 +137,16 @@ uniform float SharpnessStrength
     ui_category = "Sharpness";
 > = 0.0;
 
-uniform float ContrastThreshold
+static const float ContrastThreshold = 0.0;
+
+/*uniform float ContrastThreshold
 <
     ui_type = "slider";
     ui_label = "Contrast Threshold";
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
     ui_category = "Sharpness";
 > = 0.0;
+*/
 
 uniform uint framecount < source = "framecount"; >;
 
