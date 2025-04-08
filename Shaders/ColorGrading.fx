@@ -4,7 +4,7 @@
 
     Color Grading 
 
-    Version 1.1
+    Version 1.2
     Author: Barbatos Bachiko
     License: MIT
 
@@ -13,9 +13,6 @@
 
     History:
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
-
-    Version 1.1
-    + Warm, Vibrante and Teal and Orange
 
 */
 
@@ -29,13 +26,13 @@ uniform int StartColorGradingMethod <
     ui_type = "combo";
     ui_label = "Start Color Grading Method"; 
     ui_items = "Neutral\0Warm\0Cool\0Sepia\0Black & White\0Vintage\0Vibrant\0Horror\0Cine Style\0Teal and Orange\0"; 
-> = 1;
+> = 6;
 
 uniform int EndColorGradingMethod < 
     ui_type = "combo";
     ui_label = "End Color Grading Method"; 
     ui_items = "Neutral\0Warm\0Cool\0Sepia\0Black & White\0Vintage\0Vibrant\0Horror\0Cine Style\0Teal and Orange\0"; 
-> = 2;
+> = 8;
 
 uniform float GradingInterpolationFactor < 
     ui_type = "slider";
@@ -73,17 +70,17 @@ uniform float Contrast <
 float3 RGBtoHSL(float3 color)
 {
     float3 hsl;
-    float minVal = min(color.r, min(color.g, color.b));
-    float maxVal = max(color.r, max(color.g, color.b));
+    float minVal = min(min(color.r, color.g), color.b);
+    float maxVal = max(max(color.r, color.g), color.b);
     float delta = maxVal - minVal;
 
     // Luminosity (L)
     hsl.z = (maxVal + minVal) / 2.0;
 
-    if (delta == 0.0) 
+    if (delta < 0.00001)
     {
-        hsl.x = 0.0; 
-        hsl.y = 0.0; 
+        hsl.x = 0.0;
+        hsl.y = 0.0;
     }
     else
     {
@@ -94,38 +91,43 @@ float3 RGBtoHSL(float3 color)
             hsl.y = delta / (2.0 - maxVal - minVal);
 
         // Hue (H)
+        float3 diff = (((maxVal - color) / 6.0) + (delta / 2.0)) / delta;
+        
         if (maxVal == color.r)
-            hsl.x = (color.g - color.b) / delta;
+            hsl.x = diff.b - diff.g;
         else if (maxVal == color.g)
-            hsl.x = (color.b - color.r) / delta + 2.0;
+            hsl.x = (1.0 / 3.0) + diff.r - diff.b;
         else
-            hsl.x = (color.r - color.g) / delta + 4.0;
+            hsl.x = (2.0 / 3.0) + diff.g - diff.r;
 
-        hsl.x /= 6.0;
         if (hsl.x < 0.0)
             hsl.x += 1.0;
+        if (hsl.x > 1.0)
+            hsl.x -= 1.0;
     }
 
     return hsl;
 }
 
-// Helper function to calculate RGB value from HSL
-float HueToRGB(float temp1, float temp2, float h)
+// Helper
+float HueToRGB(float temp1, float temp2, float temp3)
 {
-    if (h < 0.0)
-        h += 1.0;
-    if (h > 1.0)
-        h -= 1.0;
-    if (h < 1.0 / 6.0)
-        return temp1 + (temp2 - temp1) * 6.0 * h;
-    if (h < 0.5)
+    if (temp3 < 0.0)
+        temp3 += 1.0;
+    if (temp3 > 1.0)
+        temp3 -= 1.0;
+    
+    if ((temp3 * 6.0) < 1.0)
+        return temp1 + (temp2 - temp1) * 6.0 * temp3;
+    else if ((temp3 * 2.0) < 1.0)
         return temp2;
-    if (h < 2.0 / 3.0)
-        return temp1 + (temp2 - temp1) * (2.0 / 3.0 - h) * 6.0;
+    else if ((temp3 * 3.0) < 2.0)
+        return temp1 + (temp2 - temp1) * ((2.0 / 3.0) - temp3) * 6.0;
+    
     return temp1;
 }
 
-// HSL to RGB
+// HSL to RGB 
 float3 HSLtoRGB(float3 hsl)
 {
     float3 rgb;
@@ -136,17 +138,16 @@ float3 HSLtoRGB(float3 hsl)
     else
     {
         float temp2;
-        float temp1;
         if (hsl.z < 0.5)
             temp2 = hsl.z * (1.0 + hsl.y);
         else
-            temp2 = (hsl.z + hsl.y) - (hsl.y * hsl.z);
+            temp2 = hsl.z + hsl.y - (hsl.y * hsl.z);
 
-        temp1 = 2.0 * hsl.z - temp2;
+        float temp1 = 2.0 * hsl.z - temp2;
 
-        rgb.r = HueToRGB(temp1, temp2, hsl.x + 1.0 / 3.0);
+        rgb.r = HueToRGB(temp1, temp2, hsl.x + (1.0 / 3.0));
         rgb.g = HueToRGB(temp1, temp2, hsl.x);
-        rgb.b = HueToRGB(temp1, temp2, hsl.x - 1.0 / 3.0);
+        rgb.b = HueToRGB(temp1, temp2, hsl.x - (1.0 / 3.0));
     }
 
     return rgb;
@@ -155,7 +156,8 @@ float3 HSLtoRGB(float3 hsl)
 float3 ApplyColorGradingStyle(float3 color, int method)
 {
     float3 gradedColor = color;
-
+    float3 hsl;
+    
     if (method == 0) // Neutral
         return color;
     
@@ -170,7 +172,14 @@ float3 ApplyColorGradingStyle(float3 color, int method)
     }
     
     if (method == 2) // Cool
-        return color * float3(0.9, 1.1, 1.2);
+    {
+        const float3x3 coolMatrix = float3x3(
+                    0.85, 0.0, 0.05,
+                    0.0, 1.0, 0.1,
+                    0.15, 0.1, 1.2
+                );
+        return saturate(mul(coolMatrix, color));
+    }
     
     if (method == 3) // Sepia
         return float3(dot(color, float3(0.393, 0.769, 0.189)),
@@ -179,66 +188,103 @@ float3 ApplyColorGradingStyle(float3 color, int method)
 
     if (method == 4) // Black and White
     {
-        float gray = dot(color, float3(0.2989, 0.5870, 0.1140));
+        float gray = dot(color, float3(0.2126, 0.7152, 0.0722));
         return float3(gray, gray, gray);
     }
     
     if (method == 5) // Vintage
-        return color * float3(1.0, 0.9, 0.8) * 0.8 + float3(0.1, 0.05, 0.05);
+    {
+        gradedColor = color * float3(1.05, 0.9, 0.75) * 0.85 + float3(0.08, 0.04, 0.04);
+        hsl = RGBtoHSL(gradedColor);
+        hsl.y *= 0.8; 
+        return saturate(HSLtoRGB(hsl));
+    }
     
     if (method == 6) // Vibrant
     {
         float3 hsl = RGBtoHSL(color);
         hsl.y = clamp(hsl.y * 1.5, 0.0, 1.0);
         color = HSLtoRGB(hsl);
-
-        // Contrast adjustment
         color = (color - 0.5) * 1.1 + 0.5;
 
         return color;
     }
     
     if (method == 7) // Horror
-        return float3(color.r * 0.5, color.g * 0.2, color.b * 0.2);
+    {
+        gradedColor = color * float3(1.0, 0.8, 0.8);
+        gradedColor = (gradedColor - 0.5) * 1.2 + 0.45; 
+                
+        float3x3 horrorMatrix = float3x3(
+                    1.1, -0.1, 0.1,
+                    -0.1, 0.8, -0.1,
+                    -0.1, -0.2, 0.7
+                );
+                
+        return saturate(mul(horrorMatrix, gradedColor));
+    }
 
     if (method == 8) // Cine Style
-        return float3(color.r * 1.1, color.g * 0.95, color.b * 0.85);
-
-    if (method == 9) // Teal and Orange (Split-Toning)
     {
-        float luminance = dot(color, float3(0.2989, 0.5870, 0.1140));
-        float3 shadows = float3(0.0, 0.3, 0.3); // Teal
-        float3 highlights = float3(0.8, 0.4, 0.0); // Orange
-        float t = smoothstep(0.2, 0.8, luminance);
-        return lerp(shadows * color, highlights * color, t);
+        const float3x3 cineMatrix = float3x3(
+                    1.05, 0.0, -0.05,
+                    0.0, 0.95, 0.05,
+                    -0.05, 0.05, 0.85
+                );
+                
+        gradedColor = mul(cineMatrix, color);
+        gradedColor = (gradedColor - 0.5) * 1.05 + 0.5;
+                
+        return saturate(gradedColor);
+    }
+
+    if (method == 9) // Teal and Orange
+    {
+        float luminance = dot(color, float3(0.2126, 0.7152, 0.0722));
+                
+        float3 shadows = float3(0.05, 0.27, 0.35); 
+        float3 midtones = float3(0.9, 0.8, 0.6); 
+        float3 highlights = float3(0.9, 0.45, 0.2); 
+                
+        float shadowsWeight = 1.0 - smoothstep(0.0, 0.4, luminance);
+        float highlightsWeight = smoothstep(0.6, 1.0, luminance);
+        float midtonesWeight = 1.0 - shadowsWeight - highlightsWeight;
+                
+        float3 result = color * (
+                    (shadows * shadowsWeight) +
+                    (midtones * midtonesWeight) +
+                    (highlights * highlightsWeight)
+                );
+                
+        return saturate(result);
     }
 
     return gradedColor;
 }
 
 // Brightness and Contrast
-float3 AdjustBrightnessContrast(float3 color, float brightness, float contrast)
+float3 BContrast(float3 color, float brightness, float contrast)
 {
     color += brightness;
     return ((color - 0.5) * contrast) + 0.5;
 }
 
 // Color grading with interpolation
-float3 ApplyInterpolatedColorGrading(float3 color)
+float3 IntColorGrading(float3 color)
 {
     float3 startGrading = ApplyColorGradingStyle(color, StartColorGradingMethod);
     float3 endGrading = ApplyColorGradingStyle(color, EndColorGradingMethod);
     float3 interpolatedColor = lerp(startGrading, endGrading, GradingInterpolationFactor);
     float gray = dot(interpolatedColor, float3(0.2989, 0.5870, 0.1140));
     interpolatedColor = lerp(float3(gray, gray, gray), interpolatedColor, SaturationFactor);
-    return AdjustBrightnessContrast(interpolatedColor, Brightness, Contrast);
+    return BContrast(interpolatedColor, Brightness, Contrast);
 }
 
 float4 ColorGradingPass(float4 position : SV_Position, float2 texcoord : TexCoord) : SV_Target
 {
     float3 color = tex2D(ReShade::BackBuffer, texcoord).rgb;
     
-    color = ApplyInterpolatedColorGrading(color);
+    color = IntColorGrading(color);
     
     return float4(saturate(color), 1.0);
 }
