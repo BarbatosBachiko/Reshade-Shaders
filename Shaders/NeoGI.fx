@@ -169,7 +169,7 @@ DOT_VERSION_STR;
     ui_label = "Field of View (FOV)";
     ui_tooltip = "Adjust the field of view for position reconstruction";
     ui_min = 1.0; ui_max = 270.0; ui_step = 1.0;
-> = 270.0;
+> = 60.0;
     
     uniform float DepthSmoothEpsilon
     <
