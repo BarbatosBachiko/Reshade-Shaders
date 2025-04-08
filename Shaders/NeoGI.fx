@@ -3,7 +3,7 @@
 '-------------------/
 
     NeoGI 
-    Version 1.3
+    Version 1.3.1
     Author: Barbatos Bachiko
     License: MIT
 
@@ -12,15 +12,15 @@
     History:
     (*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
 
-    Version 1.3
-    + Ray Marching
+    Version 1.3.1
+    + Quality of life
+    - Remove angle modes
     + Normal Map
-    * Denoising
 */
 
 #include "ReShade.fxh"
 
-namespace NEOSPACEG
+namespace NEOSPACE
 {
 #define INPUT_WIDTH BUFFER_WIDTH 
 #define INPUT_HEIGHT BUFFER_HEIGHT 
@@ -34,6 +34,31 @@ namespace NEOSPACEG
 #define TWO_PI 6.28318530718
 #define PI 3.14159265359
 
+        // version-number.fxh
+#ifndef _VERSION_NUMBER_H
+#define _VERSION_NUMBER_H
+
+#define MAJOR_VERSION 1
+#define MINOR_VERSION 3
+#define PATCH_VERSION 1
+
+#define BUILD_DOT_VERSION_(mav, miv, pav) #mav "." #miv "." #pav
+#define BUILD_DOT_VERSION(mav, miv, pav) BUILD_DOT_VERSION_(mav, miv, pav)
+#define DOT_VERSION_STR BUILD_DOT_VERSION(MAJOR_VERSION, MINOR_VERSION, PATCH_VERSION)
+
+#define BUILD_UNDERSCORE_VERSION_(prefix, mav, miv, pav) prefix ## _ ## mav ## _ ## miv ## _ ## pav
+#define BUILD_UNDERSCORE_VERSION(p, mav, miv, pav) BUILD_UNDERSCORE_VERSION_(p, mav, miv, pav)
+#define APPEND_VERSION_SUFFIX(prefix) BUILD_UNDERSCORE_VERSION(prefix, MAJOR_VERSION, MINOR_VERSION, PATCH_VERSION)
+
+#endif  //  _VERSION_NUMBER_H
+
+    uniform int APPEND_VERSION_SUFFIX(version) <
+    ui_text = "Version: "
+DOT_VERSION_STR;
+    ui_label = " ";
+    ui_type = "radio";
+>;
+    
     /*-------------------.
     | :: Settings ::    |
     '-------------------*/
@@ -137,6 +162,15 @@ namespace NEOSPACEG
     >
     = 1.0;
     
+    uniform float FOV
+<
+    ui_category = "Depth";
+    ui_type = "slider";
+    ui_label = "Field of View (FOV)";
+    ui_tooltip = "Adjust the field of view for position reconstruction";
+    ui_min = 1.0; ui_max = 270.0; ui_step = 1.0;
+> = 270.0;
+    
     uniform float DepthSmoothEpsilon
     <
         ui_type = "slider";
@@ -184,15 +218,6 @@ namespace NEOSPACEG
     >
     = 0;
     
-    uniform int AngleMode
-    <
-        ui_category = "Advanced";
-        ui_type = "combo";
-        ui_label = "Angle Mode";
-        ui_items = "Horizon Only\0Vertical Only\0Unilateral\0Bidirectional\0";
-    >
-    = 3;
-    
     uniform float3 LightDirection
     < 
         ui_category = "Advanced";
@@ -201,7 +226,7 @@ namespace NEOSPACEG
         ui_min = -1.0; 
         ui_max = 5.0; 
     >
-    = float3(0.3, -0.220, 0.3);
+    = float3(0.3, 0.7, -1.0);
 
     uniform float3 LightColor
     < 
@@ -235,15 +260,15 @@ namespace NEOSPACEG
     = 1.0;
     
     uniform float PerspectiveOffset
-<
-    ui_category = "Advanced";
-    ui_type = "slider";
-    ui_label = "Perspective Offset";
-    ui_tooltip = "Offset aplicado para evitar denominador próximo de zero";
-    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
->
-= 0.1;
-    
+    <
+        ui_category = "Advanced";
+        ui_type = "slider";
+        ui_label = "Perspective Offset";
+        ui_tooltip = "";
+        ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+    >
+    = 0.1;
+
     /*---------------.
     | :: Textures :: |
     '---------------*/
@@ -347,79 +372,67 @@ namespace NEOSPACEG
     {
         return dot(color, float3(0.299, 0.587, 0.114));
     }
-
-    //Gradient calculation using the Scharr operator
-    float2 ComputeGradient(float2 texcoord)
-    {
-        const float2 offset = ReShade::PixelSize.xy;
-
-        float3 colorTL = tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(-offset.x, -offset.y), 0, 0)).rgb;
-        float3 colorT = tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(0, -offset.y), 0, 0)).rgb;
-        float3 colorTR = tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(offset.x, -offset.y), 0, 0)).rgb;
-        float3 colorL = tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(-offset.x, 0), 0, 0)).rgb;
-        float3 colorR = tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(offset.x, 0), 0, 0)).rgb;
-        float3 colorBL = tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(-offset.x, offset.y), 0, 0)).rgb;
-        float3 colorB = tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(0, offset.y), 0, 0)).rgb;
-        float3 colorBR = tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(offset.x, offset.y), 0, 0)).rgb;
-        
-        float lumTL = GetLuminance(colorTL);
-        float lumT = GetLuminance(colorT);
-        float lumTR = GetLuminance(colorTR);
-        float lumL = GetLuminance(colorL);
-        float lumR = GetLuminance(colorR);
-        float lumBL = GetLuminance(colorBL);
-        float lumB = GetLuminance(colorB);
-        float lumBR = GetLuminance(colorBR);
-
-        float gx = (-3.0 * lumTL - 10.0 * lumL - 3.0 * lumBL) + (3.0 * lumTR + 10.0 * lumR + 3.0 * lumBR);
-        float gy = (-3.0 * lumTL - 10.0 * lumT - 3.0 * lumTR) + (3.0 * lumBL + 10.0 * lumB + 3.0 * lumBR);
-
-        return float2(gx, gy);
-    }
     
-    float3 GetScreenSpaceNormal(float2 texcoord)
+    float3 GetColor(float2 texcoord)
     {
-        // Depth-based normal calculation
+        return tex2D(ReShade::BackBuffer, texcoord).rgb;
+    }
+
+    //Based on Constantine 'MadCake' Rudenko MC_SSAO CC BY 4.0 
+    float3 GetPosition(in float2 texcoord, in float depthValue)
+    {
+        float2 fovRad;
+        fovRad.x = radians(FOV);
+        fovRad.y = fovRad.x / BUFFER_ASPECT_RATIO;
+
+        float2 uv = texcoord * 2.0 - 1.0;
+        uv.y = -uv.y;
+
+        float2 invTanHalfFov;
+        invTanHalfFov.x = 1.0 / tan(fovRad.y * 0.5);
+        invTanHalfFov.y = 1.0 / tan(fovRad.x * 0.5);
+
+        float3 viewPos;
+        viewPos.z = depthValue;
+        viewPos.xy = uv / invTanHalfFov * depthValue;
+
+        return viewPos;
+    }
+
+    float3 GetNormal(in float2 texcoord)
+    {
         float3 offset = float3(BUFFER_PIXEL_SIZE, 0.0);
+
         float2 posCenter = texcoord.xy;
         float2 posNorth = posCenter - offset.zy;
         float2 posEast = posCenter + offset.xz;
-        float2 posSouth = posCenter + offset.zy;
-        float2 posWest = posCenter - offset.xz;
 
+       // Depth
         float depthCenter = GetLinearDepth(posCenter);
         float depthNorth = GetLinearDepth(posNorth);
         float depthEast = GetLinearDepth(posEast);
-        float depthSouth = GetLinearDepth(posSouth);
-        float depthWest = GetLinearDepth(posWest);
 
-        // Use the most reliable depth samples
-        float edgeThreshold = depthCenter * 0.05;
-        bool validNorth = abs(depthNorth - depthCenter) < edgeThreshold;
-        bool validEast = abs(depthEast - depthCenter) < edgeThreshold;
-        bool validSouth = abs(depthSouth - depthCenter) < edgeThreshold;
-        bool validWest = abs(depthWest - depthCenter) < edgeThreshold;
+        float3 vertCenter = GetPosition(posCenter, depthCenter);
+        float3 vertNorth = GetPosition(posNorth, depthNorth);
+        float3 vertEast = GetPosition(posEast, depthEast);
 
-        float3 vertCenter = float3(posCenter - 0.5, 1.0) * depthCenter;
-        float3 vertNorth = validNorth ? float3(posNorth - 0.5, 1.0) * depthNorth : vertCenter;
-        float3 vertEast = validEast ? float3(posEast - 0.5, 1.0) * depthEast : vertCenter;
-        float3 vertSouth = validSouth ? float3(posSouth - 0.5, 1.0) * depthSouth : vertCenter;
-        float3 vertWest = validWest ? float3(posWest - 0.5, 1.0) * depthWest : vertCenter;
+        float3 baseNormal = normalize(cross(vertEast - vertCenter, vertNorth - vertCenter));
+        
+        //Lum
+        float lumCenter = GetLuminance(GetColor(posCenter));
+        float lumNorth = GetLuminance(GetColor(posNorth));
+        float lumEast = GetLuminance(GetColor(posEast));
 
-        float3 normalDepth1 = normalize(cross(vertCenter - vertNorth, vertCenter - vertEast));
-        float3 normalDepth2 = normalize(cross(vertCenter - vertSouth, vertCenter - vertWest));
-        float3 normalDepth = normalize(normalDepth1 + normalDepth2);
+        float heightScale = 0.01; 
+        float3 pseudoNormal = normalize(cross(
+        float3(offset.x, 0.0, (lumEast - lumCenter) * heightScale),
+        float3(0.0, -offset.y, (lumNorth - lumCenter) * heightScale)
+    ));
 
-        // Gradient-based normal calculation
-        float2 gradient = ComputeGradient(texcoord);
-        float3 normalGradient = normalize(float3(gradient.x, gradient.y, 1.0));
+        float blend = 0.5;
+        float3 finalNormal = normalize(lerp(baseNormal, pseudoNormal, blend));
 
-        // Combine normals with weighting
-        float gradientStrength = length(gradient) * 10.0;
-        float normalBlend = saturate(gradientStrength);
-        float3 combinedNormal = normalize(lerp(normalDepth, normalGradient, normalBlend * 0.5));
-
-        return combinedNormal * 0.5 + 0.5;
+        return finalNormal;
     }
     
     float3 ApplyGammaCorrection(float3 color, int ColorSpace)
@@ -438,21 +451,9 @@ namespace NEOSPACEG
         }
     }
 
-    float3 uvz_to_xyz(float2 uv, float z)
-    {
-        uv -= float2(0.5, 0.5);
-        return float3(uv.x * z, uv.y * z, z);
-    }
-
-    float2 xyz_to_uv(float3 pos)
-    {
-        float2 uv = float2(pos.x / pos.z, pos.y / pos.z);
-        return uv + float2(0.5, 0.5);
-    }
-
     float GetPerspectiveAdjustedRadius(float2 texcoord, float depth, float baseRadius)
     {
-        float3 worldPos = uvz_to_xyz(texcoord, depth);
+        float3 worldPos = GetPosition(texcoord, depth);
         float adjustedRadius = baseRadius / max(worldPos.z + PerspectiveOffset, 0.01);
         return adjustedRadius;
     }
@@ -502,76 +503,49 @@ namespace NEOSPACEG
     float4 PS_GI(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
         float depthValue = GetLinearDepth(uv);
-        float3 normal = GetScreenSpaceNormal(uv);
+        float3 normal = GetNormal(uv);
         float3 giColor = float3(0.0, 0.0, 0.0);
         int sampleCount = clamp(SampleCount, 1, 10);
         float invSampleCount = 1.0 / sampleCount;
-        float stepPhiLocal = (AngleMode == 2) ? (PI / sampleCount) : (TWO_PI / sampleCount);
+
+        float3 baseColor = tex2D(ReShade::BackBuffer, uv).rgb;
 
         float randomValue = frac(sin(dot(uv, float2(12.9898, 78.233))) * 43758.5453);
         float jitterFactor = 1.0 + SampleJitter * (randomValue * 2.0 - 1.0);
         float dynamicSampleRadius = SampleRadius * jitterFactor;
 
-        if (AngleMode == 3) // Bidirectional
+        // Bidirectional 
+        float3 tangent;
+        if (abs(normal.z) > 0.999)
         {
-            float3 tangent;
-            if (abs(normal.z) > 0.999)
-            {
-                tangent = float3(1.0, 0.0, 0.0);
-            }
-            else
-            {
-                tangent = normalize(cross(normal, float3(0.0, 0.0, 1.0)));
-            }
-            float3 bitangent = cross(normal, tangent);
-
-            for (int i = 0; i < sampleCount; i++)
-            {
-                float phi = (i + 0.5) * stepPhiLocal;
-                float3 sampleDir = tangent * cos(phi) + bitangent * sin(phi);
-                giColor += RayMarching(uv, sampleDir * dynamicSampleRadius, normal);
-            }
+            tangent = float3(1.0, 0.0, 0.0);
         }
         else
         {
-            for (int i = 0; i < sampleCount; i++)
-            {
-                float phi = (i + 0.5) * stepPhiLocal;
-                float3 sampleDir = float3(0.0, 0.0, 0.0);
-
-                switch (AngleMode)
-                {
-                    case 0: // Horizon Only
-                        sampleDir = float3(cos(phi), sin(phi), 0.0);
-                        break;
-                    case 1: // Vertical Only
-                        sampleDir = (i % 2 == 0) ? float3(0.0, 1.0, 0.0) : float3(0.0, -1.0, 0.0);
-                        break;
-                    case 2: // Unilateral
-                        sampleDir = float3(cos(phi), sin(phi), 0.0);
-                        break;
-                    default:
-                        break;
-                }
-
-                giColor += RayMarching(uv, sampleDir * dynamicSampleRadius, normal);
-            }
+            tangent = normalize(cross(normal, float3(0.0, 0.0, 1.0)));
         }
+        float3 bitangent = cross(normal, tangent);
 
+        float stepPhi = TWO_PI / sampleCount;
+        for (int i = 0; i < sampleCount; i++)
+        {
+            float phi = (i + 0.5) * stepPhi;
+            float3 sampleDir = tangent * cos(phi) + bitangent * sin(phi);
+            giColor += RayMarching(uv, sampleDir * dynamicSampleRadius, normal);
+        }
+    
         giColor *= invSampleCount * Intensity;
         float fadeFactor = max(FadeEnd - FadeStart, 0.001);
         float fade = saturate((FadeEnd - depthValue) / fadeFactor);
         giColor *= fade;
-    
         giColor = ApplyGammaCorrection(giColor, ColorSpace);
-
         return float4(giColor, 1.0);
     }
 
-    // Normals Debug
+    // Normal 
     float4 PS_Normals(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
-        float3 normal = GetScreenSpaceNormal(uv);
+        float3 normal = GetNormal(uv);
         return float4(normal, 1.0);
     }
 
@@ -594,13 +568,13 @@ namespace NEOSPACEG
         return float4(gi, 1.0);
     }
     
-   // Final Image
+    // Final Image
     float4 PS_GI_Composite(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
         float4 originalColor = tex2D(ReShade::BackBuffer, uv);
     
         float3 giOriginal = EnableTemporal ? tex2D(sGITemporal, uv).rgb : tex2D(sGI, uv).rgb;
-        float blendFactor = 0.5; 
+        float blendFactor = 0.5;
         float3 giColor = lerp(giOriginal, tex2D(blurTexture2, uv).rgb, blendFactor);
         float greyValue = dot(giColor, float3(0.299, 0.587, 0.114));
         float3 grey = float3(greyValue, greyValue, greyValue);
@@ -622,7 +596,7 @@ namespace NEOSPACEG
             return float4(giColor, 1.0);
         else if (ViewMode == 2) // Normal Debug
         {
-            float3 normal = GetScreenSpaceNormal(uv);
+            float3 normal = GetNormal(uv);
             return float4(normal * 0.5 + 0.5, 1.0);
         }
         else if (ViewMode == 3) // Depth Debug
