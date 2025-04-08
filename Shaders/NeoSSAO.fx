@@ -6,7 +6,7 @@ _  _ ____ ____ ____ ____ ____ ____
 |\ | |___ |  | [__  [__  |__| |  | 
 | \| |___ |__| ___] ___] |  | |__| 
                                                                        
-    Version 1.7
+    Version 1.7.1   
     Author: Barbatos Bachiko
     License: MIT
 
@@ -14,13 +14,14 @@ _  _ ____ ____ ____ ____ ____ ____
     History:
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
     
-    Version 1.7
-    * Temporal Filter
-    - delete unused textures
+    Version 1.7.1
+    + Quality of life
 */ 
 
 namespace NEOSSAO
 {
+    #include "ReShade.fxh"
+    
     #define INPUT_WIDTH BUFFER_WIDTH 
     #define INPUT_HEIGHT BUFFER_HEIGHT 
 
@@ -30,11 +31,31 @@ namespace NEOSSAO
     #define RES_WIDTH (INPUT_WIDTH * RES_SCALE)
     #define RES_HEIGHT (INPUT_HEIGHT * RES_SCALE) 
 
-    /*-------------------.
-    | :: Includes ::    |
-    '-------------------*/
-    #include "ReShade.fxh"
+    // version-number.fxh
+#ifndef _VERSION_NUMBER_H
+#define _VERSION_NUMBER_H
 
+#define MAJOR_VERSION 1
+#define MINOR_VERSION 7
+#define PATCH_VERSION 1
+
+#define BUILD_DOT_VERSION_(mav, miv, pav) #mav "." #miv "." #pav
+#define BUILD_DOT_VERSION(mav, miv, pav) BUILD_DOT_VERSION_(mav, miv, pav)
+#define DOT_VERSION_STR BUILD_DOT_VERSION(MAJOR_VERSION, MINOR_VERSION, PATCH_VERSION)
+
+#define BUILD_UNDERSCORE_VERSION_(prefix, mav, miv, pav) prefix ## _ ## mav ## _ ## miv ## _ ## pav
+#define BUILD_UNDERSCORE_VERSION(p, mav, miv, pav) BUILD_UNDERSCORE_VERSION_(p, mav, miv, pav)
+#define APPEND_VERSION_SUFFIX(prefix) BUILD_UNDERSCORE_VERSION(prefix, MAJOR_VERSION, MINOR_VERSION, PATCH_VERSION)
+
+#endif  //  _VERSION_NUMBER_H
+
+    uniform int APPEND_VERSION_SUFFIX(version) <
+    ui_text = "Version: "
+DOT_VERSION_STR;
+    ui_label = " ";
+    ui_type = "radio";
+>;
+    
     /*-------------------.
     | :: Settings ::    |
     '-------------------*/
@@ -54,7 +75,7 @@ namespace NEOSSAO
         ui_category = "Geral";
         ui_type = "slider";
         ui_label = "SampleCount";
-        ui_min = 0.0; ui_max = 16.0; ui_step = 1.0;
+        ui_min = 0.0; ui_max = 12.0; ui_step = 1.0;
     >
     = 10.0;
 
@@ -96,15 +117,6 @@ namespace NEOSSAO
     >
     = 0.222;
     
-    uniform int AngleMode
-    <
-        ui_category = "Ray Marching";
-        ui_type = "combo";
-        ui_label = "Angle Mode";
-        ui_items = "Horizon Only\0Vertical Only\0Unilateral\0Bidirectional\0";
-    >
-    = 3;
-    
     uniform float FadeStart
     <
         ui_category = "Fade";
@@ -134,6 +146,15 @@ namespace NEOSSAO
     >
     = 0.5;
 
+    uniform float FOV
+<
+    ui_category = "Depth";
+    ui_type = "slider";
+    ui_label = "Field of View (FOV)";
+    ui_tooltip = "Adjust the field of view for position reconstruction";
+    ui_min = 1.0; ui_max = 270.0; ui_step = 1.0;
+> = 270.0;
+    
     uniform float DepthSmoothEpsilon
     <
         ui_type = "slider";
@@ -249,11 +270,32 @@ namespace NEOSSAO
     
     float GetLinearDepth(in float2 coords)
     {
+
         return ReShade::GetLinearizedDepth(coords) * DepthMultiplier;
     }
 
-    // From DisplayDepth.fx
-    float3 GetScreenSpaceNormal(in float2 texcoord)
+    //Based on Constantine 'MadCake' Rudenko MC_SSAO CC BY 4.0 
+    float3 GetPosition(in float2 texcoord, in float depthValue)
+    {
+        float2 fovRad;
+        fovRad.x = radians(FOV);
+        fovRad.y = fovRad.x / BUFFER_ASPECT_RATIO;
+
+        float2 uv = texcoord * 2.0 - 1.0;
+        uv.y = -uv.y; 
+
+        float2 invTanHalfFov;
+        invTanHalfFov.x = 1.0 / tan(fovRad.y * 0.5); 
+        invTanHalfFov.y = 1.0 / tan(fovRad.x * 0.5);
+
+        float3 viewPos;
+        viewPos.z = depthValue;
+        viewPos.xy = uv / invTanHalfFov * depthValue;
+
+        return viewPos;
+    }
+
+    float3 GetNormal(in float2 texcoord)
     {
         float3 offset = float3(BUFFER_PIXEL_SIZE, 0.0);
         float2 posCenter = texcoord.xy;
@@ -264,18 +306,18 @@ namespace NEOSSAO
         float depthNorth = GetLinearDepth(posNorth);
         float depthEast = GetLinearDepth(posEast);
 
-        float3 vertCenter = float3(posCenter - 0.5, 1) * depthCenter;
-        float3 vertNorth = float3(posNorth - 0.5, 1) * depthNorth;
-        float3 vertEast = float3(posEast - 0.5, 1) * depthEast;
+        float3 vertCenter = GetPosition(posCenter, depthCenter);
+        float3 vertNorth = GetPosition(posNorth, depthNorth);
+        float3 vertEast = GetPosition(posEast, depthEast);
 
         return normalize(cross(vertCenter - vertNorth, vertCenter - vertEast)) * 0.5 + 0.5;
     }
     
-    float CalculateBrightness(float3 color)
+    float GetBright(float3 color)
     {
         return dot(color.rgb, float3(0.2126, 0.7152, 0.0722));
     }
-    
+
     // Ray Marching 
     struct RayMarchData
     {
@@ -326,14 +368,14 @@ namespace NEOSSAO
     float4 PS_SSAO(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
         float depthValue = GetLinearDepth(uv);
-        float3 normal = GetScreenSpaceNormal(uv);
+        float3 normal = GetNormal(uv);
         float occlusion = 0.0;
 
         float3 originalColor = tex2D(ReShade::BackBuffer, uv).rgb;
-        float brightness = CalculateBrightness(originalColor);
+        float brightness = GetBright(originalColor);
         float brightnessFactor = EnableBrightnessThreshold ? saturate(1.0 - smoothstep(BrightnessThreshold - 0.1, BrightnessThreshold + 0.1, brightness)) : 1.0;
 
-        int sampleCount = clamp(SampleCount, 1, 16);
+        int sampleCount = clamp(SampleCount, 1, 12);
         float invSampleCount = 1.0 / sampleCount;
         float stepPhi = 6.28318530718 / sampleCount;
 
@@ -343,26 +385,7 @@ namespace NEOSSAO
         for (int i = 0; i < sampleCount; i++)
         {
             float phi = (i + 0.5) * stepPhi;
-
-            float3 sampleDir;
-            if (AngleMode == 3) // Bidirectional
-            {
-                sampleDir = tangent * cos(phi) + bitangent * sin(phi);
-            }
-            else if (AngleMode == 0) // Horizon Only
-            {
-                sampleDir = float3(cos(phi), sin(phi), 0.0);
-            }
-            else if (AngleMode == 1) // Vertical Only
-            {
-                sampleDir = (i % 2 == 0) ? float3(0.0, 1.0, 0.0) : float3(0.0, -1.0, 0.0);
-            }
-            else // Unilateral
-            {
-                float phi = (i + 0.5) * 3.14159265359 / sampleCount;
-                sampleDir = float3(cos(phi), sin(phi), 0.0);
-            }
-
+            float3 sampleDir = tangent * cos(phi) + bitangent * sin(phi);
             occlusion += RayMarching(uv, sampleDir * SampleRadius, normal);
         }
 
@@ -374,7 +397,7 @@ namespace NEOSSAO
 
         return float4(occlusion, occlusion, occlusion, 1.0);
     }
-
+    
     // Temporal
     float4 PS_Temporal(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
@@ -397,7 +420,7 @@ namespace NEOSSAO
         float4 originalColor = tex2D(ReShade::BackBuffer, uv);
         float occlusion = EnableTemporal ? tex2D(sTemporal, uv).r : tex2D(sAO, uv).r;
         float depthValue = GetLinearDepth(uv);
-        float3 normal = GetScreenSpaceNormal(uv);
+        float3 normal = GetNormal(uv);
 
         switch (ViewMode)
         {
