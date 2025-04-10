@@ -25,114 +25,112 @@ THE SOFTWARE.
 
     RCAS
     
-    Version 1.3
+    Version 1.4
     Author: Barbatos Bachiko
-    About: Adaptive Sharpening filter.
+    About: FSR - [RCAS] ROBUST CONTRAST ADAPTIVE SHARPENING
 
     History:
     (*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
 
-    Version 1.3
-    x Update FsrRcasF.
-
+    Version 1.4
+    + review
 */
+
 #include "ReShade.fxh"
+
 /*---------------.
 | :: Settings :: |
 '---------------*/
 
-    uniform float sharpness <
+uniform float sharpness <
     ui_type = "slider";
     ui_label = "Sharpness Intensity";
-    ui_tooltip = "Adjust Sharpness Intensity";
+    ui_tooltip = "Controls the strength of the sharpening effect (0.0 to 1.0)";
     ui_min = 0.0;
-    ui_max = 1.0;
+    ui_max = 1.2;
+    ui_step = 0.01;
     ui_default = 0.15;
-> = 0.4;
+> = 0.8;
 
-    uniform float contrastThreshold <
-    ui_type = "slider";
-    ui_label = "Contrast Threshold";
-    ui_tooltip = "Threshold to enable sharpening on low-contrast areas";
-    ui_min = 0.0;
-    ui_max = 1.0;
-    ui_default = 0.0;
-> = 0.0;
+uniform bool enableDenoise <
+    ui_label = "Enable Noise Reduction";
+    ui_tooltip = "Reduces sharpening in noisy areas";
+    ui_default = true;
+> = true;
 
-#define FSR_RCAS_LIMIT (0.18 - (1.0/16.0))
+
+#define FSR_RCAS_LIMIT (0.25-(1.0/16.0))
+
 /*----------------.
 | :: Functions :: |
 '----------------*/
 
-float4 FsrRcasLoadF(sampler2D samp, float2 p)
+float4 FsrRcasLoadF(float2 p)
 {
-  return tex2Dlod(samp, float4(p * ReShade::PixelSize, 0, 0));
+    return tex2Dlod(ReShade::BackBuffer, float4(p, 0, 0));
 }
 
 float FsrRcasCon(float sharpness)
 {
-  return sharpness > 0.0 ? exp2(sharpness) : 0.0;
+    return sharpness; 
+}
+
+float3 FsrRcasInput(float3 rgb)
+{
+    return rgb;
 }
 
 float3 FsrRcasF(float2 ip, float con)
 {
     float2 pixelSize = ReShade::PixelSize;
+    
+    float3 b = FsrRcasInput(FsrRcasLoadF(ip + float2(0, -1) * pixelSize).rgb);
+    float3 d = FsrRcasInput(FsrRcasLoadF(ip + float2(-1, 0) * pixelSize).rgb);
+    float3 e = FsrRcasInput(FsrRcasLoadF(ip).rgb);
+    float3 f = FsrRcasInput(FsrRcasLoadF(ip + float2(1, 0) * pixelSize).rgb);
+    float3 h = FsrRcasInput(FsrRcasLoadF(ip + float2(0, 1) * pixelSize).rgb);
 
-    // Uses offsets relative to screen size
-    float3 b = FsrRcasLoadF(ReShade::BackBuffer, ip + float2(0, -1) * pixelSize * ReShade::ScreenSize.xy).rgb;
-    float3 d = FsrRcasLoadF(ReShade::BackBuffer, ip + float2(-1, 0) * pixelSize * ReShade::ScreenSize.xy).rgb;
-    float3 e = FsrRcasLoadF(ReShade::BackBuffer, ip).rgb;
-    float3 f = FsrRcasLoadF(ReShade::BackBuffer, ip + float2(1, 0) * pixelSize * ReShade::ScreenSize.xy).rgb;
-    float3 h = FsrRcasLoadF(ReShade::BackBuffer, ip + float2(0, 1) * pixelSize * ReShade::ScreenSize.xy).rgb;
+    // Calculate luma
+    float bL = dot(b, float3(0.2126, 0.7152, 0.0722));
+    float dL = dot(d, float3(0.2126, 0.7152, 0.0722));
+    float eL = dot(e, float3(0.2126, 0.7152, 0.0722));
+    float fL = dot(f, float3(0.2126, 0.7152, 0.0722));
+    float hL = dot(h, float3(0.2126, 0.7152, 0.0722));
 
-    // Luma times 2.
-    float bL = mad(.5, b.b + b.r, b.g);
-    float dL = mad(.5, d.b + d.r, d.g);
-    float eL = mad(.5, e.b + e.r, e.g);
-    float fL = mad(.5, f.b + f.r, f.g);
-    float hL = mad(.5, h.b + h.r, h.g);
-
-    // Contrast check to avoid over-sharpening low contrast areas
+    // Contrast check 
     float diffBD = max(abs(bL - eL), abs(dL - eL));
     float diffFH = max(abs(fL - eL), abs(hL - eL));
     float maxDiff = max(diffBD, diffFH);
-    if (maxDiff < contrastThreshold)
+    
+    // Noise detection 
+    float nz = 0.25 * (bL + dL + fL + hL) - eL;
+    float rangeMax = max(max(max(bL, dL), max(fL, hL)), eL);
+    float rangeMin = min(min(min(bL, dL), min(fL, hL)), eL);
+    nz = saturate(abs(nz) / (rangeMax - rangeMin));
+    nz = -0.5 * nz + 1.0;
+
+    float3 mn4 = min(min(b, d), min(f, h));
+    float3 mx4 = max(max(b, d), max(f, h));
+
+    float3 hitMin = mn4 / (4.0 * mx4);
+    float3 hitMax = (1.0 - mx4) / (4.0 * mn4 - 4.0);
+    float3 lobeRGB = max(-hitMin, hitMax);
+    float lobe = max(-FSR_RCAS_LIMIT, min(max(lobeRGB.r, max(lobeRGB.g, lobeRGB.b)), 0.0)) * con;
+    
+    if (enableDenoise)
     {
-        return e;
+        lobe *= nz;
     }
 
-    // Noise detection
-    float nz = (abs(bL - eL) + abs(dL - eL) + abs(fL - eL) + abs(hL - eL)) * 0.25;
-    float range = max(max(bL, dL), max(eL, max(fL, hL))) - min(min(bL, dL), min(eL, min(fL, hL)));
-    nz = (range > 0.001) ? (nz / range) : 0.0;
-    nz = 1.0 - (nz * 0.5);
-
-    // Calculation of minimum and maximum values ​​around the central pixel
-    float3 mn4 = min(b, min(f, h));
-    float3 mx4 = max(b, max(f, h));
-
-    // Constants to limit sharpness
-    float2 peakC = float2(1., -4.);
-    float3 hitMin = mn4 / (4. * mx4);
-    float3 hitMax = (peakC.x - mx4) / mad(4., mn4, peakC.y);
-    float3 lobeRGB = max(-hitMin, hitMax);
-    float lobe = max(-FSR_RCAS_LIMIT, min(max(lobeRGB.r, max(lobeRGB.g, lobeRGB.b)), 0.)) * con;
-
-    // Applying sharpness while preserving the original tone
-    return mad(lobe, b + d + h + f, e) / mad(4., lobe, 1.);
+    float rcpL = rcp(4.0 * lobe + 1.0);
+    return (e + lobe * (b + d + f + h)) * rcpL;
 }
 
-float4 Rcas(sampler2D samp, float2 texcoord, float sharpness)
+float4 RCAS_Pass(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
 {
-   float2 fragCoord = texcoord * tex2Dsize(samp);
-   float con = FsrRcasCon(sharpness);
-   float3 col = FsrRcasF(fragCoord, con);
-   return float4(col, 0);
-}
-
-float4 Out(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
-{
-    return Rcas(ReShade::BackBuffer, texcoord, sharpness);
+    float con = FsrRcasCon(sharpness);
+    float3 color = FsrRcasF(texcoord, con);
+    return float4(color, tex2D(ReShade::BackBuffer, texcoord).a);
 }
 
 /*-----------------.
@@ -141,9 +139,9 @@ float4 Out(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
 
 technique RCAS
 {
- pass
-  {
-    VertexShader = PostProcessVS;
-    PixelShader = Out;
-  }
+    pass
+    {
+        VertexShader = PostProcessVS;
+        PixelShader = RCAS_Pass;
+    }
 }
