@@ -6,7 +6,7 @@ _  _ ____ ____ ____ ____ ____ ____
 |\ | |___ |  | [__  [__  |__| |  | 
 | \| |___ |__| ___] ___] |  | |__| 
                                                                        
-    Version 1.7.1   
+    Version 1.7.5
     Author: Barbatos Bachiko
     License: MIT
 
@@ -14,22 +14,24 @@ _  _ ____ ____ ____ ____ ____ ____
     History:
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
     
-    Version 1.7.1
-    + Quality of life
+    Version 1.7.5
+    + Maintenance in SSAO and now use hemisphere samples
+    * Replaced another shader's GetPosition with my GetPosition
+    
 */ 
 
-namespace NEOSSAO
+namespace NEOSPACE
 {
     #include "ReShade.fxh"
     
-    #define INPUT_WIDTH BUFFER_WIDTH 
-    #define INPUT_HEIGHT BUFFER_HEIGHT 
+#define INPUT_WIDTH BUFFER_WIDTH 
+#define INPUT_HEIGHT BUFFER_HEIGHT 
 
-    #ifndef RES_SCALE
-    #define RES_SCALE 0.888
-    #endif
-    #define RES_WIDTH (INPUT_WIDTH * RES_SCALE)
-    #define RES_HEIGHT (INPUT_HEIGHT * RES_SCALE) 
+#ifndef RES_SCALE
+#define RES_SCALE 0.888
+#endif
+#define RES_WIDTH (INPUT_WIDTH * RES_SCALE)
+#define RES_HEIGHT (INPUT_HEIGHT * RES_SCALE) 
 
     // version-number.fxh
 #ifndef _VERSION_NUMBER_H
@@ -37,7 +39,7 @@ namespace NEOSSAO
 
 #define MAJOR_VERSION 1
 #define MINOR_VERSION 7
-#define PATCH_VERSION 1
+#define PATCH_VERSION 5
 
 #define BUILD_DOT_VERSION_(mav, miv, pav) #mav "." #miv "." #pav
 #define BUILD_DOT_VERSION(mav, miv, pav) BUILD_DOT_VERSION_(mav, miv, pav)
@@ -60,6 +62,27 @@ DOT_VERSION_STR;
     | :: Settings ::    |
     '-------------------*/
 
+    uniform int Guide <
+    ui_text = 
+
+        "OPTIMIZATION:\n"
+        "1. SampleCount: Number of samples (0-12). Higher values ​​= more precision\n"
+        "2. RayScale: Controls the precision of ray marching\n"
+        "3. MaxRayDistance: Maximum distance of ray marching. Controls the range of AO\n\n"
+        
+        "RECOMMENDATIONS:\n"
+        "1. Use BrightnessThreshold to preserve bright areas\n"
+        "2. Use DAA.fx in Temporal mode to reduce flickering\n"
+        "3. Adjust FadeStart/FadeEnd to control the distance of the effect\n\n"
+        "4. Adjust the DepthSmoothEpsilon if the AO is showing some artifact\n"
+        "5 Adjust DepthThreshold, Ignore the sky (adjust for your game)\n\n";
+        
+	ui_category = "Guide";
+	ui_category_closed = true;
+	ui_label = " ";
+	ui_type = "radio";
+>;
+    
     uniform int ViewMode
     < 
         ui_category = "Geral";
@@ -77,7 +100,7 @@ DOT_VERSION_STR;
         ui_label = "SampleCount";
         ui_min = 0.0; ui_max = 12.0; ui_step = 1.0;
     >
-    = 10.0;
+    = 8.0;
 
     uniform float Intensity
     <
@@ -144,7 +167,7 @@ DOT_VERSION_STR;
         ui_label = "Depth Multiplier";
         ui_min = 0.1; ui_max = 5.0; ui_step = 0.1;
     >
-    = 0.5;
+    = 1.0;
 
     uniform float FOV
 <
@@ -153,7 +176,7 @@ DOT_VERSION_STR;
     ui_label = "Field of View (FOV)";
     ui_tooltip = "Adjust the field of view for position reconstruction";
     ui_min = 1.0; ui_max = 270.0; ui_step = 1.0;
-> = 270.0;
+> = 60.0;
     
     uniform float DepthSmoothEpsilon
     <
@@ -194,7 +217,7 @@ DOT_VERSION_STR;
 
     uniform bool EnableBrightnessThreshold
     < 
-        ui_category = "Extra";
+        ui_category = "Visibility";
         ui_type = "checkbox";
         ui_label = "Enable Brightness Threshold"; 
         ui_tooltip = "Enable or disable the brightness threshold.";
@@ -203,7 +226,7 @@ DOT_VERSION_STR;
 
     uniform float BrightnessThreshold
     <
-        ui_category = "Extra";
+        ui_category = "Visibility";
         ui_type = "slider";
         ui_label = "Brightness Threshold";
         ui_tooltip = "Pixels with brightness above this threshold will have reduced occlusion.";
@@ -225,7 +248,7 @@ DOT_VERSION_STR;
     | :: Textures :: |
     '---------------*/
 
-    texture2D AOTex
+    texture2D AOTex1
     {
         Width = RES_WIDTH;
         Height = RES_HEIGHT;
@@ -246,9 +269,9 @@ DOT_VERSION_STR;
         Format = RGBA8;
     };
 
-    sampler2D sAO
+    sampler2D sAO1
     {
-        Texture = AOTex;
+        Texture = AOTex1;
         SRGBTexture = false;
     };
 
@@ -270,50 +293,48 @@ DOT_VERSION_STR;
     
     float GetLinearDepth(in float2 coords)
     {
-
         return ReShade::GetLinearizedDepth(coords) * DepthMultiplier;
     }
 
-    //Based on Constantine 'MadCake' Rudenko MC_SSAO CC BY 4.0 
-    float3 GetPosition(in float2 texcoord, in float depthValue)
+    float3 GetPosition(float2 uv, float depth, float4 projParams)
     {
-        float2 fovRad;
-        fovRad.x = radians(FOV);
-        fovRad.y = fovRad.x / BUFFER_ASPECT_RATIO;
-
-        float2 uv = texcoord * 2.0 - 1.0;
-        uv.y = -uv.y; 
-
-        float2 invTanHalfFov;
-        invTanHalfFov.x = 1.0 / tan(fovRad.y * 0.5); 
-        invTanHalfFov.y = 1.0 / tan(fovRad.x * 0.5);
-
-        float3 viewPos;
-        viewPos.z = depthValue;
-        viewPos.xy = uv / invTanHalfFov * depthValue;
-
-        return viewPos;
+        float2 clip = uv * 2.0 - 1.0;
+        clip.y *= -1.0;
+        float3 ray = float3(clip.x / projParams.x, clip.y / projParams.y, 1.0);
+        return ray * depth;
     }
 
-    float3 GetNormal(in float2 texcoord)
+    float4 GetProjParams(float fov, float aspectRatio)
     {
-        float3 offset = float3(BUFFER_PIXEL_SIZE, 0.0);
-        float2 posCenter = texcoord.xy;
-        float2 posNorth = posCenter - offset.zy;
-        float2 posEast = posCenter + offset.xz;
+        float cot = 1.0 / tan(radians(fov) * 0.5);
+        return float4(cot * aspectRatio, cot, 0, 0);
+    }
 
-        float depthCenter = GetLinearDepth(posCenter);
-        float depthNorth = GetLinearDepth(posNorth);
-        float depthEast = GetLinearDepth(posEast);
-
-        float3 vertCenter = GetPosition(posCenter, depthCenter);
-        float3 vertNorth = GetPosition(posNorth, depthNorth);
-        float3 vertEast = GetPosition(posEast, depthEast);
-
-        return normalize(cross(vertCenter - vertNorth, vertCenter - vertEast)) * 0.5 + 0.5;
+    float3 GetNormal(in float2 uv)
+    {
+        const float2 offset1 = float2(0.0, BUFFER_PIXEL_SIZE.y);
+        const float2 offset2 = float2(BUFFER_PIXEL_SIZE.x, 0.0);
+    
+        float depth = GetLinearDepth(uv);
+        float depth1 = GetLinearDepth(uv + offset1);
+        float depth2 = GetLinearDepth(uv + offset2);
+    
+        float4 proj = GetProjParams(FOV, BUFFER_ASPECT_RATIO);
+    
+        float3 pos = GetPosition(uv, depth, proj);
+        float3 pos1 = GetPosition(uv + offset1, depth1, proj);
+        float3 pos2 = GetPosition(uv + offset2, depth2, proj);
+    
+        float3 v1 = pos1 - pos;
+        float3 v2 = pos2 - pos;
+    
+        float3 normal = normalize(cross(v1, v2));
+        normal.z = abs(normal.z);
+    
+        return normal * 0.5 + 0.5;
     }
     
-    float GetBright(float3 color)
+    float GetLum(float3 color)
     {
         return dot(color.rgb, float3(0.2126, 0.7152, 0.0722));
     }
@@ -365,33 +386,54 @@ DOT_VERSION_STR;
         return data.occlusion;
     }
     
+    static const float3 hemisphereSamples[12] =
+    {
+    //45° 
+        float3(0.707107, 0.0, 0.707107),
+    float3(0.5, 0.5, 0.707107),
+    float3(0.0, 0.707107, 0.707107),
+    float3(-0.5, 0.5, 0.707107),
+    float3(-0.707107, 0.0, 0.707107),
+    float3(-0.5, -0.5, 0.707107),
+    float3(0.0, -0.707107, 0.707107),
+    float3(0.5, -0.5, 0.707107),
+
+    //15°
+    float3(0.258819, 0.0, 0.965926),
+    float3(0.0, 0.258819, 0.965926),
+    float3(-0.258819, 0.0, 0.965926),
+    float3(0.0, -0.258819, 0.965926)
+    };
+
+
     float4 PS_SSAO(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
         float depthValue = GetLinearDepth(uv);
         float3 normal = GetNormal(uv);
-        float occlusion = 0.0;
-
         float3 originalColor = tex2D(ReShade::BackBuffer, uv).rgb;
-        float brightness = GetBright(originalColor);
-        float brightnessFactor = EnableBrightnessThreshold ? saturate(1.0 - smoothstep(BrightnessThreshold - 0.1, BrightnessThreshold + 0.1, brightness)) : 1.0;
-
-        int sampleCount = clamp(SampleCount, 1, 12);
-        float invSampleCount = 1.0 / sampleCount;
-        float stepPhi = 6.28318530718 / sampleCount;
-
-        float3 tangent = normalize(cross(normal, float3(0.0, 0.0, 1.0)));
+    
+        float brightness = GetLum(originalColor);
+        float brightnessFactor = 1.0;
+        if (EnableBrightnessThreshold)
+        {
+            brightnessFactor = saturate(1.0 - smoothstep(BrightnessThreshold - 0.1, BrightnessThreshold + 0.1, brightness));
+        }
+    
+        float3 tangent = normalize(abs(normal.z) < 0.999 ? cross(normal, float3(0.0, 0.0, 1.0)) : float3(1.0, 0.0, 0.0));
         float3 bitangent = cross(normal, tangent);
-
+        float3x3 TBN = float3x3(tangent, bitangent, normal);
+    
+        int sampleCount = clamp(SampleCount, 1, 12);
+        float occlusion = 0.0;
+    
         for (int i = 0; i < sampleCount; i++)
         {
-            float phi = (i + 0.5) * stepPhi;
-            float3 sampleDir = tangent * cos(phi) + bitangent * sin(phi);
+            float3 sampleDir = mul(TBN, hemisphereSamples[i]);
             occlusion += RayMarching(uv, sampleDir * SampleRadius, normal);
         }
-
+    
         occlusion = (occlusion / sampleCount) * Intensity;
         occlusion *= brightnessFactor;
-
         float fade = (depthValue < FadeStart) ? 1.0 : saturate((FadeEnd - depthValue) / (FadeEnd - FadeStart));
         occlusion *= fade;
 
@@ -401,7 +443,7 @@ DOT_VERSION_STR;
     // Temporal
     float4 PS_Temporal(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
-        float currentOcclusion = tex2D(sAO, uv).r;
+        float currentOcclusion = tex2D(sAO1, uv).r;
         float historyOcclusion = tex2D(sSSAOHistory, uv).r;
         float occlusion = EnableTemporal ? lerp(currentOcclusion, historyOcclusion, TemporalFilterStrength) : currentOcclusion;
         return float4(occlusion, occlusion, occlusion, 1.0);
@@ -410,7 +452,7 @@ DOT_VERSION_STR;
     // History
     float4 PS_SaveHistory(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
-        float occlusion = EnableTemporal ? tex2D(sTemporal, uv).r : tex2D(sAO, uv).r;
+        float occlusion = EnableTemporal ? tex2D(sTemporal, uv).r : tex2D(sAO1, uv).r;
         return float4(occlusion, occlusion, occlusion, 1.0);
     }
     
@@ -418,7 +460,7 @@ DOT_VERSION_STR;
     float4 PS_Composite(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
         float4 originalColor = tex2D(ReShade::BackBuffer, uv);
-        float occlusion = EnableTemporal ? tex2D(sTemporal, uv).r : tex2D(sAO, uv).r;
+        float occlusion = EnableTemporal ? tex2D(sTemporal, uv).r : tex2D(sAO1, uv).r;
         float depthValue = GetLinearDepth(uv);
         float3 normal = GetNormal(uv);
 
@@ -460,7 +502,7 @@ DOT_VERSION_STR;
         {
             VertexShader = PostProcessVS;
             PixelShader = PS_SSAO;
-            RenderTarget = AOTex;
+            RenderTarget = AOTex1;
             ClearRenderTargets = true;
         }
         pass Temporal
@@ -484,4 +526,4 @@ DOT_VERSION_STR;
             BlendEnable = false;
         }
     }
-} 
+}
