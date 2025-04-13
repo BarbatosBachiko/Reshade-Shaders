@@ -4,7 +4,7 @@
 
     SSRT
 
-    Version 1.1
+    Version 1.2
     Author: Barbatos Bachiko
     Original: jebbyk
     License: GNU Affero General Public License v3.0
@@ -14,9 +14,9 @@
     History:
     (*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
 
-    Version 1.1
-    * Implemented new denoising algorithm
-    + Pespective Improvement 
+    Version 1.2
+    * New Denoising Again
+    + Use DH_UBER_RT Noise texture
      
 */
 
@@ -45,7 +45,7 @@ uniform float BASE_RAYS_LENGTH <
 
 uniform int RAYS_AMOUNT <
     ui_type = "drag";
-    ui_min = 1; ui_max = 256;
+    ui_min = 1; ui_max = 12;
     ui_step = 1;
     ui_label = "Rays amount";
     ui_tooltip = "Decreases noise amount";
@@ -95,7 +95,7 @@ uniform float TEMPORAL_FACTOR <
     ui_label = "Temporal factor";
     ui_tooltip = "Less noise but more ghosting";
     ui_category = "Filtering";
-> = 0.0;
+> = 0.7;
 
 uniform float DEGHOSTING_THRESHOLD <
     ui_type = "drag";
@@ -124,33 +124,6 @@ uniform float TONE <
     ui_category = "Experimental";
 > = 0.3;
 
-uniform float BLURING_AMOUNT <
-    ui_type = "drag";
-    ui_min = 0.0; ui_max = 8.0;
-    ui_step = 0.1;
-    ui_label = "Bluring amount";
-    ui_tooltip = "Less noise but less details";
-    ui_category = "Denoising";
-> = 1.0;
-
-uniform float EDGE_STOPPING_NORMAL <
-    ui_type = "drag";
-    ui_min = 0.0; ui_max = 1.0;
-    ui_step = 0.01;
-    ui_label = "Normal Edge Stopping";
-    ui_tooltip = "Controls how much normals affect edge detection in denoising";
-    ui_category = "Denoising";
-> = 0.5;
-
-uniform float EDGE_STOPPING_DEPTH <
-    ui_type = "drag";
-    ui_min = 0.0; ui_max = 1.0;
-    ui_step = 0.01;
-    ui_label = "Depth Edge Stopping";
-    ui_tooltip = "Controls how much depth affects edge detection in denoising";
-    ui_category = "Denoising";
-> = 0.5;
-
 uniform int DENOISE_ITERATIONS <
     ui_type = "drag";
     ui_min = 1; ui_max = 5;
@@ -158,7 +131,7 @@ uniform int DENOISE_ITERATIONS <
     ui_label = "Denoise Iterations";
     ui_tooltip = "Number of denoising passes to apply";
     ui_category = "Denoising";
-> = 3;
+> = 2;
 
 uniform int FRAME_COUNT < source = "framecount"; >;
 
@@ -188,40 +161,6 @@ sampler giTexture1
     Texture = fGiTexture1;
 };
 
-texture fBlurTexture0
-{
-    Width = BUFFER_WIDTH;
-    Height = BUFFER_HEIGHT;
-    Format = RGBA16F; 
-};
-sampler blurTexture0
-{
-    Texture = fBlurTexture0;
-};
-
-texture fBlurTexture1
-{
-    Width = BUFFER_WIDTH;
-    Height = BUFFER_HEIGHT;
-    Format = RGBA16F; 
-};
-sampler blurTexture1
-{
-    Texture = fBlurTexture1;
-};
-
-texture fBlurTexture2
-{
-    Width = BUFFER_WIDTH;
-    Height = BUFFER_HEIGHT;
-    Format = RGBA16F;
-};
-sampler blurTexture2
-{
-    Texture = fBlurTexture2;
-};
-
-
 texture fEdgeTexture
 {
     Width = BUFFER_WIDTH;
@@ -244,6 +183,19 @@ sampler noiseTexture
     Texture = fNoiseTexture;
     AddressU = WRAP;
     AddressV = WRAP;
+};
+
+texture2D GIDenoised
+{
+    Width = BUFFER_WIDTH;
+    Height = BUFFER_HEIGHT;
+    Format = RGBA8;
+};
+
+sampler2D sDenoised
+{
+    Texture = GIDenoised;
+    SRGBTexture = false;
 };
 
     /*----------------.
@@ -378,7 +330,7 @@ float4 Trace(in float4 position : SV_Position, in float2 texcoord : TEXCOORD) : 
             float3 photon = tex2Dlod(ReShade::BackBuffer, float4(newTexCoordCentred.xy, 0.0, 0.0)).rgb;
             float correctionFactor = max(0.2, abs(normalAlignment));
             
-            photon = photon * photon; 
+            photon = photon * photon;
             accumulatedColor.rgb += photon * invRays * correctionFactor;
             
             hitFound = true;
@@ -411,131 +363,61 @@ float4 StoreEdges(float4 position : SV_Position, float2 texcoord : TEXCOORD) : S
     return float4(normal, depth);
 }
 
-float4 Denoise(float4 position : SV_Position, float2 texcoord : TEXCOORD, sampler sourceSampler, float stepSize) : SV_Target
+float4 PS_MultiIterationDenoise(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
 {
-    const float2 pixelSize = ReShade::PixelSize;
-    const int radius = 2;
+    float3 centerColor = tex2Dlod(giTexture0, float4(uv, 0.0, 0.0)).rgb;
+    float centerDepth = GetLinearizedDepth(uv).x;
+    float3 centerNormal = GetScreenSpaceNormal(uv);
     
-    float4 centerColor = tex2Dlod(sourceSampler, float4(texcoord, 0.0, 0.0));
-    float4 centerEdge = tex2Dlod(edgeTexture, float4(texcoord, 0.0, 0.0));
-    float centerDepth = centerEdge.a;
-    float3 centerNormal = centerEdge.rgb;
+    float3 result = centerColor;
     
-    float4 result = float4(0, 0, 0, 0);
-    float totalWeight = 0;
-    
-    for (int x = -radius; x <= radius; x++)
+    for (int iteration = 0; iteration < DENOISE_ITERATIONS; iteration++)
     {
-        for (int y = -radius; y <= radius; y++)
+        int stepSize = 1 << iteration;
+        float3 sum = float3(0.0, 0.0, 0.0);
+        float weightSum = 0.0;
+        
+        for (int i = -2; i <= 2; i++)
         {
-            float2 offset = float2(x, y) * stepSize * pixelSize;
-            float2 sampleCoord = texcoord + offset;
-            
-            float4 sampleColor = tex2Dlod(sourceSampler, float4(sampleCoord, 0.0, 0.0));
-            float4 sampleEdge = tex2Dlod(edgeTexture, float4(sampleCoord, 0.0, 0.0));
-            
-            // Edge stopping functions based on depth and normal
-            float depthWeight = exp(-abs(centerDepth - sampleEdge.a) / (EDGE_STOPPING_DEPTH * 0.1 + 0.0001));
-            float normalWeight = pow(max(0, dot(centerNormal, sampleEdge.rgb)), EDGE_STOPPING_NORMAL * 8.0 + 1.0);
-            float spatialWeight = exp(-(x * x + y * y) / (radius + 0.001));
-            
-            float weight = depthWeight * normalWeight * spatialWeight;
-            
-            result += sampleColor * weight;
-            totalWeight += weight;
+            for (int j = -2; j <= 2; j++)
+            {
+                if (i == 0 && j == 0)
+                    continue;
+                
+                float2 offset = float2(i, j) * BUFFER_PIXEL_SIZE * stepSize;
+                float2 sampleUV = uv + offset;
+                float3 sampleColor = tex2Dlod(giTexture0, float4(sampleUV, 0.0, 0.0)).rgb;
+                float sampleDepth = GetLinearizedDepth(sampleUV).x;
+                float3 sampleNormal = GetScreenSpaceNormal(sampleUV);
+                
+             // - depthWeight: the smaller the depth difference, the greater the weight
+             // - normalWeight: enhances similarly oriented pixels
+             // - spatialWeight: favors pixels closer together in screen space
+                float depthWeight = exp(-abs(centerDepth - sampleDepth) / (DEPTH_THRESHOLD * 10.0));
+                float normalWeight = pow(max(0.0, dot(centerNormal, sampleNormal)), 8.0);
+                float spatialWeight = 1.0 / (1.0 + length(float2(i, j)));
+                float totalWeight = depthWeight * normalWeight * spatialWeight;
+                
+                sum += sampleColor * totalWeight;
+                weightSum += totalWeight;
+            }
         }
+                    
+        sum += centerColor;
+        weightSum += 1.0;
+        result = sum / weightSum;
+        centerColor = result;
     }
     
-    result /= max(totalWeight, 0.0001);
-    result.a = centerColor.a;
-    
-    return result;
+    return float4(result, 1.0);
 }
 
-float4 Denoise0(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
-{
-    return Denoise(position, texcoord, giTexture0, 1.0 * BLURING_AMOUNT);
-}
-
-float4 Denoise1(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
-{
-    return Denoise(position, texcoord, blurTexture0, 2.0 * BLURING_AMOUNT);
-}
-
-float4 Denoise2(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
-{
-    return Denoise(position, texcoord, blurTexture1, 4.0 * BLURING_AMOUNT);
-}
-
-float4 Downsample0(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
-{
-    const float kernelWeights[5] = { 1.0 / 16.0, 4.0 / 16.0, 6.0 / 16.0, 4.0 / 16.0, 1.0 / 16.0 };
-    const float stepSize = 1.0 * BLURING_AMOUNT;
-    const float2 pixelSize = ReShade::PixelSize;
-    
-    float4 color = 0;
-    
-    for (int x = -2; x <= 2; x++)
-    {
-        for (int y = -2; y <= 2; y++)
-        {
-            const float2 offset = float2(x, y) * stepSize * pixelSize;
-            const float weight = kernelWeights[x + 2] * kernelWeights[y + 2];
-            
-            color += tex2Dlod(giTexture0, float4(texcoord + offset, 0.0, 0.0)) * weight;
-        }
-    }
-    
-    return color;
-}
-
-float4 Downsample1(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
-{
-    const float kernelWeights[5] = { 1.0 / 16.0, 4.0 / 16.0, 6.0 / 16.0, 4.0 / 16.0, 1.0 / 16.0 };
-    const float stepSize = 2.0 * BLURING_AMOUNT;
-    const float2 pixelSize = ReShade::PixelSize;
-    
-    float4 color = 0;
-    
-    for (int x = -2; x <= 2; x++)
-    {
-        for (int y = -2; y <= 2; y++)
-        {
-            const float2 offset = float2(x, y) * stepSize * pixelSize;
-            const float weight = kernelWeights[x + 2] * kernelWeights[y + 2];
-            color += tex2Dlod(blurTexture0, float4(texcoord + offset, 0.0, 0.0)) * weight;
-        }
-    }
-    
-    return color;
-}
-
-float4 Downsample2(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
-{
-    const float kernelWeights[5] = { 1.0 / 16.0, 4.0 / 16.0, 6.0 / 16.0, 4.0 / 16.0, 1.0 / 16.0 };
-    const float stepSize = 4.0 * BLURING_AMOUNT;
-    const float2 pixelSize = ReShade::PixelSize;
-    
-    float4 color = 0;
-    
-    for (int x = -2; x <= 2; x++)
-    {
-        for (int y = -2; y <= 2; y++)
-        {
-            const float2 offset = float2(x, y) * stepSize * pixelSize;
-            const float weight = kernelWeights[x + 2] * kernelWeights[y + 2];
-            color += tex2Dlod(blurTexture1, float4(texcoord + offset, 0.0, 0.0)) * weight;
-        }
-    }
-    
-    return color;
-}
 
 float4 Combine(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
 {
     if (ViewMode == 1)
     {
-        float3 gi = tex2Dlod(blurTexture2, float4(texcoord.xy, 0.0, 0.0)).rgb * EFFECT_INTENSITY;
+        float3 gi = tex2Dlod(sDenoised, float4(texcoord.xy, 0.0, 0.0)).rgb * EFFECT_INTENSITY;
         return float4(gi, 1.0);
     }
     else if (ViewMode == 2)
@@ -553,7 +435,7 @@ float4 Combine(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_T
     {
         float depth = GetLinearizedDepth(texcoord).x;
         float3 color = tex2Dlod(ReShade::BackBuffer, float4(texcoord.xy, 0.0, 0.0)).rgb;
-        float3 gi = tex2Dlod(blurTexture2, float4(texcoord.xy, 0.0, 0.0)).rgb * EFFECT_INTENSITY;
+        float3 gi = tex2Dlod(sDenoised, float4(texcoord.xy, 0.0, 0.0)).rgb * EFFECT_INTENSITY;
         
         color = lerp(color, color + gi, TONE);
         
@@ -587,28 +469,12 @@ technique SSRT <
         PixelShader = StoreEdges;
         RenderTarget0 = fEdgeTexture;
     }
-
-    pass Denoise0
+    pass Denoise
     {
         VertexShader = PostProcessVS;
-        PixelShader = Denoise0;
-        RenderTarget0 = fBlurTexture0;
+        PixelShader = PS_MultiIterationDenoise;
+        RenderTarget = GIDenoised;
     }
-
-    pass Denoise1
-    {
-        VertexShader = PostProcessVS;
-        PixelShader = Denoise1;
-        RenderTarget0 = fBlurTexture1;
-    }
-
-    pass Denoise2
-    {
-        VertexShader = PostProcessVS;
-        PixelShader = Denoise2;
-        RenderTarget0 = fBlurTexture2;
-    }
-
     pass Combine
     {
         VertexShader = PostProcessVS;
@@ -621,4 +487,4 @@ technique SSRT <
         PixelShader = SaveGI;
         RenderTarget0 = fGiTexture1;
     }
-  }
+}
