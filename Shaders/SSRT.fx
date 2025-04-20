@@ -2,489 +2,596 @@
 | :: Description :: |
 '-------------------/
 
-    SSRT
+    SSRT - Screen Space Ray Tracing
 
-    Version 1.2
+    Version 1.3
     Author: Barbatos Bachiko
-    Original: jebbyk
-    License: GNU Affero General Public License v3.0
-    
-    About: Open source screen space ray tracing shader for reshade.
+    Original SSRT by jebbyk : https://github.com/jebbyk/SSRT-for-reshade/blob/main/ssrt.fx
+
+    License: GNU Affero General Public License v3.0 : https://github.com/jebbyk/SSRT-for-reshade/blob/main/LICENSE
+    Smooth Normals use AlucardDH MIT License : https://github.com/AlucardDH/dh-reshade-shaders-mit/blob/master/LICENSE
+
+    About: Screen Space Ray Tracing
 
     History:
-    (*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
+    (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
 
-    Version 1.2
-    * New Denoising Again
-    + Use DH_UBER_RT Noise texture
-     
+    Version 1.3
+    * New dedicated normal with smooth normal, Thanks AlucardDH: https://github.com/AlucardDH/dh-reshade-shaders-mit/blob/master/smoothNormals.fx
+    * Multiple blend modes (Additive/Multiplicative/Alpha)
+    * Motion vector support for temporal
+    * Configurable resolution scaling
+    * Depth multiplier control
+    * Sky color customization
+    * Saturation control for results
+    
+    + performance
+    
+    - Added compatibility with multiple motion vector sources
+    - Improved parameter organization
 */
+
+/*-------------------.
+| :: Definitions ::  |
+'-------------------*/
 
 #include "ReShade.fxh"
 
-    /*-------------------.
-    | :: Settings ::    |
-    '-------------------*/
+// Motion vector configuration
+#ifndef USE_MARTY_LAUNCHPAD_MOTION
+#define USE_MARTY_LAUNCHPAD_MOTION 0
+#endif
+#ifndef USE_VORT_MOTION
+#define USE_VORT_MOTION 0
+#endif
 
+// Resolution scaling
+#ifndef RES_SCALE
+#define RES_SCALE 0.8
+#endif
+#define RES_WIDTH (ReShade::ScreenSize.x * RES_SCALE)
+#define RES_HEIGHT (ReShade::ScreenSize.y * RES_SCALE)
+
+// Utility macros
+#define getDepth(coords) (ReShade::GetLinearizedDepth(coords) * DepthMultiplier)
+#define GetColor(c) tex2Dlod(ReShade::BackBuffer, float4((c).xy, 0, 0))
+#define S_PC MagFilter=POINT;MinFilter=POINT;MipFilter=POINT;AddressU=Clamp;AddressV=Clamp;AddressW=Clamp;
+
+/*-------------------.
+| :: Parameters ::   |
+'-------------------*/
+
+// General Settings
 uniform int ViewMode <
     ui_type = "combo";
     ui_category = "General";
     ui_label = "View Mode";
-    ui_tooltip = "Select the view mode";
-    ui_items = "Combine\0GI Debug\0Normal Debug\0Depth Debug\0";
+    ui_items = "None\0GI Debug\0Normal Debug\0Depth Debug\0";
 > = 0;
 
+uniform int BlendMode <
+    ui_type = "combo";
+    ui_category = "General";
+    ui_label = "Blend Mode";
+    ui_items = "Additive\0Multiplicative\0Alpha Blend\0";
+> = 1;
+
+// Ray Tracing Settings
 uniform float BASE_RAYS_LENGTH <
-    ui_type = "drag";
-    ui_min = 0.1; ui_max = 10.0;
+    ui_type = "slider";
+    ui_min = 0.1; ui_max = 40.0;
     ui_step = 0.1;
-    ui_label = "Base ray length";
-    ui_tooltip = "Increases distance of light spreading, decreases intersections detection quality";
     ui_category = "Ray Tracing";
-> = 2.5;
+    ui_label = "Base ray length";
+> = 35.0;
 
 uniform int RAYS_AMOUNT <
-    ui_type = "drag";
-    ui_min = 1; ui_max = 12;
+    ui_type = "slider";
+    ui_min = 1; ui_max = 4;
     ui_step = 1;
-    ui_label = "Rays amount";
-    ui_tooltip = "Decreases noise amount";
     ui_category = "Ray Tracing";
+    ui_label = "Rays amount";
 > = 1;
 
 uniform int STEPS_PER_RAY <
-    ui_type = "drag";
+    ui_type = "slider";
     ui_min = 1; ui_max = 256;
     ui_step = 1;
-    ui_label = "Steps per ray";
-    ui_tooltip = "Increases quality of intersections detection";
     ui_category = "Ray Tracing";
-> = 32;
+    ui_label = "Steps per ray";
+> = 120.0;
 
-uniform float EFFECT_INTENSITY <
-    ui_type = "drag";
+uniform float Intensity <
+    ui_type = "slider";
     ui_min = 0.1; ui_max = 10.0;
     ui_step = 0.1;
-    ui_label = "Effect intensity";
-    ui_tooltip = "Power of effect";
     ui_category = "Ray Tracing";
-> = 10.0;
+    ui_label = "Intensity";
+> = 2.5;
 
 uniform float DEPTH_THRESHOLD <
-    ui_type = "drag";
+    ui_type = "slider";
     ui_min = 0.001; ui_max = 0.01;
     ui_step = 0.001;
-    ui_label = "Depth Threshold";
-    ui_tooltip = "Less accurate tracing but less noise at the same time";
     ui_category = "Ray Tracing";
-> = 0.002;
+    ui_label = "Depth Threshold";
+> = 0.010;
 
 uniform float NORMAL_THRESHOLD <
-    ui_type = "drag";
+    ui_type = "slider";
     ui_min = -1.0; ui_max = 1.0;
     ui_step = 0.001;
-    ui_label = "Normal Threshold";
-    ui_tooltip = "More accurate tracing but more noise at the same time";
     ui_category = "Ray Tracing";
-> = 0.0;
-
-uniform float TEMPORAL_FACTOR <
-    ui_type = "drag";
-    ui_min = 0.0; ui_max = 0.9;
-    ui_step = 0.1;
-    ui_label = "Temporal factor";
-    ui_tooltip = "Less noise but more ghosting";
-    ui_category = "Filtering";
-> = 0.7;
-
-uniform float DEGHOSTING_THRESHOLD <
-    ui_type = "drag";
-    ui_min = 0.0; ui_max = 0.1;
-    ui_step = 0.001;
-    ui_label = "Deghosting threshold";
-    ui_tooltip = "Smaller number decreases ghosting caused by temporal gi blending but increases noise during movement";
-    ui_category = "Filtering";
-> = 0.002;
+    ui_label = "Normal Threshold";
+> = -1.0;
 
 uniform float PERSPECTIVE_COEFFICIENT <
-    ui_type = "drag";
+    ui_type = "slider";
     ui_min = 0.0; ui_max = 10.0;
     ui_step = 0.1;
-    ui_label = "Perspective coefficient";
-    ui_tooltip = "Controls perspective projection";
-    ui_category = "Experimental";
-> = 2.0;
+    ui_category = "Ray Tracing";
+    ui_label = "Pespective";
+> = 1.5;
 
-uniform float TONE <
-    ui_type = "drag";
-    ui_min = 0.0; ui_max = 10.0;
-    ui_step = 0.1;
-    ui_label = "Tone";
-    ui_tooltip = "Controls tone mapping intensity";
-    ui_category = "Experimental";
+// Depth Settings
+uniform float DepthMultiplier <
+    ui_type = "slider";
+    ui_category = "Depth";
+    ui_label = "Depth Multiplier";
+    ui_min = 0.1; ui_max = 5.0; ui_step = 0.1;
+> = 1.0;
+
+// Normal Settings
+uniform bool bSmoothNormals <
+    ui_category = "Normal";
+    ui_label = "Smooth Normals";
+> = true;
+
+// Bump Mapping Settings
+uniform bool EnableBumpMapping <
+    ui_category = "Bump Mapping";
+    ui_label = "Enable Bump Mapping";
+> = true;
+
+uniform float BumpIntensity <
+    ui_type = "slider";
+    ui_category = "Bump Mapping";
+    ui_label = "Bump Intensity";
+    ui_min = 0.0; ui_max = 20.0; ui_step = 0.01;
+> = 0.5;
+
+uniform float3 BumpDirection < 
+    ui_type = "slider";
+    ui_category = "Bump Mapping";
+    ui_label = "Bump Direction XYZ";
+    ui_min = -2.0; ui_max = 2.0;
+> = float3(-2.0, 1.0, -0.5); 
+
+uniform float BumpDepth <
+    ui_type = "slider";
+    ui_category = "Bump Mapping";
+    ui_label = "Bump Depth";
+    ui_min = 0.0; ui_max = 3.0;
+> = 0.7;
+
+// Temporal Settings
+uniform bool EnableTemporal <
+    ui_type = "checkbox";
+    ui_category = "Temporal";
+    ui_label = "Temporal Filtering";
+> = true;
+
+uniform float TemporalFilterStrength <
+    ui_type = "slider";
+    ui_category = "Temporal";
+    ui_label = "Temporal Filter";
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
 > = 0.3;
 
-uniform int DENOISE_ITERATIONS <
-    ui_type = "drag";
-    ui_min = 1; ui_max = 5;
-    ui_step = 1;
-    ui_label = "Denoise Iterations";
-    ui_tooltip = "Number of denoising passes to apply";
-    ui_category = "Denoising";
-> = 2;
+// Extra Settings
+uniform float3 SkyColor < 
+    ui_type = "color";
+    ui_category = "Extra";
+    ui_label = "Sky Color";
+> = float3(0.0, 0.0, 0.0);
+
+uniform float Saturation <
+    ui_type = "slider";
+    ui_category = "Extra";
+    ui_label = "Saturation";
+    ui_min = 0.0; ui_max = 2.0; ui_step = 0.05;
+> = 1.0;
 
 uniform int FRAME_COUNT < source = "framecount"; >;
 
-    /*---------------.
-    | :: Textures :: |
-    '---------------*/
+/*---------------.
+| :: Textures :: |
+'---------------*/
 
-texture fGiTexture0
-{
-    Width = BUFFER_WIDTH;
-    Height = BUFFER_HEIGHT;
-    Format = RGBA16F;
-};
-sampler giTexture0
-{
-    Texture = fGiTexture0;
-};
-
-texture fGiTexture1
-{
-    Width = BUFFER_WIDTH;
-    Height = BUFFER_HEIGHT;
-    Format = RGBA16F;
-};
-sampler giTexture1
-{
-    Texture = fGiTexture1;
-};
-
-texture fEdgeTexture
-{
-    Width = BUFFER_WIDTH;
-    Height = BUFFER_HEIGHT;
-    Format = RGBA16F;
-};
-sampler edgeTexture
-{
-    Texture = fEdgeTexture;
-};
-
-texture fNoiseTexture < source = "SSRT_bluenoise.png"; >
-{
-    Width = 32;
-    Height = 32;
-    Format = RGBA8;
-};
-sampler noiseTexture
-{
-    Texture = fNoiseTexture;
-    AddressU = WRAP;
-    AddressV = WRAP;
-};
-
-texture2D GIDenoised
-{
-    Width = BUFFER_WIDTH;
-    Height = BUFFER_HEIGHT;
-    Format = RGBA8;
-};
-
-sampler2D sDenoised
-{
-    Texture = GIDenoised;
-    SRGBTexture = false;
-};
-
-    /*----------------.
-    | :: Functions :: |
-    '----------------*/
-
-// Depth
-float GetLinearizedDepth(float2 texcoord)
-{
-    return ReShade::GetLinearizedDepth(texcoord);
-}
-
-// Normal From DisplayDepth.fx 
-float3 GetScreenSpaceNormal(float2 texcoord)
-{
-    float3 offset = float3(BUFFER_PIXEL_SIZE, 0.0);
-    float2 posCenter = texcoord.xy;
-    float2 posNorth = posCenter - offset.zy;
-    float2 posEast = posCenter + offset.xz;
-
-    float3 vertCenter = float3(posCenter - 0.5, 1) * GetLinearizedDepth(posCenter);
-    float3 vertNorth = float3(posNorth - 0.5, 1) * GetLinearizedDepth(posNorth);
-    float3 vertEast = float3(posEast - 0.5, 1) * GetLinearizedDepth(posEast);
-
-    float3 normal = normalize(cross(vertCenter - vertNorth, vertCenter - vertEast));
-    
-    if (any(isnan(normal)) || any(isinf(normal)))
-    {
-        normal = float3(0, 0, 1);
+#if USE_MARTY_LAUNCHPAD_MOTION
+    namespace Deferred {
+        texture MotionVectorsTex { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
+        sampler sMotionVectorsTex { Texture = MotionVectorsTex; };
     }
-    
-    return normal;
-}
-
-float nrand(float2 uv)
+#elif USE_VORT_MOTION
+    texture2D MotVectTexVort { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
+    sampler2D sMotVectTexVort { Texture = MotVectTexVort; S_PC };
+#else
+texture texMotionVectors
 {
-    return frac(sin(dot(uv, float2(12.9898, 78.233))) * 43758.5453);
-}
-
-float3 rand3d(float2 uv)
+    Width = BUFFER_WIDTH;
+    Height = BUFFER_HEIGHT;
+    Format = RG16F;
+};
+sampler sTexMotionVectorsSampler
 {
-    return tex2Dlod(noiseTexture, float4(uv.xy, 0.0, 0.0)).rgb;
-}
+    Texture = texMotionVectors;S_PC
+};
+#endif
 
-float2 getPixelSize()
+namespace SSRT
 {
-    return float2(1.0 / BUFFER_WIDTH, 1.0 / BUFFER_HEIGHT);
-}
-
-float3 uvz_to_xyz(float2 uv, float z)
-{
-    uv -= float2(0.5, 0.5);
-    return float3(uv.x * z * PERSPECTIVE_COEFFICIENT, uv.y * z * PERSPECTIVE_COEFFICIENT, z);
-}
-
-float2 xyz_to_uv(float3 pos)
-{
-    float2 uv = float2(pos.x / (pos.z * PERSPECTIVE_COEFFICIENT), pos.y / (pos.z * PERSPECTIVE_COEFFICIENT));
-    return uv + float2(0.5, 0.5);
-}
-
-float calculateLuminance(float3 color)
-{
-    return dot(color, float3(0.299, 0.587, 0.114));
-}
-
-float4 Trace(in float4 position : SV_Position, in float2 texcoord : TEXCOORD) : SV_Target
-{
-    float perspectiveCoeff = PERSPECTIVE_COEFFICIENT;
-    float depth = GetLinearizedDepth(texcoord).x;
-    float3 normal = GetScreenSpaceNormal(texcoord);
-    float2 centredTexCoord = texcoord - float2(0.5, 0.5);
-    
-    float4 accumulatedColor = float4(0.0, 0.0, 0.0, 0.0);
-    const float invRays = 1.0 / (RAYS_AMOUNT);
-    
-    float4 oldGI = tex2Dlod(giTexture1, float4(texcoord.xy, 0.0, 0.0));
-    
-    float3 selfPosition = float3(centredTexCoord.x * depth * perspectiveCoeff,
-                                 centredTexCoord.y * depth * perspectiveCoeff,
-                                 depth);
-    
-    for (int j = 0; j < RAYS_AMOUNT; j++)
+    texture GiTex
     {
-        float j1 = j + 1.0;
-        float3 currentPosition = selfPosition;
-        
-        float3 rand = normalize(rand3d(texcoord * (32.0 * j1) + frac(FRAME_COUNT / 4.0)) * 2.0 - 1.0);
-        float3 rayDir = normalize(reflect(normalize(currentPosition), normal + rand * 0.1));
-        
-        float stepSize = 0.01 * BASE_RAYS_LENGTH / STEPS_PER_RAY;
-        float3 step = rayDir * stepSize;
-        
-        bool hitFound = false;
-        
-        for (int i = 0; i < STEPS_PER_RAY; i++)
+        Width = RES_WIDTH;
+        Height = RES_HEIGHT;
+        Format = RGBA16F;
+    };
+    sampler sGiTex
+    {
+        Texture = GiTex;
+    };
+
+    texture GiTemporal
+    {
+        Width = RES_WIDTH;
+        Height = RES_HEIGHT;
+        Format = RGBA16F;
+    };
+    sampler sGITemporal
+    {
+        Texture = GiTemporal;
+    };
+
+    texture2D giHistory
+    {
+        Width = RES_WIDTH;
+        Height = RES_HEIGHT;
+        Format = RGBA16F;
+    };
+    sampler2D sGIHistory
+    {
+        Texture = giHistory;
+        SRGBTexture = false;
+    };
+
+    texture normalTex
+    {
+        Width = BUFFER_WIDTH;
+        Height = BUFFER_HEIGHT;
+        Format = RGBA16F;
+    };
+    sampler normalSampler
+    {
+        Texture = normalTex;S_PC
+    };
+
+    texture depthTex
+    {
+        Width = BUFFER_WIDTH;
+        Height = BUFFER_HEIGHT;
+        Format = R32F;
+        MipLevels = 6;
+    };
+    sampler depthSampler
+    {
+        Texture = depthTex;
+        MinLOD = 0.0f;
+        MaxLOD = 5.0f;
+    };
+
+/*----------------.
+| :: Functions :: |
+'----------------*/
+
+// MIT License functions
+    float3 getWorldPositionForNormal(float2 coords)
+    {
+        float depth = getDepth(coords).x;
+        return float3((coords - 0.5) * depth, depth);
+    }
+
+    float4 mulByA(float4 v)
+    {
+        return float4(v.rgb * v.a, v.a);
+    }
+
+    float4 computeNormal(float3 wpCenter, float3 wpNorth, float3 wpEast)
+    {
+        return float4(normalize(cross(wpCenter - wpNorth, wpCenter - wpEast)), 1.0);
+    }
+
+    float GetLuminance(float3 color)
+    {
+        return dot(color, float3(0.299, 0.587, 0.114));
+    }
+
+    float4 computeNormal(float2 coords, float3 offset, bool reverse)
+    {
+        float3 posCenter = getWorldPositionForNormal(coords);
+        float3 posNorth = getWorldPositionForNormal(coords - (reverse ? -1 : 1) * offset.zy);
+        float3 posEast = getWorldPositionForNormal(coords + (reverse ? -1 : 1) * offset.xz);
+    
+        float4 r = computeNormal(posCenter, posNorth, posEast);
+        float mD = max(abs(posCenter.z - posNorth.z), abs(posCenter.z - posEast.z));
+        if (mD > 16)
+            r.a = 0;
+        return r;
+    }
+
+    float3 GetNormal(float2 coords)
+    {
+        float3 offset = float3(ReShade::PixelSize, 0.0);
+        float4 normal = computeNormal(coords, offset, false);
+    
+        if (normal.a == 0)
         {
-            currentPosition += step;
-            float newZ = currentPosition.z;
-            
-            // Skip calculations for positions outside screen space
-            if (newZ <= 0.0)
-                continue;
-            
-            float2 newTexCoord = float2(currentPosition.x / (newZ * perspectiveCoeff),
-                                      currentPosition.y / (newZ * perspectiveCoeff));
-            float2 newTexCoordCentred = newTexCoord + float2(0.5, 0.5);
-            
-            // Better boundary check with early exit
-            if (any(newTexCoordCentred < 0.0) || any(newTexCoordCentred > 1.0))
-            {
-                continue;
-            }
-            
-            float newDepth = GetLinearizedDepth(newTexCoordCentred).x;
-            
-            // Skip if current depth is too far or too close
-            if (newZ <= newDepth || newZ >= newDepth + DEPTH_THRESHOLD)
-            {
-                continue;
-            }
-            
-            float3 newNormal = GetScreenSpaceNormal(newTexCoordCentred);
-            float normalAlignment = dot(newNormal, rayDir);
-            
-            // Skip if normal is facing wrong direction
-            if (normalAlignment <= NORMAL_THRESHOLD)
-            {
-                continue;
-            }
-            
-            float3 photon = tex2Dlod(ReShade::BackBuffer, float4(newTexCoordCentred.xy, 0.0, 0.0)).rgb;
-            float correctionFactor = max(0.2, abs(normalAlignment));
-            
-            photon = photon * photon;
-            accumulatedColor.rgb += photon * invRays * correctionFactor;
-            
-            hitFound = true;
-            break;
+            normal = computeNormal(coords, offset, true);
         }
-        
-        if (!hitFound && j == 0)
+    
+        if (bSmoothNormals)
         {
-            float3 skyColor = float3(0.1, 0.12, 0.15);
-            accumulatedColor.rgb += skyColor * 0.1 * invRays;
-        }
-    }
-    
-    accumulatedColor.a = depth;
-    
-    accumulatedColor.rgb = min(accumulatedColor.rgb, 10.0);
-    
-    if (depth < oldGI.w + DEGHOSTING_THRESHOLD && depth > oldGI.w - DEGHOSTING_THRESHOLD)
-    {
-        accumulatedColor.rgb = lerp(accumulatedColor.rgb, oldGI.rgb, TEMPORAL_FACTOR);
-    }
-    
-    return accumulatedColor;
-}
-
-float4 StoreEdges(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
-{
-    float depth = GetLinearizedDepth(texcoord);
-    float3 normal = GetScreenSpaceNormal(texcoord);
-    return float4(normal, depth);
-}
-
-float4 PS_MultiIterationDenoise(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
-{
-    float3 centerColor = tex2Dlod(giTexture0, float4(uv, 0.0, 0.0)).rgb;
-    float centerDepth = GetLinearizedDepth(uv).x;
-    float3 centerNormal = GetScreenSpaceNormal(uv);
-    
-    float3 result = centerColor;
-    
-    for (int iteration = 0; iteration < DENOISE_ITERATIONS; iteration++)
-    {
-        int stepSize = 1 << iteration;
-        float3 sum = float3(0.0, 0.0, 0.0);
-        float weightSum = 0.0;
+            float3 offset2 = offset * 7.5 * (1.0 - getDepth(coords).x);
+            float4 normalTop = computeNormal(coords - offset2.zy, offset, false);
+            float4 normalBottom = computeNormal(coords + offset2.zy, offset, false);
+            float4 normalLeft = computeNormal(coords - offset2.xz, offset, false);
+            float4 normalRight = computeNormal(coords + offset2.xz, offset, false);
         
-        for (int i = -2; i <= 2; i++)
-        {
-            for (int j = -2; j <= 2; j++)
+            normalTop.a *= smoothstep(1, 0, distance(normal.xyz, normalTop.xyz) * 1.5) * 2;
+            normalBottom.a *= smoothstep(1, 0, distance(normal.xyz, normalBottom.xyz) * 1.5) * 2;
+            normalLeft.a *= smoothstep(1, 0, distance(normal.xyz, normalLeft.xyz) * 1.5) * 2;
+            normalRight.a *= smoothstep(1, 0, distance(normal.xyz, normalRight.xyz) * 1.5) * 2;
+        
+            float4 normal2 = mulByA(normal) + mulByA(normalTop) + mulByA(normalBottom) +
+                         mulByA(normalLeft) + mulByA(normalRight);
+        
+            if (normal2.a > 0)
             {
-                if (i == 0 && j == 0)
+                normal2.xyz /= normal2.a;
+                normal.xyz = normalize(normal2.xyz);
+            }
+        }
+    
+        if (EnableBumpMapping)
+        {
+            float3 color = GetColor(coords).rgb;
+            float height = GetLuminance(color);
+            float heightRight = GetLuminance(GetColor(coords + offset.xz).rgb);
+            float heightUp = GetLuminance(GetColor(coords - offset.zy).rgb);
+        
+            float2 slope = float2(
+            (height - heightRight) * BumpIntensity * BumpDirection.x,
+            (height - heightUp) * BumpIntensity * BumpDirection.y
+        );
+            float holeDepth = (1.0 - height) * BumpDepth * BumpDirection.z;
+        
+            float3 N = normal;
+            float3 T = normalize(cross(N, float3(0, 1, 0)));
+            float3 B = cross(N, T);
+        
+            float3 bumpedNormal = N + (T * slope.x + B * slope.y + N * holeDepth);
+            bumpedNormal = normalize(bumpedNormal);
+            normal = bumpedNormal;
+        }
+    
+        return normal.xyz;
+    }
+
+    float3 getNormal(float2 coords)
+    {
+        float3 normal = -(tex2Dlod(normalSampler, float4(coords, 0, 0)).xyz - 0.5) * 2;
+        return normalize(normal);
+    }
+
+// GNU 3 License functions
+    float nrand(float2 uv)
+    {
+        return frac(sin(dot(uv, float2(12.9898, 78.233))) * 43758.5453);
+    }
+
+    float3 rand3d(float2 uv)
+    {
+        uv = frac(uv * float2(123.34, 456.21));
+        float x = frac(sin(dot(uv, float2(12.9898, 78.233))) * 43758.5453);
+        float y = frac(sin(dot(uv, float2(93.9898, 67.345))) * 24634.6345);
+        float z = frac(sin(dot(uv, float2(45.332, 12.345))) * 12445.1234);
+        return float3(x, y, z);
+    }
+
+    float3 uvz_to_xyz(float2 uv, float z)
+    {
+        uv -= float2(0.5, 0.5);
+        return float3(uv.x * z * PERSPECTIVE_COEFFICIENT, uv.y * z * PERSPECTIVE_COEFFICIENT, z);
+    }
+
+    float2 xyz_to_uv(float3 pos)
+    {
+        float2 uv = float2(pos.x / (pos.z * PERSPECTIVE_COEFFICIENT), pos.y / (pos.z * PERSPECTIVE_COEFFICIENT));
+        return uv + float2(0.5, 0.5);
+    }
+
+// Main ray tracing function
+    float4 Trace(in float4 position : SV_Position, in float2 texcoord : TEXCOORD) : SV_Target
+    {
+        float depth = getDepth(texcoord).x;
+        float3 normal = getNormal(texcoord);
+    
+    // Reconstruct view-space position
+        float2 centeredUV = texcoord - 0.5;
+        float3 selfPos = float3(centeredUV * depth * PERSPECTIVE_COEFFICIENT, depth);
+
+        float4 accumulatedColor = float4(0, 0, 0, 0);
+        float invRays = 1.0 / RAYS_AMOUNT;
+
+    // For each ray
+        for (int j = 0; j < RAYS_AMOUNT; j++)
+        {
+            float j1 = j + 1.0;
+            float3 currPos = selfPos;
+            float3 rand = normalize(rand3d(texcoord * (32.0 * j1) + frac(FRAME_COUNT / 4.0)) * 2.0 - 1.0);
+            float3 rayDir = normalize(reflect(normalize(currPos), normal + rand * 0.0));
+
+            float3 step = rayDir * (0.01 * BASE_RAYS_LENGTH / STEPS_PER_RAY);
+            bool hit = false;
+
+        // March along the ray
+            for (int i = 0; i < STEPS_PER_RAY; i++)
+            {
+                currPos += step;
+                if (currPos.z <= 0.0)
                     continue;
-                
-                float2 offset = float2(i, j) * BUFFER_PIXEL_SIZE * stepSize;
-                float2 sampleUV = uv + offset;
-                float3 sampleColor = tex2Dlod(giTexture0, float4(sampleUV, 0.0, 0.0)).rgb;
-                float sampleDepth = GetLinearizedDepth(sampleUV).x;
-                float3 sampleNormal = GetScreenSpaceNormal(sampleUV);
-                
-             // - depthWeight: the smaller the depth difference, the greater the weight
-             // - normalWeight: enhances similarly oriented pixels
-             // - spatialWeight: favors pixels closer together in screen space
-                float depthWeight = exp(-abs(centerDepth - sampleDepth) / (DEPTH_THRESHOLD * 10.0));
-                float normalWeight = pow(max(0.0, dot(centerNormal, sampleNormal)), 8.0);
-                float spatialWeight = 1.0 / (1.0 + length(float2(i, j)));
-                float totalWeight = depthWeight * normalWeight * spatialWeight;
-                
-                sum += sampleColor * totalWeight;
-                weightSum += totalWeight;
+
+                float2 uvNew = currPos.xy / (currPos.z * PERSPECTIVE_COEFFICIENT) + 0.5;
+                if (any(uvNew < 0.0) || any(uvNew > 1.0))
+                    continue;
+
+                float depthNew = getDepth(uvNew).x;
+                if (currPos.z <= depthNew || currPos.z >= depthNew + DEPTH_THRESHOLD)
+                    continue;
+
+                float3 normalNew = getNormal(uvNew);
+                float align = dot(normalNew, rayDir);
+                if (align <= NORMAL_THRESHOLD)
+                    continue;
+
+                float3 sampleB = tex2Dlod(ReShade::BackBuffer, float4(uvNew, 0, 0)).rgb;
+                float factor = max(0.2, abs(align));
+                accumulatedColor.rgb += sampleB * sampleB * invRays * factor;
+                hit = true;
+                break;
+            }
+
+        // Sky fallback on first ray miss
+            if (!hit && j == 0)
+            {
+                accumulatedColor.rgb += SkyColor * 0.1 * invRays;
             }
         }
-                    
-        sum += centerColor;
-        weightSum += 1.0;
-        result = sum / weightSum;
-        centerColor = result;
+
+        accumulatedColor.a = depth;
+        accumulatedColor.rgb = min(accumulatedColor.rgb, 10.0);
+        return accumulatedColor;
     }
+    //END GNU3
     
-    return float4(result, 1.0);
-}
-
-
-float4 Combine(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
-{
-    if (ViewMode == 1)
+    // Motion vector function
+    float2 GetMotionVector(float2 texcoord)
     {
-        float3 gi = tex2Dlod(sDenoised, float4(texcoord.xy, 0.0, 0.0)).rgb * EFFECT_INTENSITY;
+#if USE_MARTY_LAUNCHPAD_MOTION
+        return tex2Dlod(Deferred::sMotionVectorsTex, float4(texcoord, 0, 0)).xy;
+#elif USE_VORT_MOTION
+        return tex2Dlod(sMotVectTexVort, float4(texcoord, 0, 0)).xy;
+#else
+        return tex2Dlod(sTexMotionVectorsSampler, float4(texcoord, 0, 0)).xy;
+#endif
+    }
+
+    // Shader passes
+    float4 PS_Normals(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
+    {
+        float3 normal = GetNormal(uv);
+        return float4(normal * 0.5 + 0.5, 1.0);
+    }
+
+    float4 PS_Temporal(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
+    {
+        float2 motion = GetMotionVector(uv);
+        float3 currentGI = tex2Dlod(sGiTex, float4(uv, 0, 0)).rgb;
+        float2 reprojectedUV = uv + motion;
+        float3 historyGI = tex2Dlod(sGIHistory, float4(reprojectedUV, 0, 0)).rgb;
+        float3 gi = EnableTemporal ? lerp(currentGI, historyGI, TemporalFilterStrength) : currentGI;
         return float4(gi, 1.0);
     }
-    else if (ViewMode == 2)
-    {
-        float3 normal = GetScreenSpaceNormal(texcoord);
-        normal = normal * 0.5 + 0.5;
-        return float4(normal, 1.0);
-    }
-    else if (ViewMode == 3)
-    {
-        float depth = GetLinearizedDepth(texcoord).x;
-        return float4(depth, depth, depth, 1.0);
-    }
-    else
-    {
-        float depth = GetLinearizedDepth(texcoord).x;
-        float3 color = tex2Dlod(ReShade::BackBuffer, float4(texcoord.xy, 0.0, 0.0)).rgb;
-        float3 gi = tex2Dlod(sDenoised, float4(texcoord.xy, 0.0, 0.0)).rgb * EFFECT_INTENSITY;
-        
-        color = lerp(color, color + gi, TONE);
-        
-        return float4(color, 1.0);
-    }
-}
 
-float4 SaveGI(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
-{
-    return tex2Dlod(giTexture0, float4(texcoord, 0.0, 0.0));
-}
+    float4 PS_SaveHistory(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
+    {
+        float3 gi = EnableTemporal ? tex2Dlod(sGITemporal, float4(uv, 0, 0)).rgb : tex2Dlod(sGiTex, float4(uv, 0, 0)).rgb;
+        return float4(gi, 1.0);
+    }
+
+    float4 Combine(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
+    {
+        float4 originalColor = tex2D(ReShade::BackBuffer, texcoord);
+        float3 giColor = EnableTemporal ? tex2D(sGITemporal, texcoord).rgb : tex2D(sGiTex, texcoord).rgb;
+
+        float depth = getDepth(texcoord);
+        float3 normal = getNormal(texcoord);
+
+        giColor *= Intensity;
+
+    // Saturation
+        float greyValue = dot(giColor, float3(0.299, 0.587, 0.114));
+        float3 grey = float3(greyValue, greyValue, greyValue);
+        giColor = lerp(grey, giColor, Saturation);
+
+        if (ViewMode == 0)
+        {
+            if (BlendMode == 0) // Additive
+                return float4(originalColor.rgb + giColor, originalColor.a);
+            else if (BlendMode == 1) // Multiplicative
+                return float4(1.0 - (1.0 - originalColor.rgb) * (1.0 - giColor), originalColor.a);
+            else if (BlendMode == 2) // Alpha Blend
+                return float4(lerp(originalColor.rgb, giColor, saturate(giColor.r)), originalColor.a);
+        }
+        else if (ViewMode == 1) // GI Debug
+            return float4(giColor, 1.0);
+        else if (ViewMode == 2) // Normal Debug
+            return float4(normal * 0.5 + 0.5, 1.0);
+        else if (ViewMode == 3) // Depth Debug
+            return float4(depth, depth, depth, 1.0);
+
+        return originalColor;
+    }
 
 /*------------------.
 | :: Techniques :: |
 '------------------*/
 
-technique SSRT <
-    ui_tooltip = "Open source screen space ray tracing";
->
-{
-    pass Trace
+    technique SSRT
     {
-        VertexShader = PostProcessVS;
-        PixelShader = Trace;
-        RenderTarget0 = fGiTexture0;
-    }
+        pass NormalPass
+        {
+            VertexShader = PostProcessVS;
+            PixelShader = PS_Normals;
+            RenderTarget = normalTex;
+            RenderTarget1 = depthTex;
+        }
     
-    pass StoreEdges
-    {
-        VertexShader = PostProcessVS;
-        PixelShader = StoreEdges;
-        RenderTarget0 = fEdgeTexture;
-    }
-    pass Denoise
-    {
-        VertexShader = PostProcessVS;
-        PixelShader = PS_MultiIterationDenoise;
-        RenderTarget = GIDenoised;
-    }
-    pass Combine
-    {
-        VertexShader = PostProcessVS;
-        PixelShader = Combine;
-    }
-
-    pass SaveGI
-    {
-        VertexShader = PostProcessVS;
-        PixelShader = SaveGI;
-        RenderTarget0 = fGiTexture1;
+        pass Trace
+        {
+            VertexShader = PostProcessVS;
+            PixelShader = Trace;
+            RenderTarget = GiTex;
+        }
+    
+        pass Temporal
+        {
+            VertexShader = PostProcessVS;
+            PixelShader = PS_Temporal;
+            RenderTarget = GiTemporal;
+        }
+    
+        pass SaveHistory
+        {
+            VertexShader = PostProcessVS;
+            PixelShader = PS_SaveHistory;
+            RenderTarget = giHistory;
+        }
+    
+        pass Combine
+        {
+            VertexShader = PostProcessVS;
+            PixelShader = Combine;
+        }
     }
 }
