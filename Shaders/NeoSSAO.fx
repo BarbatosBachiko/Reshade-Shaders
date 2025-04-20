@@ -6,7 +6,7 @@ _  _ ____ ____ ____ ____ ____ ____
 |\ | |___ |  | [__  [__  |__| |  | 
 | \| |___ |__| ___] ___] |  | |__| 
                                                                        
-    Version 1.7.5
+    Version 1.7.6
     Author: Barbatos Bachiko
     License: MIT
 
@@ -14,16 +14,20 @@ _  _ ____ ____ ____ ____ ____ ____
     History:
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
     
-    Version 1.7.5
-    + Maintenance in SSAO and now use hemisphere samples
-    * Replaced another shader's GetPosition with my GetPosition
+    Version 1.7.6
+    * Motion Vector Support
     
 */ 
 
-namespace NEOSPACE
-{
-    #include "ReShade.fxh"
+#include "ReShade.fxh"
     
+#ifndef USE_MARTY_LAUNCHPAD_MOTION
+#define USE_MARTY_LAUNCHPAD_MOTION 0
+#endif
+#ifndef USE_VORT_MOTION
+#define USE_VORT_MOTION 0
+#endif
+
 #define INPUT_WIDTH BUFFER_WIDTH 
 #define INPUT_HEIGHT BUFFER_HEIGHT 
 
@@ -39,7 +43,7 @@ namespace NEOSPACE
 
 #define MAJOR_VERSION 1
 #define MINOR_VERSION 7
-#define PATCH_VERSION 5
+#define PATCH_VERSION 6
 
 #define BUILD_DOT_VERSION_(mav, miv, pav) #mav "." #miv "." #pav
 #define BUILD_DOT_VERSION(mav, miv, pav) BUILD_DOT_VERSION_(mav, miv, pav)
@@ -156,7 +160,7 @@ DOT_VERSION_STR;
         ui_type = "slider";
         ui_label = "Fade End";
         ui_tooltip = "Distance at which AO completely fades out.";
-        ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+        ui_min = 0.0; ui_max = 2.0; ui_step = 0.01;
     >
     = 1.0;
     
@@ -243,11 +247,36 @@ DOT_VERSION_STR;
     >
     = float4(0.0, 0.0, 0.0, 1.0);
     
-
     /*---------------.
     | :: Textures :: |
     '---------------*/
 
+#define S_PC MagFilter=POINT;MinFilter=POINT;MipFilter=POINT;AddressU=Clamp;AddressV=Clamp;AddressW=Clamp;
+
+#if USE_MARTY_LAUNCHPAD_MOTION
+namespace Deferred {
+    texture MotionVectorsTex { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
+    sampler sMotionVectorsTex { Texture = MotionVectorsTex;  };
+}
+#elif USE_VORT_MOTION
+    texture2D MotVectTexVort {  Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
+    sampler2D sMotVectTexVort { Texture = MotVectTexVort; S_PC  };
+#else
+    texture texMotionVectors
+    {
+        Width = BUFFER_WIDTH;
+        Height = BUFFER_HEIGHT;
+        Format = RG16F;
+    };
+    sampler sTexMotionVectorsSampler
+    {
+        Texture = texMotionVectors;
+    S_PC
+    };
+#endif
+
+namespace NEOSPACE
+{
     texture2D AOTex1
     {
         Width = RES_WIDTH;
@@ -405,7 +434,6 @@ DOT_VERSION_STR;
     float3(0.0, -0.258819, 0.965926)
     };
 
-
     float4 PS_SSAO(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
         float depthValue = GetLinearDepth(uv);
@@ -440,12 +468,25 @@ DOT_VERSION_STR;
         return float4(occlusion, occlusion, occlusion, 1.0);
     }
     
-    // Temporal
+    float2 GetMotionVector(float2 texcoord)
+    {
+#if USE_MARTY_LAUNCHPAD_MOTION
+    return tex2Dlod(Deferred::sMotionVectorsTex, float4(texcoord, 0, 0)).xy;
+#elif USE_VORT_MOTION
+    return tex2Dlod(sMotVectTexVort, float4(texcoord, 0, 0)).xy;
+#else
+        return tex2Dlod(sTexMotionVectorsSampler, float4(texcoord, 0, 0)).xy;
+#endif
+    }
+    
+     // Temporal
     float4 PS_Temporal(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
-        float currentOcclusion = tex2D(sAO1, uv).r;
-        float historyOcclusion = tex2D(sSSAOHistory, uv).r;
-        float occlusion = EnableTemporal ? lerp(currentOcclusion, historyOcclusion, TemporalFilterStrength) : currentOcclusion;
+        float2 motion = GetMotionVector(uv);
+        float3 currentAO = tex2Dlod(sAO1, float4(uv, 0, 0)).rgb;
+        float2 reprojectedUV = uv + motion;
+        float3 historyAO = tex2Dlod(sSSAOHistory, float4(reprojectedUV, 0, 0)).rgb;
+        float occlusion = EnableTemporal ? lerp(currentAO, historyAO, TemporalFilterStrength) : currentAO;
         return float4(occlusion, occlusion, occlusion, 1.0);
     }
 
