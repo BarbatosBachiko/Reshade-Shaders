@@ -4,7 +4,7 @@
 
     SSRT - Screen Space Ray Tracing
 
-    Version 1.3
+    Version 1.3.1
     Author: Barbatos Bachiko
     Original SSRT by jebbyk : https://github.com/jebbyk/SSRT-for-reshade/blob/main/ssrt.fx
 
@@ -16,19 +16,10 @@
     History:
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
 
-    Version 1.3
-    * New dedicated normal with smooth normal, Thanks AlucardDH: https://github.com/AlucardDH/dh-reshade-shaders-mit/blob/master/smoothNormals.fx
-    * Multiple blend modes (Additive/Multiplicative/Alpha)
-    * Motion vector support for temporal
-    * Configurable resolution scaling
-    * Depth multiplier control
-    * Sky color customization
-    * Saturation control for results
-    
-    + performance
-    
-    - Added compatibility with multiple motion vector sources
-    - Improved parameter organization
+    Version 1.3.1
+    * Fade Settings
+    * Preset
+    - Add Guide
 */
 
 /*-------------------.
@@ -53,13 +44,56 @@
 #define RES_HEIGHT (ReShade::ScreenSize.y * RES_SCALE)
 
 // Utility macros
-#define getDepth(coords) (ReShade::GetLinearizedDepth(coords) * DepthMultiplier)
+#define getDepth(coords)      (ReShade::GetLinearizedDepth(coords) * DEPTH_MUL)
 #define GetColor(c) tex2Dlod(ReShade::BackBuffer, float4((c).xy, 0, 0))
 #define S_PC MagFilter=POINT;MinFilter=POINT;MipFilter=POINT;AddressU=Clamp;AddressV=Clamp;AddressW=Clamp;
+#define DEPTH_MUL   ((Preset == 1) ? 0.1 : DepthMultiplier)
+#define PERSPECTIVE ((Preset == 1) ? 1.0 : PERSPECTIVE_COEFFICIENT)
+
 
 /*-------------------.
 | :: Parameters ::   |
 '-------------------*/
+
+uniform int Guide <
+    ui_text = 
+    
+        "SSRT SCREEN SPACE RAY TRACING GUIDE:\n\n"
+        
+        "CORE SETTINGS:\n"
+        "1. Base Ray Length: Controls how far rays travel (0.1-50)\n"
+        "2. Rays Amount: Number of rays per pixel (1-4). Note: this option is useless for now.\n"
+        "3. Steps Per Ray: Detail of each ray (1-256). Higher = more accurate but slower\n"
+        
+        "QUALITY TUNING:\n"
+        "1. Depth Threshold: Surface detection precision (0.001-0.01)\n"
+        "2. Normal Threshold: Angle sensitivity (-1.0-1.0)\n"
+        "3. Perspective: Adjust for correct depth scaling (0-10)\n\n"
+        
+        "OPTIMIZATION TIPS:\n"
+        "1. Start with Rays Amount=1 and Steps=60 for performance\n"
+        "2. Use Temporal Filtering to smooth results\n"
+        "3. Lower RES_SCALE in definitions for faster rendering\n\n"
+        
+        "VISUAL TUNING:\n"
+        "1. Use View Modes to debug GI/Normals/Depth\n"
+        "2. Adjust FadeStart/FadeEnd to control effect distance\n"
+        "3. Set SkyColor to match your game's environment. Note: if necessary\n"
+        "4. Enable Bump Mapping for surface detail (adjust BumpIntensity)\n\n"
+        
+        "PRESET ADVICE:\n"
+        "1. Game B: Alternative depth scaling and Pespective (0.1 multiplier), (1.0 Pespective)\n\n"
+        
+        "BLEND MODES:\n"
+        "1. Additive: Brightens surfaces (good for dark games)\n"
+        "2. Multiplicative: Natural shadowing (default)\n"
+        "3. Alpha Blend: For subtle effects";
+        
+    ui_category = "Guide";
+    ui_category_closed = true;
+    ui_label = " ";
+    ui_type = "radio";
+> = 0;
 
 // General Settings
 uniform int ViewMode <
@@ -67,6 +101,14 @@ uniform int ViewMode <
     ui_category = "General";
     ui_label = "View Mode";
     ui_items = "None\0GI Debug\0Normal Debug\0Depth Debug\0";
+> = 0;
+
+uniform int Preset <
+    ui_type     = "combo";
+    ui_category = "General";
+    ui_label    = "Preset for View";
+    ui_tooltip = "GAME B preset may be better in some games";
+    ui_items    = "Custom\0GAME B\0";
 > = 0;
 
 uniform int BlendMode <
@@ -79,7 +121,7 @@ uniform int BlendMode <
 // Ray Tracing Settings
 uniform float BASE_RAYS_LENGTH <
     ui_type = "slider";
-    ui_min = 0.1; ui_max = 40.0;
+    ui_min = 0.1; ui_max = 50.0;
     ui_step = 0.1;
     ui_category = "Ray Tracing";
     ui_label = "Base ray length";
@@ -132,6 +174,26 @@ uniform float PERSPECTIVE_COEFFICIENT <
     ui_category = "Ray Tracing";
     ui_label = "Pespective";
 > = 1.5;
+
+uniform float FadeStart
+    <
+        ui_category = "Fade Settings";
+        ui_type = "slider";
+        ui_label = "Fade Start";
+        ui_tooltip = "Distance starts to fade out";
+        ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+    >
+    = 0.0;
+
+uniform float FadeEnd
+    <
+        ui_category = "Fade Settings";
+        ui_type = "slider";
+        ui_label = "Fade End";
+        ui_tooltip = "Distance completely fades out";
+        ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+    >
+    = 1.0;
 
 // Depth Settings
 uniform float DepthMultiplier <
@@ -411,12 +473,14 @@ namespace SSRT
     float3 uvz_to_xyz(float2 uv, float z)
     {
         uv -= float2(0.5, 0.5);
-        return float3(uv.x * z * PERSPECTIVE_COEFFICIENT, uv.y * z * PERSPECTIVE_COEFFICIENT, z);
+        float perspective = (Preset == 1) ? 1.0 : PERSPECTIVE_COEFFICIENT;
+        return float3(uv.x * z * perspective, uv.y * z * perspective, z);
     }
 
     float2 xyz_to_uv(float3 pos)
     {
-        float2 uv = float2(pos.x / (pos.z * PERSPECTIVE_COEFFICIENT), pos.y / (pos.z * PERSPECTIVE_COEFFICIENT));
+        float perspective = (Preset == 1) ? 1.0 : PERSPECTIVE_COEFFICIENT;
+        float2 uv = float2(pos.x / (pos.z * perspective), pos.y / (pos.z * perspective));
         return uv + float2(0.5, 0.5);
     }
 
@@ -424,16 +488,17 @@ namespace SSRT
     float4 Trace(in float4 position : SV_Position, in float2 texcoord : TEXCOORD) : SV_Target
     {
         float depth = getDepth(texcoord).x;
-        float3 normal = getNormal(texcoord);
+        float perspective = (Preset == 1) ? 1.0 : PERSPECTIVE_COEFFICIENT;
     
-    // Reconstruct view-space position
+        // Reconstruct view-space position
         float2 centeredUV = texcoord - 0.5;
-        float3 selfPos = float3(centeredUV * depth * PERSPECTIVE_COEFFICIENT, depth);
-
+        float3 selfPos = float3(centeredUV * depth * perspective, depth);
+    
+        float3 normal = getNormal(texcoord);
         float4 accumulatedColor = float4(0, 0, 0, 0);
         float invRays = 1.0 / RAYS_AMOUNT;
 
-    // For each ray
+        // For each ray
         for (int j = 0; j < RAYS_AMOUNT; j++)
         {
             float j1 = j + 1.0;
@@ -444,14 +509,14 @@ namespace SSRT
             float3 step = rayDir * (0.01 * BASE_RAYS_LENGTH / STEPS_PER_RAY);
             bool hit = false;
 
-        // March along the ray
+            // March along the ray
             for (int i = 0; i < STEPS_PER_RAY; i++)
             {
                 currPos += step;
                 if (currPos.z <= 0.0)
                     continue;
 
-                float2 uvNew = currPos.xy / (currPos.z * PERSPECTIVE_COEFFICIENT) + 0.5;
+                float2 uvNew = xyz_to_uv(currPos);
                 if (any(uvNew < 0.0) || any(uvNew > 1.0))
                     continue;
 
@@ -471,15 +536,18 @@ namespace SSRT
                 break;
             }
 
-        // Sky fallback on first ray miss
             if (!hit && j == 0)
             {
                 accumulatedColor.rgb += SkyColor * 0.1 * invRays;
             }
         }
-
+    
+        float fadeFactor = max(FadeEnd - FadeStart, 0.001);
+        float fade = saturate((FadeEnd - depth) / fadeFactor);
+        accumulatedColor.rgb *= fade;
         accumulatedColor.a = depth;
         accumulatedColor.rgb = min(accumulatedColor.rgb, 10.0);
+    
         return accumulatedColor;
     }
     //END GNU3
