@@ -4,7 +4,7 @@
 
     SSRT - Screen Space Ray Tracing
 
-    Version 1.3.1
+    Version 1.3.2
     Author: Barbatos Bachiko
     Original SSRT by jebbyk : https://github.com/jebbyk/SSRT-for-reshade/blob/main/ssrt.fx
 
@@ -16,10 +16,10 @@
     History:
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
 
-    Version 1.3.1
-    * Fade Settings
-    * Preset
-    - Add Guide
+    Version 1.3.2
+    + Ray Tracing fixes
+    * Add Random Control
+    * TAA Profiles from DAA.fx : https://github.com/BarbatosBachiko/Reshade-Shaders/blob/main/Shaders/DAA.fx
 */
 
 /*-------------------.
@@ -121,11 +121,11 @@ uniform int BlendMode <
 // Ray Tracing Settings
 uniform float BASE_RAYS_LENGTH <
     ui_type = "slider";
-    ui_min = 0.1; ui_max = 50.0;
-    ui_step = 0.1;
+    ui_min = 0.1; ui_max = 2.0;
+    ui_step = 0.001;
     ui_category = "Ray Tracing";
     ui_label = "Base ray length";
-> = 35.0;
+> = 0.1;
 
 uniform int RAYS_AMOUNT <
     ui_type = "slider";
@@ -141,7 +141,7 @@ uniform int STEPS_PER_RAY <
     ui_step = 1;
     ui_category = "Ray Tracing";
     ui_label = "Steps per ray";
-> = 120.0;
+> = 64.0;
 
 uniform float Intensity <
     ui_type = "slider";
@@ -151,13 +151,19 @@ uniform float Intensity <
     ui_label = "Intensity";
 > = 2.5;
 
+uniform float RandomIntensity <
+    ui_label = "Random Intensity";
+    ui_type = "slider";
+    ui_min = 0.0; ui_max = 1.0;
+> = 0.0;
+
 uniform float DEPTH_THRESHOLD <
     ui_type = "slider";
     ui_min = 0.001; ui_max = 0.01;
     ui_step = 0.001;
     ui_category = "Ray Tracing";
     ui_label = "Depth Threshold";
-> = 0.010;
+> = 0.002;
 
 uniform float NORMAL_THRESHOLD <
     ui_type = "slider";
@@ -173,7 +179,7 @@ uniform float PERSPECTIVE_COEFFICIENT <
     ui_step = 0.1;
     ui_category = "Ray Tracing";
     ui_label = "Pespective";
-> = 1.5;
+> = 1.0;
 
 uniform float FadeStart
     <
@@ -242,6 +248,14 @@ uniform bool EnableTemporal <
     ui_category = "Temporal";
     ui_label = "Temporal Filtering";
 > = true;
+
+uniform int TemporalMode <
+    ui_category = "Temporal";
+    ui_type = "combo";
+    ui_items = "Blurry\0Standard\0Quality\0";
+    ui_label = "Temporal Quality";
+    ui_tooltip = "Quality mode for temporal filtering";
+> = 2;
 
 uniform float TemporalFilterStrength <
     ui_type = "slider";
@@ -351,12 +365,12 @@ namespace SSRT
         MinLOD = 0.0f;
         MaxLOD = 5.0f;
     };
-
+    
 /*----------------.
 | :: Functions :: |
 '----------------*/
 
-// MIT License functions
+    // MIT License functions
     float3 getWorldPositionForNormal(float2 coords)
     {
         float depth = getDepth(coords).x;
@@ -455,12 +469,7 @@ namespace SSRT
         return normalize(normal);
     }
 
-// GNU 3 License functions
-    float nrand(float2 uv)
-    {
-        return frac(sin(dot(uv, float2(12.9898, 78.233))) * 43758.5453);
-    }
-
+    // GNU 3 License functions
     float3 rand3d(float2 uv)
     {
         uv = frac(uv * float2(123.34, 456.21));
@@ -483,71 +492,75 @@ namespace SSRT
         float2 uv = float2(pos.x / (pos.z * perspective), pos.y / (pos.z * perspective));
         return uv + float2(0.5, 0.5);
     }
-
-// Main ray tracing function
+    
+    // Main ray tracing function
     float4 Trace(in float4 position : SV_Position, in float2 texcoord : TEXCOORD) : SV_Target
     {
         float depth = getDepth(texcoord).x;
-        float perspective = (Preset == 1) ? 1.0 : PERSPECTIVE_COEFFICIENT;
-    
-        // Reconstruct view-space position
-        float2 centeredUV = texcoord - 0.5;
-        float3 selfPos = float3(centeredUV * depth * perspective, depth);
-    
         float3 normal = getNormal(texcoord);
+        
+        float perspective = (Preset == 1) ? 1.0 : PERSPECTIVE_COEFFICIENT;
+        float3 selfPos = uvz_to_xyz(texcoord, depth);
+       
         float4 accumulatedColor = float4(0, 0, 0, 0);
         float invRays = 1.0 / RAYS_AMOUNT;
 
         // For each ray
-        for (int j = 0; j < RAYS_AMOUNT; j++)
+        for (int j = 0; j < RAYS_AMOUNT; ++j)
         {
             float j1 = j + 1.0;
-            float3 currPos = selfPos;
-            float3 rand = normalize(rand3d(texcoord * (32.0 * j1) + frac(FRAME_COUNT / 4.0)) * 2.0 - 1.0);
-            float3 rayDir = normalize(reflect(normalize(currPos), normal + rand * 0.0));
 
-            float3 step = rayDir * (0.01 * BASE_RAYS_LENGTH / STEPS_PER_RAY);
+            float3 viewDir = normalize(selfPos);
+            float3 jitter = normalize(rand3d(texcoord * (32.0 * (j + 1.0)) + frac(FRAME_COUNT / 4.0)) * 2.0 - 1.0);
+            float3 perturbedNormal = normalize(lerp(normal, normal + jitter * 0.2, RandomIntensity));
+            float3 rayDir = normalize(reflect(viewDir, perturbedNormal));
+
+            float3 rayStep = rayDir * (BASE_RAYS_LENGTH / STEPS_PER_RAY);
+            float3 currPos = selfPos;
             bool hit = false;
 
             // March along the ray
-            for (int i = 0; i < STEPS_PER_RAY; i++)
+            for (int i = 0; i < STEPS_PER_RAY; ++i)
             {
-                currPos += step;
+                currPos += rayStep;
                 if (currPos.z <= 0.0)
                     continue;
 
                 float2 uvNew = xyz_to_uv(currPos);
+
                 if (any(uvNew < 0.0) || any(uvNew > 1.0))
                     continue;
 
-                float depthNew = getDepth(uvNew).x;
-                if (currPos.z <= depthNew || currPos.z >= depthNew + DEPTH_THRESHOLD)
+                float sceneDepth = getDepth(uvNew).x;
+
+                if (currPos.z <= sceneDepth || currPos.z >= sceneDepth + DEPTH_THRESHOLD)
                     continue;
 
-                float3 normalNew = getNormal(uvNew);
-                float align = dot(normalNew, rayDir);
-                if (align <= NORMAL_THRESHOLD)
+                float3 hitNormal = getNormal(uvNew);
+                float alignment = dot(hitNormal, rayDir);
+                if (alignment <= NORMAL_THRESHOLD)
                     continue;
 
-                float3 sampleB = tex2Dlod(ReShade::BackBuffer, float4(uvNew, 0, 0)).rgb;
-                float factor = max(0.2, abs(align));
-                accumulatedColor.rgb += sampleB * sampleB * invRays * factor;
+                float3 sampleColor = tex2Dlod(ReShade::BackBuffer, float4(uvNew, 0, 0)).rgb;
+                float factor = max(0.2, abs(alignment));
+
+                accumulatedColor.rgb += sampleColor * invRays * factor;
                 hit = true;
                 break;
             }
-
-            if (!hit && j == 0)
+            
+            if (!hit)
             {
                 accumulatedColor.rgb += SkyColor * 0.1 * invRays;
             }
         }
-    
         float fadeFactor = max(FadeEnd - FadeStart, 0.001);
         float fade = saturate((FadeEnd - depth) / fadeFactor);
         accumulatedColor.rgb *= fade;
+
         accumulatedColor.a = depth;
-        accumulatedColor.rgb = min(accumulatedColor.rgb, 10.0);
-    
+        accumulatedColor.rgb = accumulatedColor.rgb / (accumulatedColor.rgb + 1.0);
+
         return accumulatedColor;
     }
     //END GNU3
@@ -571,14 +584,79 @@ namespace SSRT
         return float4(normal * 0.5 + 0.5, 1.0);
     }
 
+    float3 RGBToYCoCg(float3 rgb)
+    {
+        float Y = dot(rgb, float3(0.25, 0.5, 0.25));
+        float Co = dot(rgb, float3(0.5, 0.0, -0.5));
+        float Cg = dot(rgb, float3(-0.25, 0.5, -0.25));
+        return float3(Y, Co, Cg);
+    }
+
+    float3 YCoCgToRGB(float3 ycocg)
+    {
+        float Y = ycocg.x;
+        float Co = ycocg.y;
+        float Cg = ycocg.z;
+        return float3(Y + Co - Cg, Y + Cg, Y - Co - Cg);
+    }
+    
     float4 PS_Temporal(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
         float2 motion = GetMotionVector(uv);
         float3 currentGI = tex2Dlod(sGiTex, float4(uv, 0, 0)).rgb;
         float2 reprojectedUV = uv + motion;
-        float3 historyGI = tex2Dlod(sGIHistory, float4(reprojectedUV, 0, 0)).rgb;
-        float3 gi = EnableTemporal ? lerp(currentGI, historyGI, TemporalFilterStrength) : currentGI;
-        return float4(gi, 1.0);
+    
+        if (TemporalMode == 0) // Method A - Blurry (Basic neighborhood averaging)
+        {
+        // Sample neighborhood history
+            float2 offset = ReShade::PixelSize.xy;
+            float3 historyCenter = tex2Dlod(sGIHistory, float4(reprojectedUV, 0, 0)).rgb;
+            float3 historyUp = tex2Dlod(sGIHistory, float4(reprojectedUV + float2(0, -offset.y), 0, 0)).rgb;
+            float3 historyDown = tex2Dlod(sGIHistory, float4(reprojectedUV + float2(0, offset.y), 0, 0)).rgb;
+            float3 historyLeft = tex2Dlod(sGIHistory, float4(reprojectedUV + float2(-offset.x, 0), 0, 0)).rgb;
+            float3 historyRight = tex2Dlod(sGIHistory, float4(reprojectedUV + float2(offset.x, 0), 0, 0)).rgb;
+            float3 historyAvg = (historyCenter + historyUp + historyDown + historyLeft + historyRight) / 5.0;
+            return float4(lerp(currentGI, historyAvg, TemporalFilterStrength), 1.0);
+        }
+        else if (TemporalMode == 1) // Method B - Standard (YCoCg blending)
+        {
+            // Convert to YCoCg color space
+            float3 currentYCoCg = RGBToYCoCg(currentGI);
+            float3 historyYCoCg = RGBToYCoCg(tex2Dlod(sGIHistory, float4(reprojectedUV, 0, 0)).rgb);
+            float3 blendedYCoCg = lerp(currentYCoCg, historyYCoCg, TemporalFilterStrength);
+            return float4(YCoCgToRGB(blendedYCoCg), 1.0);
+        }
+        else // Method C - Quality (Neighborhood clamping)
+        {
+        // Sample current GI neighborhood for clamping
+            float2 offset = ReShade::PixelSize.xy;
+            float3 c00 = RGBToYCoCg(tex2Dlod(sGiTex, float4(uv + float2(-offset.x, -offset.y), 0, 0)).rgb);
+            float3 c10 = RGBToYCoCg(tex2Dlod(sGiTex, float4(uv + float2(0, -offset.y), 0, 0)).rgb);
+            float3 c20 = RGBToYCoCg(tex2Dlod(sGiTex, float4(uv + float2(offset.x, -offset.y), 0, 0)).rgb);
+            float3 c01 = RGBToYCoCg(tex2Dlod(sGiTex, float4(uv + float2(-offset.x, 0), 0, 0)).rgb);
+            float3 c21 = RGBToYCoCg(tex2Dlod(sGiTex, float4(uv + float2(offset.x, 0), 0, 0)).rgb);
+            float3 c02 = RGBToYCoCg(tex2Dlod(sGiTex, float4(uv + float2(-offset.x, offset.y), 0, 0)).rgb);
+            float3 c12 = RGBToYCoCg(tex2Dlod(sGiTex, float4(uv + float2(0, offset.y), 0, 0)).rgb);
+            float3 c22 = RGBToYCoCg(tex2Dlod(sGiTex, float4(uv + float2(offset.x, offset.y), 0, 0)).rgb);
+        
+           // Calculate AABB for neighborhood clamping
+            float3 minColor = min(min(min(c00, c10), min(c20, c01)), min(min(c21, c02), min(c12, c22)));
+            float3 maxColor = max(max(max(c00, c10), max(c20, c01)), max(max(c21, c02), max(c12, c22)));
+        
+            float3 clampSize = maxColor - minColor;
+            minColor -= clampSize * 0.25;
+            maxColor += clampSize * 0.25;
+        
+            float3 historyYCoCg = RGBToYCoCg(tex2Dlod(sGIHistory, float4(reprojectedUV, 0, 0)).rgb);
+            historyYCoCg = clamp(historyYCoCg, minColor, maxColor);
+        
+            float motionLength = length(motion) * 100.0;
+            float blendFactor = EnableTemporal ? clamp(TemporalFilterStrength * (1.0 - motionLength), 0.0, TemporalFilterStrength) : 0.0;
+        
+            float3 resultYCoCg = lerp(RGBToYCoCg(currentGI), historyYCoCg, blendFactor);
+        
+            return float4(YCoCgToRGB(resultYCoCg), 1.0);
+        }
     }
 
     float4 PS_SaveHistory(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
