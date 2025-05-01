@@ -4,7 +4,7 @@
 
     SSRT
 
-    Version 1.3.3
+    Version 1.3.4
     Author: Barbatos Bachiko
     Original SSRT by jebbyk : https://github.com/jebbyk/SSRT-for-reshade/blob/main/ssrt.fx
 
@@ -16,12 +16,10 @@
 
     History:
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
-
-    Version 1.3.3
-    + Schlick Aproximation to Trace
-    * Add Aces Tone Mapping
-    * Add Linear RGB
-    - Removed temporal mode "Quality". was causing strange artifacts
+    
+    Version 1.3.4
+    + Maintenance
+    * Quality Preset
 */
 
 /*-------------------.
@@ -50,7 +48,6 @@
 #define GetColor(c) tex2Dlod(ReShade::BackBuffer, float4((c).xy, 0, 0))
 #define S_PC MagFilter=POINT;MinFilter=POINT;MipFilter=POINT;AddressU=Clamp;AddressV=Clamp;AddressW=Clamp;
 #define DEPTH_MUL   ((Preset == 1) ? 0.1 : DepthMultiplier)
-#define PERSPECTIVE ((Preset == 1) ? 1.0 : PERSPECTIVE_COEFFICIENT)
 
 /*-------------------.
 | :: Parameters ::   |
@@ -83,7 +80,7 @@ uniform int Guide <
         "4. Enable Bump Mapping for surface detail (adjust BumpIntensity)\n\n"
         
         "PRESET ADVICE:\n"
-        "1. Game B: Alternative depth scaling and Pespective (0.1 multiplier), (1.0 Pespective)\n\n"
+        "1. Game B: Alternative depth scaling (0.1 multiplier)\n\n"
         
         "BLEND MODES:\n"
         "1. Additive: Brightens surfaces (good for dark games)\n"
@@ -103,6 +100,14 @@ uniform int ViewMode <
     ui_label = "View Mode";
     ui_items = "None\0GI Debug\0Normal Debug\0Depth Debug\0";
 > = 0;
+
+uniform int QualityPreset <
+    ui_type = "combo";
+    ui_category = "General";
+    ui_label = "Quality Preset (Steps per Ray)";
+    ui_tooltip = "For you: if you increase the quality you can decrease the Depth Threshold and if you decrease the quality you can increase the DT.";
+    ui_items = "Custom\0Very Low\0Low\0Medium\0High\0Very High\0Ultra\0";
+> = 4;
 
 uniform int Preset <
     ui_type     = "combo";
@@ -164,17 +169,20 @@ uniform float DEPTH_THRESHOLD <
     ui_step = 0.001;
     ui_category = "Ray Tracing";
     ui_label = "Depth Threshold";
-> = 0.002;
+> = 0.004;
 
 uniform float NORMAL_THRESHOLD <
-    ui_type = "slider";
-    ui_min = -1.0; ui_max = 1.0;
-    ui_step = 0.001;
-    ui_category = "Ray Tracing";
-    ui_label = "Normal Threshold";
-> = -1.0;
 
-uniform float PERSPECTIVE_COEFFICIENT <
+        ui_type = "slider";
+        ui_min = -1.0;
+        ui_max = 1.0;
+        ui_step = 0.01;
+        ui_category = "Ray Tracing";
+        ui_label = "Normal Threshold";
+        ui_tooltip = "Controls surface angle sensitivity. Lower values = more reflections";
+ >  = -1.0;
+
+uniform float PERSPECTIVE_COEF <
     ui_type = "slider";
     ui_min = 0.0; ui_max = 10.0;
     ui_step = 0.1;
@@ -317,29 +325,29 @@ sampler sTexMotionVectorsSampler
 
 namespace SSRT
 {
-    texture GiTex
+    texture giTex
     {
         Width = RES_WIDTH;
         Height = RES_HEIGHT;
         Format = RGBA16F;
     };
-    sampler sGiTex
+    sampler sGI
     {
-        Texture = GiTex;
+        Texture = giTex;
     };
 
-    texture GiTemporal
+    texture giTemporalTex
     {
         Width = RES_WIDTH;
         Height = RES_HEIGHT;
         Format = RGBA16F;
     };
-    sampler sGITemporal
+    sampler sGITemp
     {
-        Texture = GiTemporal;
+        Texture = giTemporalTex;
     };
 
-    texture2D giHistory
+    texture2D giHistoryTex
     {
         Width = RES_WIDTH;
         Height = RES_HEIGHT;
@@ -347,7 +355,7 @@ namespace SSRT
     };
     sampler2D sGIHistory
     {
-        Texture = giHistory;
+        Texture = giHistoryTex;
         SRGBTexture = false;
     };
 
@@ -357,7 +365,7 @@ namespace SSRT
         Height = BUFFER_HEIGHT;
         Format = RGBA16F;
     };
-    sampler normalSampler
+    sampler sNormal
     {
         Texture = normalTex;S_PC
     };
@@ -369,7 +377,7 @@ namespace SSRT
         Format = R32F;
         MipLevels = 6;
     };
-    sampler depthSampler
+    sampler sDepth
     {
         Texture = depthTex;
         MinLOD = 0.0f;
@@ -379,10 +387,6 @@ namespace SSRT
 /*----------------.
 | :: Functions :: |
 '----------------*/
-    
-    // Schlick
-    static const float ior = 1.5;
-    static const float R0 = (1.0 - 1.0 / ior) * (1.0 - 1.0 / ior);
     
     //Unlicence Start
     static const float3x3 g_sRGBToACEScg = float3x3(
@@ -493,7 +497,7 @@ namespace SSRT
 
     float3 getNormal(float2 coords)
     {
-        float3 normal = -(tex2Dlod(normalSampler, float4(coords, 0, 0)).xyz - 0.5) * 2;
+        float3 normal = -(tex2Dlod(sNormal, float4(coords, 0, 0)).xyz - 0.5) * 2;
         return normalize(normal);
     }
 
@@ -544,92 +548,127 @@ namespace SSRT
     float3 uvz_to_xyz(float2 uv, float z)
     {
         uv -= float2(0.5, 0.5);
-        float perspective = (Preset == 1) ? 1.0 : PERSPECTIVE_COEFFICIENT;
-        return float3(uv.x * z * perspective, uv.y * z * perspective, z);
+        return float3(uv.x * z * PERSPECTIVE_COEF, uv.y * z * PERSPECTIVE_COEF, z);
     }
 
     float2 xyz_to_uv(float3 pos)
     {
-        float perspective = (Preset == 1) ? 1.0 : PERSPECTIVE_COEFFICIENT;
-        float2 uv = float2(pos.x / (pos.z * perspective), pos.y / (pos.z * perspective));
+        float2 uv = float2(pos.x / (pos.z * PERSPECTIVE_COEF), pos.y / (pos.z * PERSPECTIVE_COEF));
         return uv + float2(0.5, 0.5);
     }
 
-    // Main ray tracing function
+    struct PixelData
+    {
+        float PerspectiveFactor;
+        float InvSteps;
+        float InvRays;
+    };
+
+    struct RayInfo
+    {
+        float3 pertN;
+        float3 rayDir;
+        bool hit;
+    };
+
+    int GetStepsFromPreset()
+    {
+        if (QualityPreset == 0) // Custom
+            return STEPS_PER_RAY;
+        else if (QualityPreset == 1) // Very Low
+            return 12;
+        else if (QualityPreset == 2) // Low
+            return 24;
+        else if (QualityPreset == 3) // Medium
+            return 48;
+        else if (QualityPreset == 4) // High
+            return 64;
+        else if (QualityPreset == 5) // Very High
+            return 96;
+        else if (QualityPreset == 6) // Ultra
+            return 256;
+    
+        return 64; 
+    }
+    
+    // Main ray tracing function - Implements screen-space reflections using stochastic ray marching
     float4 Trace(in float4 position : SV_Position, in float2 texcoord : TEXCOORD) : SV_Target
     {
-        float depth = getDepth(texcoord).x;
-        float3 normal = getNormal(texcoord);
-        float3 selfPos = uvz_to_xyz(texcoord, depth);
-        float3 viewDir = normalize(selfPos);
+        // Quality preset
+        int STEPS_PER_RAY = GetStepsFromPreset();
+    
+        PixelData pd;
+        pd.PerspectiveFactor = PERSPECTIVE_COEF;
+        pd.InvSteps = rcp(STEPS_PER_RAY);
+        pd.InvRays = rcp(RAYS_AMOUNT);
 
-        float4 accumulatedColor = float4(0, 0, 0, 0);
-        float invRays = 1.0 / RAYS_AMOUNT;
+        // Scene Data
+        float depth = getDepth(texcoord);
+        float3 selfPos = float3((texcoord - 0.5) * depth * pd.PerspectiveFactor, depth);
+        float3 viewDir = normalize(selfPos);
+        float3 normal = getNormal(texcoord);
+        float4 accum = float4(0, 0, 0, 0);
+
+        // Schlick approximation
+        const float ior = 1.5;
+        const float R0 = pow((1.0 - ior) / (1.0 + ior), 2.0);
 
         // For each ray
-        for (int j = 0; j < RAYS_AMOUNT; ++j)
+        for (int r = 0; r < RAYS_AMOUNT; ++r)
         {
-            float3 jitter = normalize(rand3d(texcoord * (32.0 * (j + 1.0)) + frac(FRAME_COUNT / 4.0)) * 2.0 - 1.0);
+            // Jittering
+            float3 jitter = normalize(rand3d(texcoord * (32.0 * (r + 1.0) + frac(FRAME_COUNT / 4.0)) * 2.0 - 1.0));
             float3 pertN = normalize(lerp(normal, normal + jitter * 0.2, RandomIntensity));
-            float3 rayDir = normalize(reflect(viewDir, pertN));
-            float3 rayStep = rayDir * (BASE_RAYS_LENGTH / STEPS_PER_RAY);
-            float3 currPos = selfPos;
-
+            float3 rayDir = reflect(viewDir, pertN);
+            float3 step = rayDir * (BASE_RAYS_LENGTH * pd.InvSteps);
+            float3 curr = selfPos;
             bool hit = false;
 
-             // March along the ray
+            // Ray march
             for (int i = 0; i < STEPS_PER_RAY; ++i)
             {
-                currPos += rayStep;
+                curr += step;
+        
+                // Early exits
+                if (curr.z <= 0.0)
+                    break;
+                float2 uvNew = xyz_to_uv(curr);
+                if (any(saturate(uvNew) != uvNew))
+                    break;
 
-                if (currPos.z <= 0.0)
+                // Depth Check
+                float dScene = getDepth(uvNew);
+                if (curr.z < dScene || curr.z > dScene + DEPTH_THRESHOLD)
                     continue;
 
-                float2 uvNew = xyz_to_uv(currPos);
-                if (any(uvNew < 0.0) || any(uvNew > 1.0))
+                // Normal Check
+                float3 hitN = getNormal(uvNew);
+                if (dot(hitN, pertN) < NORMAL_THRESHOLD)
                     continue;
 
-                float sceneDepth = getDepth(uvNew).x;
-
-                if (currPos.z <= sceneDepth || currPos.z >= sceneDepth + DEPTH_THRESHOLD)
-                    continue;
-
-                float3 hitNormal = getNormal(uvNew);
-                float normalDot = dot(hitNormal, pertN);
-                if (normalDot < NORMAL_THRESHOLD)
-                    continue;
-
-                // Schlick APP
-                float cosTheta = saturate(dot(hitNormal, rayDir));
-                float oneMinusC = 1.0 - cosTheta;
-                float fresnel = R0 + (1.0 - R0) * pow(oneMinusC, 5.0);
-                float factor = max(0.2, fresnel);
-
+                // Fresnel + angular weight
+                float cosTheta = saturate(dot(hitN, rayDir));
+                float fresnel = R0 + (1.0 - R0) * pow(1.0 - cosTheta, 5.0);
                 float angleWeight = pow(saturate(dot(viewDir, rayDir)), 2.0);
 
-                float3 sampleColor = tex2Dlod(ReShade::BackBuffer, float4(uvNew, 0, 0)).rgb;
-                accumulatedColor.rgb += sampleColor * invRays * factor * angleWeight;
-
+                 // Accumulation
+                accum.rgb += GetColor(uvNew).rgb * pd.InvRays * fresnel * angleWeight;
                 hit = true;
                 break;
             }
 
+            // Did not reach surface? Alternative color
             if (!hit)
-            {
-                accumulatedColor.rgb += SkyColor * 0.1 * invRays;
-            }
+                accum.rgb += SkyColor * 0.1 * pd.InvRays;
         }
-        
-        //Fade, Alpha, Remap
-        float fadeF = max(FadeEnd - FadeStart, 0.001);
-        float fade = saturate((FadeEnd - depth) / fadeF);
-        accumulatedColor.rgb *= fade;
-        accumulatedColor.a = depth;
-        accumulatedColor.rgb = accumulatedColor.rgb / (accumulatedColor.rgb + 1.0);
 
-        return accumulatedColor;
+        // Fade, Alpha and Remap
+        float fade = saturate((FadeEnd - depth) / max(FadeEnd - FadeStart, 0.001));
+        accum.rgb = saturate(accum.rgb * fade / (accum.rgb + 1.0));
+        accum.a = depth;
+        return accum;
     }
-    //END GNU3
+//END GNU3
     
     // Motion vector function
     float2 GetMotionVector(float2 texcoord)
@@ -669,7 +708,7 @@ namespace SSRT
     float4 PS_Temporal(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
         float2 motion = GetMotionVector(uv);
-        float3 currentGI = tex2Dlod(sGiTex, float4(uv, 0, 0)).rgb;
+        float3 currentGI = tex2Dlod(sGI, float4(uv, 0, 0)).rgb;
         float2 reprojectedUV = uv + motion;
         float2 offset = ReShade::PixelSize.xy;
 
@@ -696,14 +735,14 @@ namespace SSRT
 
     float4 PS_SaveHistory(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
-        float3 gi = EnableTemporal ? tex2Dlod(sGITemporal, float4(uv, 0, 0)).rgb : tex2Dlod(sGiTex, float4(uv, 0, 0)).rgb;
+        float3 gi = EnableTemporal ? tex2Dlod(sGITemp, float4(uv, 0, 0)).rgb : tex2Dlod(sGI, float4(uv, 0, 0)).rgb;
         return float4(gi, 1.0);
     }
 
     float4 Combine(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
     {
         float4 originalColor = tex2D(ReShade::BackBuffer, texcoord);
-        float3 giColor = EnableTemporal ? tex2D(sGITemporal, texcoord).rgb : tex2D(sGiTex, texcoord).rgb;
+        float3 giColor = EnableTemporal ? tex2D(sGITemp, texcoord).rgb : tex2D(sGI, texcoord).rgb;
 
         float depth = getDepth(texcoord);
         float3 normal = getNormal(texcoord);
@@ -720,8 +759,8 @@ namespace SSRT
         }
 
         // Saturation
-        float greyValue = dot(giColor, float3(0.299, 0.587, 0.114)); 
-        float3 grey = float3(greyValue, greyValue, greyValue); 
+        float greyValue = dot(giColor, float3(0.299, 0.587, 0.114));
+        float3 grey = float3(greyValue, greyValue, greyValue);
         giColor = lerp(grey, giColor, Saturation);
 
         if (ViewMode == 0)
@@ -761,21 +800,21 @@ namespace SSRT
         {
             VertexShader = PostProcessVS;
             PixelShader = Trace;
-            RenderTarget = GiTex;
+            RenderTarget = giTex;
         }
     
         pass Temporal
         {
             VertexShader = PostProcessVS;
             PixelShader = PS_Temporal;
-            RenderTarget = GiTemporal;
+            RenderTarget = giTemporalTex;
         }
     
         pass SaveHistory
         {
             VertexShader = PostProcessVS;
             PixelShader = PS_SaveHistory;
-            RenderTarget = giHistory;
+            RenderTarget = giHistoryTex;
         }
     
         pass Combine
