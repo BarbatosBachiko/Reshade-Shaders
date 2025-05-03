@@ -4,7 +4,7 @@
 
     Directional Anti-Aliasing (DAA)
     
-    Version 1.5
+    Version 1.5.1
     Author: Barbatos Bachiko
     License: MIT
 
@@ -14,11 +14,8 @@
     History:
     (*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
 
-    Version 1.5
-    * Added "Edge Mask Overlay" (red edge highlights over the original image)
-    + Quality Mode now uses 3x3 sampling with AABB
-    - Removed Sharpening
-    + Code maintenance
+    Version 1.5.1
+    * Limit TAA to edges
 */
 
 // Includes
@@ -44,7 +41,7 @@
 
 #define MAJOR_VERSION 1
 #define MINOR_VERSION 5
-#define PATCH_VERSION 0
+#define PATCH_VERSION 1
 
 #define BUILD_DOT_VERSION_(mav, miv, pav) #mav "." #miv "." #pav
 #define BUILD_DOT_VERSION(mav, miv, pav) BUILD_DOT_VERSION_(mav, miv, pav)
@@ -132,6 +129,13 @@ uniform float TemporalAAFactor
     ui_label = "Temporal Strength";
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
 > = 0.5;
+
+uniform bool LimitTAAtoEdges <
+    ui_category = "Temporal";
+    ui_type = "checkbox";
+    ui_label = "Limit TAA to Edges";
+    ui_tooltip = "Restricts Temporal AA only to detected edges";
+> = false;
 
 uniform uint framecount < source = "framecount"; >;
 
@@ -275,29 +279,23 @@ float4 PS_TemporalDAA(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV
     float2 motion = GetMotionVector(texcoord);
     float4 current = DirectionalAA(texcoord);
     
-    if (TemporalMode == 0) // Method A - Basic neighborhood averaging = Blurry
+    // Calculate edge weight for current pixel
+    float2 gradient = ComputeGradient(texcoord);
+    float edgeStrength = length(gradient);
+    float edgeWeight = smoothstep(EdgeThreshold, EdgeThreshold + EdgeFalloff, edgeStrength);
+    
+    if (TemporalMode == 0) // Method A - Blurry
     {
         float2 reprojectedTexcoord = texcoord + motion;
-        
-        // Define offsets for directions
-        float2 offsetUp = float2(0.0, -ReShade::PixelSize.y);
-        float2 offsetDown = float2(0.0, ReShade::PixelSize.y);
-        float2 offsetLeft = float2(-ReShade::PixelSize.x, 0.0);
-        float2 offsetRight = float2(ReShade::PixelSize.x, 0.0);
-        
-        // Samples the history
         float4 historyCenter = tex2Dlod(sDAAHistory, float4(reprojectedTexcoord, 0, 0));
-        float4 historyUp = tex2Dlod(sDAAHistory, float4(reprojectedTexcoord + offsetUp, 0, 0));
-        float4 historyDown = tex2Dlod(sDAAHistory, float4(reprojectedTexcoord + offsetDown, 0, 0));
-        float4 historyLeft = tex2Dlod(sDAAHistory, float4(reprojectedTexcoord + offsetLeft, 0, 0));
-        float4 historyRight = tex2Dlod(sDAAHistory, float4(reprojectedTexcoord + offsetRight, 0, 0));
         
-        float4 historyAvg = (historyCenter + historyUp + historyDown + historyLeft + historyRight) / 5.0;
-        
+        // Apply edge weight limitation if enabled
         float factor = EnableTemporalAA ? TemporalAAFactor : 0.0;
-        return lerp(current, historyAvg, factor);
+        factor = LimitTAAtoEdges ? factor * edgeWeight : factor;
+        
+        return lerp(current, historyCenter, factor);
     }
-    else if (TemporalMode == 1) // Method B - Simple YCoCg blending 
+    else if (TemporalMode == 1) // Method B - Standard
     {
         float3 currentYCoCg = RGBToYCoCg(current.rgb);
         float2 reprojectedTexcoord = texcoord + motion;
@@ -305,12 +303,14 @@ float4 PS_TemporalDAA(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV
         float3 historyYCoCg = RGBToYCoCg(history.rgb);
         
         float factor = EnableTemporalAA ? TemporalAAFactor : 0.0;
+        factor = LimitTAAtoEdges ? factor * edgeWeight : factor;
+        
         float3 blendedYCoCg = lerp(currentYCoCg, historyYCoCg, factor);
         float3 finalRGB = YCoCgToRGB(blendedYCoCg);
         
         return float4(finalRGB, current.a);
     }
-    else // Method C – Neighborhood clamping = Quality
+    else // Method C - Quality
     {
         float2 pixelSize = ReShade::PixelSize.xy;
         float3 currentYCoCg = RGBToYCoCg(current.rgb);
@@ -323,7 +323,7 @@ float4 PS_TemporalDAA(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV
         float3 minColor = float3(FLT_MAX, FLT_MAX, FLT_MAX);
         float3 maxColor = float3(NEG_FLT_MAX, NEG_FLT_MAX, NEG_FLT_MAX);
     
-        // Sample 3×3 neighborhood, skip (i=0,j=0)
+        // Sample 3×3 neighborhood
         for (int j = -1; j <= 1; ++j)
         {
             for (int i = -1; i <= 1; ++i)
@@ -332,8 +332,8 @@ float4 PS_TemporalDAA(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV
                 {
                     float2 offset = pixelSize * float2(i, j);
                     float3 sampleYCoCg = RGBToYCoCg(
-                    getColor(float4(texcoord + offset, 0, 0)).rgb
-                );
+                        getColor(float4(texcoord + offset, 0, 0)).rgb
+                    );
                     minColor = min(minColor, sampleYCoCg);
                     maxColor = max(maxColor, sampleYCoCg);
                 }
@@ -347,15 +347,18 @@ float4 PS_TemporalDAA(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV
     
         // Sample history and clamp it
         float3 historyYCoCg = RGBToYCoCg(
-        tex2Dlod(sDAAHistory, float4(reproTexcoord, 0, 0)).rgb
-    );
+            tex2Dlod(sDAAHistory, float4(reproTexcoord, 0, 0)).rgb
+        );
         historyYCoCg = clamp(historyYCoCg, minColor, maxColor);
     
-       // Compute blend factor based on motion length
+        // Compute blend factor
         float motionLen = length(motion) * 100.0;
         float blendFactor = EnableTemporalAA
-        ? clamp(TemporalAAFactor * (1.0 - motionLen), 0.0, TemporalAAFactor)
-        : 0.0;
+            ? clamp(TemporalAAFactor * (1.0 - motionLen), 0.0, TemporalAAFactor)
+            : 0.0;
+        
+        // Apply edge weight limitation if enabled
+        blendFactor = LimitTAAtoEdges ? blendFactor * edgeWeight : blendFactor;
     
         float3 resultYCoCg = lerp(currentYCoCg, historyYCoCg, blendFactor);
         float3 resultRGB = YCoCgToRGB(resultYCoCg);
