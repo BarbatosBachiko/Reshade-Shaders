@@ -4,7 +4,7 @@
 
     SSRT
 
-    Version 1.3.4
+    Version 1.4
     Author: Barbatos Bachiko
     Original SSRT by jebbyk : https://github.com/jebbyk/SSRT-for-reshade/blob/main/ssrt.fx
 
@@ -17,9 +17,13 @@
     History:
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
     
-    Version 1.3.4
-    + Maintenance
-    * Quality Preset
+    Version 1.4
+    + Ray Tracing
+    - Removed SkyColor (substituted)
+    * Temporal now accumulates the frames
+    + Some hardcoded options because they didn't make sense to the end user
+    + Perspective Coefficient
+
 */
 
 /*-------------------.
@@ -32,6 +36,7 @@
 #ifndef USE_MARTY_LAUNCHPAD_MOTION
 #define USE_MARTY_LAUNCHPAD_MOTION 0
 #endif
+
 #ifndef USE_VORT_MOTION
 #define USE_VORT_MOTION 0
 #endif
@@ -58,29 +63,18 @@ uniform int Guide <
     
         "SSRT SCREEN SPACE RAY TRACING GUIDE:\n\n"
         
-        "CORE SETTINGS:\n"
-        "1. Base Ray Length: Controls how far rays travel (0.1-50)\n"
-        "2. Rays Amount: Number of rays per pixel (1-4). Note: this option is useless for now.\n"
-        "3. Steps Per Ray: Detail of each ray (1-256). Higher = more accurate but slower\n"
-        
         "QUALITY TUNING:\n"
         "1. Depth Threshold: Surface detection precision (0.001-0.01)\n"
         "2. Normal Threshold: Angle sensitivity (-1.0-1.0)\n"
         "3. Perspective: Adjust for correct depth scaling (0-10)\n\n"
         
         "OPTIMIZATION TIPS:\n"
-        "1. Start with Rays Amount=1 and Steps=60 for performance\n"
-        "2. Use Temporal Filtering to smooth results\n"
-        "3. Lower RES_SCALE in definitions for faster rendering\n\n"
+        "1. Lower RES_SCALE in definitions\n\n"
         
         "VISUAL TUNING:\n"
         "1. Use View Modes to debug GI/Normals/Depth\n"
         "2. Adjust FadeStart/FadeEnd to control effect distance\n"
-        "3. Set SkyColor to match your game's environment. Note: if necessary\n"
-        "4. Enable Bump Mapping for surface detail (adjust BumpIntensity)\n\n"
-        
-        "PRESET ADVICE:\n"
-        "1. Game B: Alternative depth scaling (0.1 multiplier)\n\n"
+        "3. Adjust BumpIntensity\n\n"
         
         "BLEND MODES:\n"
         "1. Additive: Brightens surfaces (good for dark games)\n"
@@ -93,83 +87,29 @@ uniform int Guide <
     ui_type = "radio";
 > = 0;
 
-// General Settings
-uniform int ViewMode <
-    ui_type = "combo";
-    ui_category = "General";
-    ui_label = "View Mode";
-    ui_items = "None\0GI Debug\0Normal Debug\0Depth Debug\0";
-> = 0;
-
-uniform int QualityPreset <
-    ui_type = "combo";
-    ui_category = "General";
-    ui_label = "Quality Preset (Steps per Ray)";
-    ui_tooltip = "For you: if you increase the quality you can decrease the Depth Threshold and if you decrease the quality you can increase the DT.";
-    ui_items = "Custom\0Very Low\0Low\0Medium\0High\0Very High\0Ultra\0";
-> = 4;
-
 uniform int Preset <
     ui_type     = "combo";
     ui_category = "General";
     ui_label    = "Preset for View";
-    ui_tooltip = "GAME B preset may be better in some games";
-    ui_items    = "Custom\0GAME B\0";
+    ui_tooltip = "Pespective for Games";
+    ui_items    = "First Person Game\0Third Person Game\0";
 > = 0;
-
-uniform int BlendMode <
-    ui_type = "combo";
-    ui_category = "General";
-    ui_label = "Blend Mode";
-    ui_items = "Additive\0Multiplicative\0Alpha Blend\0";
-> = 1;
-
-// Ray Tracing Settings
-uniform float BASE_RAYS_LENGTH <
-    ui_type = "slider";
-    ui_min = 0.1; ui_max = 2.0;
-    ui_step = 0.001;
-    ui_category = "Ray Tracing";
-    ui_label = "Base ray length";
-> = 0.1;
-
-uniform int RAYS_AMOUNT <
-    ui_type = "slider";
-    ui_min = 1; ui_max = 4;
-    ui_step = 1;
-    ui_category = "Ray Tracing";
-    ui_label = "Rays amount";
-> = 1;
-
-uniform int STEPS_PER_RAY <
-    ui_type = "slider";
-    ui_min = 1; ui_max = 256;
-    ui_step = 1;
-    ui_category = "Ray Tracing";
-    ui_label = "Steps per ray";
-> = 64.0;
 
 uniform float Intensity <
     ui_type = "slider";
-    ui_min = 0.1; ui_max = 10.0;
+    ui_min = 0.1; ui_max = 5.0;
     ui_step = 0.1;
-    ui_category = "Ray Tracing";
+    ui_category = "General";
     ui_label = "Intensity";
 > = 2.5;
-
-uniform float RandomIntensity <
-    ui_label = "Random Intensity";
-    ui_type = "slider";
-    ui_min = 0.0; ui_max = 1.0;
-> = 0.0;
 
 uniform float DEPTH_THRESHOLD <
     ui_type = "slider";
     ui_min = 0.001; ui_max = 0.01;
     ui_step = 0.001;
-    ui_category = "Ray Tracing";
+    ui_category = "General";
     ui_label = "Depth Threshold";
-> = 0.004;
+> = 0.010;
 
 uniform float NORMAL_THRESHOLD <
 
@@ -177,18 +117,10 @@ uniform float NORMAL_THRESHOLD <
         ui_min = -1.0;
         ui_max = 1.0;
         ui_step = 0.01;
-        ui_category = "Ray Tracing";
+        ui_category = "General";
         ui_label = "Normal Threshold";
         ui_tooltip = "Controls surface angle sensitivity. Lower values = more reflections";
  >  = -1.0;
-
-uniform float PERSPECTIVE_COEF <
-    ui_type = "slider";
-    ui_min = 0.0; ui_max = 10.0;
-    ui_step = 0.1;
-    ui_category = "Ray Tracing";
-    ui_label = "Pespective";
-> = 1.0;
 
 uniform float FadeStart
     <
@@ -206,71 +138,44 @@ uniform float FadeEnd
         ui_type = "slider";
         ui_label = "Fade End";
         ui_tooltip = "Distance completely fades out";
-        ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+        ui_min = 0.0; ui_max = 2.0; ui_step = 0.01;
     >
     = 1.0;
 
 // Depth Settings
 uniform float DepthMultiplier <
     ui_type = "slider";
-    ui_category = "Depth";
+    ui_category = "Depth/Normal";
     ui_label = "Depth Multiplier";
     ui_min = 0.1; ui_max = 5.0; ui_step = 0.1;
 > = 1.0;
 
 // Normal Settings
 uniform bool bSmoothNormals <
-    ui_category = "Normal";
+ ui_category = "Depth/Normal";
     ui_label = "Smooth Normals";
 > = true;
 
 // Bump Mapping Settings
-uniform bool EnableBumpMapping <
-    ui_category = "Bump Mapping";
-    ui_label = "Enable Bump Mapping";
-> = true;
-
 uniform float BumpIntensity <
     ui_type = "slider";
     ui_category = "Bump Mapping";
     ui_label = "Bump Intensity";
-    ui_min = 0.0; ui_max = 20.0; ui_step = 0.01;
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
 > = 0.5;
-
-uniform float3 BumpDirection < 
-    ui_type = "slider";
-    ui_category = "Bump Mapping";
-    ui_label = "Bump Direction XYZ";
-    ui_min = -2.0; ui_max = 2.0;
-> = float3(-2.0, 1.0, -0.5); 
-
-uniform float BumpDepth <
-    ui_type = "slider";
-    ui_category = "Bump Mapping";
-    ui_label = "Bump Depth";
-    ui_min = 0.0; ui_max = 3.0;
-> = 0.7;
 
 // Temporal Settings
 uniform bool EnableTemporal <
     ui_type = "checkbox";
     ui_category = "Temporal";
     ui_label = "Temporal Filtering";
-> = true;
+> = false;
 
-uniform int TemporalMode <
-    ui_category = "Temporal";
-    ui_type = "combo";
-    ui_items = "Blurry\0Standard\0";
-    ui_label = "Temporal Mode";
-> = 1;
-
-uniform float TemporalFilterStrength <
+uniform float AccumFrames <
     ui_type = "slider";
     ui_category = "Temporal";
-    ui_label = "Temporal Strength";
-    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
-> = 0.3;
+    ui_min = 1.0; ui_max = 32.0; ui_step = 1.0;
+> = 6.0;
 
 // Extra Settings
 uniform bool AssumeSRGB < 
@@ -283,12 +188,6 @@ uniform bool EnableACES <
     ui_label = "Enable ACES Tone Mapping";
 > = true;
 
-uniform float3 SkyColor < 
-    ui_type = "color";
-    ui_category = "Extra";
-    ui_label = "Sky Color";
-> = float3(0.0, 0.0, 0.0);
-
 uniform float Saturation <
     ui_type = "slider";
     ui_category = "Extra";
@@ -296,7 +195,31 @@ uniform float Saturation <
     ui_min = 0.0; ui_max = 2.0; ui_step = 0.05;
 > = 1.0;
 
+uniform int BlendMode <
+    ui_type = "combo";
+    ui_category = "Extra";
+    ui_label = "Blend Mode";
+    ui_items = "Additive\0Multiplicative\0Alpha Blend\0";
+> = 1;
+
+uniform int ViewMode <
+    ui_type = "combo";
+    ui_category = "Debug";
+    ui_label = "View Mode";
+    ui_items = "None\0Motion\0GI Debug\0Normal Debug\0Depth Debug\0";
+> = 0;
+
 uniform int FRAME_COUNT < source = "framecount"; >;
+
+static const float MaxTraceDistance = 0.2;
+static const float BASE_RAYS_LENGTH = 0.5;
+static const float ThicknessThreshold = 0.010;
+static const float RAYS_AMOUNT = 1.0;
+static const float STEPS_PER_RAY = 96.0;
+static const float RandomIntensity = 0.0;
+static const float3 BumpDirection = float3(-2.0, 1.0, -0.5);
+static const float BumpDepth = 0.7;
+static const float PERSPECTIVE_COEFFITIENT = 1.0;
 
 /*---------------.
 | :: Textures :: |
@@ -401,7 +324,7 @@ namespace SSRT
     -0.024127059936902, -0.124620612286390, 1.148822109913262
 );
     //End
-    
+
     // MIT License functions
     float3 getWorldPositionForNormal(float2 coords)
     {
@@ -470,7 +393,6 @@ namespace SSRT
             }
         }
     
-        if (EnableBumpMapping)
         {
             float3 color = GetColor(coords).rgb;
             float height = GetLuminance(color);
@@ -545,16 +467,14 @@ namespace SSRT
         return float3(x, y, z);
     }
 
-    float3 uvz_to_xyz(float2 uv, float z)
-    {
-        uv -= float2(0.5, 0.5);
-        return float3(uv.x * z * PERSPECTIVE_COEF, uv.y * z * PERSPECTIVE_COEF, z);
-    }
-
     float2 xyz_to_uv(float3 pos)
     {
-        float2 uv = float2(pos.x / (pos.z * PERSPECTIVE_COEF), pos.y / (pos.z * PERSPECTIVE_COEF));
-        return uv + float2(0.5, 0.5);
+        return (pos.xy / pos.z) * PERSPECTIVE_COEFFITIENT + float2(0.5, 0.5);
+    }
+
+    float3 uvz_to_xyz(float2 uv, float z)
+    {
+        return float3((uv - 0.5) * z * PERSPECTIVE_COEFFITIENT, z);
     }
 
     struct PixelData
@@ -571,38 +491,14 @@ namespace SSRT
         bool hit;
     };
 
-    int GetStepsFromPreset()
-    {
-        if (QualityPreset == 0) // Custom
-            return STEPS_PER_RAY;
-        else if (QualityPreset == 1) // Very Low
-            return 12;
-        else if (QualityPreset == 2) // Low
-            return 24;
-        else if (QualityPreset == 3) // Medium
-            return 48;
-        else if (QualityPreset == 4) // High
-            return 64;
-        else if (QualityPreset == 5) // Very High
-            return 96;
-        else if (QualityPreset == 6) // Ultra
-            return 256;
-    
-        return 64; 
-    }
-    
-    // Main ray tracing function - Implements screen-space reflections using stochastic ray marching
     float4 Trace(in float4 position : SV_Position, in float2 texcoord : TEXCOORD) : SV_Target
     {
-        // Quality preset
-        int STEPS_PER_RAY = GetStepsFromPreset();
-    
         PixelData pd;
-        pd.PerspectiveFactor = PERSPECTIVE_COEF;
+        pd.PerspectiveFactor = PERSPECTIVE_COEFFITIENT;
         pd.InvSteps = rcp(STEPS_PER_RAY);
         pd.InvRays = rcp(RAYS_AMOUNT);
 
-        // Scene Data
+        // Scene setup
         float depth = getDepth(texcoord);
         float3 selfPos = float3((texcoord - 0.5) * depth * pd.PerspectiveFactor, depth);
         float3 viewDir = normalize(selfPos);
@@ -616,34 +512,41 @@ namespace SSRT
         // For each ray
         for (int r = 0; r < RAYS_AMOUNT; ++r)
         {
-            // Jittering
-            float3 jitter = normalize(rand3d(texcoord * (32.0 * (r + 1.0) + frac(FRAME_COUNT / 4.0)) * 2.0 - 1.0));
-            float3 pertN = normalize(lerp(normal, normal + jitter * 0.2, RandomIntensity));
+            // Jitter + normal perturbation
+            float3 jitter = rand3d(texcoord * (32.0 * (r + 1.0) + frac(FRAME_COUNT / 48.0)) * 2.0 - 1.0);
+            float3 pertN = normalize(normal + jitter * RandomIntensity * 0.2);
             float3 rayDir = reflect(viewDir, pertN);
+
             float3 step = rayDir * (BASE_RAYS_LENGTH * pd.InvSteps);
+            float stepLength = length(step);
             float3 curr = selfPos;
+            float traveled = 0.0;
             bool hit = false;
 
-            // Ray march
             for (int i = 0; i < STEPS_PER_RAY; ++i)
             {
                 curr += step;
-        
-                // Early exits
-                if (curr.z <= 0.0)
-                    break;
+                traveled += stepLength;
+
                 float2 uvNew = xyz_to_uv(curr);
-                if (any(saturate(uvNew) != uvNew))
+                if (any(uvNew < 0.0) || any(uvNew > 1.0))
                     break;
 
-                // Depth Check
+                if (traveled > MaxTraceDistance)
+                    break;
+
                 float dScene = getDepth(uvNew);
+                float thickness = abs(curr.z - dScene);
+                float3 hitN = getNormal(uvNew);
+
+                // Depth and thickness check
                 if (curr.z < dScene || curr.z > dScene + DEPTH_THRESHOLD)
                     continue;
 
-                // Normal Check
-                float3 hitN = getNormal(uvNew);
-                if (dot(hitN, pertN) < NORMAL_THRESHOLD)
+                if (thickness > ThicknessThreshold)
+                    continue;
+
+                if (abs(dot(hitN, pertN)) < NORMAL_THRESHOLD)
                     continue;
 
                 // Fresnel + angular weight
@@ -651,24 +554,33 @@ namespace SSRT
                 float fresnel = R0 + (1.0 - R0) * pow(1.0 - cosTheta, 5.0);
                 float angleWeight = pow(saturate(dot(viewDir, rayDir)), 2.0);
 
-                 // Accumulation
                 accum.rgb += GetColor(uvNew).rgb * pd.InvRays * fresnel * angleWeight;
                 hit = true;
                 break;
             }
 
-            // Did not reach surface? Alternative color
+            // Fallback ray if no hit
             if (!hit)
-                accum.rgb += SkyColor * 0.1 * pd.InvRays;
+            {
+                float3 fallbackPos = selfPos + rayDir * (depth + 0.01) * BASE_RAYS_LENGTH;
+                float2 uvBack = saturate(xyz_to_uv(fallbackPos));
+
+                float viewAlignment = dot(rayDir, viewDir);
+                if (viewAlignment > 0.3 && fallbackPos.z > 0.0 && fallbackPos.z < MaxTraceDistance)
+                {
+                    accum.rgb += GetColor(uvBack).rgb * 0.25 * pd.InvRays;
+                }
+            }
         }
 
         // Fade, Alpha and Remap
         float fade = saturate((FadeEnd - depth) / max(FadeEnd - FadeStart, 0.001));
-        accum.rgb = saturate(accum.rgb * fade / (accum.rgb + 1.0));
+        float3 remapped = saturate(accum.rgb * fade / (accum.rgb + 1.0));
+        accum.rgb = remapped;
         accum.a = depth;
         return accum;
     }
-//END GNU3
+    //END GNU3
     
     // Motion vector function
     float2 GetMotionVector(float2 texcoord)
@@ -704,33 +616,32 @@ namespace SSRT
         float Cg = ycocg.z;
         return float3(Y + Co - Cg, Y + Cg, Y - Co - Cg);
     }
-    
+   
     float4 PS_Temporal(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
         float2 motion = GetMotionVector(uv);
         float3 currentGI = tex2Dlod(sGI, float4(uv, 0, 0)).rgb;
-        float2 reprojectedUV = uv + motion;
-        float2 offset = ReShade::PixelSize.xy;
 
-        float3 history = tex2Dlod(sGIHistory, float4(reprojectedUV, 0, 0)).rgb;
-
-        if (TemporalMode == 0) // Method A - Blurry (Basic neighborhood averaging)
+        float3 currentYC = RGBToYCoCg(currentGI.rgb);
+        float3 historyYC = RGBToYCoCg(tex2Dlod(sGIHistory, float4(uv + motion, 0, 0)).rgb);
+ 
+        float accumulationWeight = 1.0f;
+        float3 accumulation = float3(1.0, 1.0, 1.0); 
+        float3 safeAccumulation = max(float3(1e-10, 1e-10, 1e-10), accumulation + accumulationWeight);
+        float3 alpha = accumulationWeight / safeAccumulation;
+    
+        float3 blendedYC = lerp(historyYC, currentYC, alpha);
+        float3 resultRGB = YCoCgToRGB(blendedYC);
+        
+        // Frame accumulation
+        if (EnableTemporal && AccumFrames > 0 && FRAME_COUNT > 1)
         {
-            float3 historyUp = tex2Dlod(sGIHistory, float4(reprojectedUV + float2(0, -offset.y), 0, 0)).rgb;
-            float3 historyDown = tex2Dlod(sGIHistory, float4(reprojectedUV + float2(0, offset.y), 0, 0)).rgb;
-            float3 historyLeft = tex2Dlod(sGIHistory, float4(reprojectedUV + float2(-offset.x, 0), 0, 0)).rgb;
-            float3 historyRight = tex2Dlod(sGIHistory, float4(reprojectedUV + float2(offset.x, 0), 0, 0)).rgb;
-
-            float3 historyAvg = (history + historyUp + historyDown + historyLeft + historyRight) / 5.0;
-            return float4(lerp(currentGI, historyAvg, TemporalFilterStrength), 1.0);
+            uint N = min(FRAME_COUNT, (uint) AccumFrames);
+            float4 prev = tex2Dlod(sGIHistory, float4(uv + motion, 0, 0));
+            resultRGB = (prev.rgb * (N - 1) + resultRGB) / N;
         }
-        else // Method B - Standard (YCoCg blending)
-        {
-            float3 currentYCoCg = RGBToYCoCg(currentGI);
-            float3 historyYCoCg = RGBToYCoCg(history);
-            float3 blendedYCoCg = lerp(currentYCoCg, historyYCoCg, TemporalFilterStrength);
-            return float4(YCoCgToRGB(blendedYCoCg), 1.0);
-        }
+    
+        return float4(resultRGB, currentGI.r);
     }
 
     float4 PS_SaveHistory(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
@@ -739,11 +650,21 @@ namespace SSRT
         return float4(gi, 1.0);
     }
 
+    float3 HSVtoRGB(float3 c)
+    {
+        float4 K = float4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+        float3 p = abs(frac(c.xxx + K.xyz) * 6.0 - K.www);
+        return c.z * lerp(K.xxx, saturate(p - K.xxx), c.y);
+    }
+    
     float4 Combine(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
     {
-        float4 originalColor = tex2D(ReShade::BackBuffer, texcoord);
+        float4 originalColor = GetColor(texcoord);
         float3 giColor = EnableTemporal ? tex2D(sGITemp, texcoord).rgb : tex2D(sGI, texcoord).rgb;
-
+        
+        float2 motion = GetMotionVector(texcoord);
+        float velocity = length(motion) * 100.0;
+        
         float depth = getDepth(texcoord);
         float3 normal = getNormal(texcoord);
 
@@ -772,11 +693,17 @@ namespace SSRT
             else if (BlendMode == 2) // Alpha Blend
                 return float4(lerp(originalColor.rgb, giColor, saturate(giColor.r)), originalColor.a);
         }
-        else if (ViewMode == 1) // GI Debug
+        else if (ViewMode == 1) // Motion Vectors
+        {
+            float angle = atan2(motion.y, motion.x);
+            float3 hsv = float3((angle / 6.283185) + 0.5, 1.0, saturate(velocity));
+            return float4(HSVtoRGB(hsv), 1.0);
+        }
+        else if (ViewMode == 2) // GI Debug
             return float4(giColor, 1.0);
-        else if (ViewMode == 2) // Normal Debug
+        else if (ViewMode == 3) // Normal Debug
             return float4(normal * 0.5 + 0.5, 1.0);
-        else if (ViewMode == 3) // Depth Debug
+        else if (ViewMode == 4) // Depth Debug
             return float4(depth, depth, depth, 1.0);
 
         return originalColor;
