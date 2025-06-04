@@ -84,11 +84,13 @@ uniform float SharpStrength <
     ui_type = "drag";
     ui_label = "Sharpness Strength";
     ui_min = 0.0;
-    ui_max = 2.0;
+    ui_max = 4.0;
     ui_step = 0.001;
     ui_category = "Sharpen";
-> = 1.200;
+> = 2.000;
 
+namespace NEOSPACE
+{
 texture ColorTex : COLOR;
 sampler sColor
 {
@@ -153,7 +155,7 @@ float4 GetDirUSM(float p[SIZE * SIZE])
     
     float interp0Deg[5], interp90Deg[5], interp45Deg[5], interp135Deg[5];
     
-    // 0° 
+    // 0Â° 
     interp0Deg[0] = p[INDEX(0, 2)];
     interp0Deg[1] = p[INDEX(1, 2)];
     interp0Deg[2] = p[INDEX(2, 2)];
@@ -161,7 +163,7 @@ float4 GetDirUSM(float p[SIZE * SIZE])
     interp0Deg[4] = p[INDEX(4, 2)];
     usm.x = EvalUSM(interp0Deg, sharpStrength, sharpLimit);
 
-    // 90° 
+    // 90Â° 
     interp90Deg[0] = p[INDEX(2, 0)];
     interp90Deg[1] = p[INDEX(2, 1)];
     interp90Deg[2] = p[INDEX(2, 2)];
@@ -169,7 +171,7 @@ float4 GetDirUSM(float p[SIZE * SIZE])
     interp90Deg[4] = p[INDEX(2, 4)];
     usm.y = EvalUSM(interp90Deg, sharpStrength, sharpLimit);
 
-    // 45° 
+    // 45Â° 
     interp45Deg[0] = p[INDEX(1, 1)];
     interp45Deg[1] = lerp(p[INDEX(2, 1)], p[INDEX(1, 2)], 0.5);
     interp45Deg[2] = p[INDEX(2, 2)];
@@ -177,7 +179,7 @@ float4 GetDirUSM(float p[SIZE * SIZE])
     interp45Deg[4] = p[INDEX(3, 3)];
     usm.z = EvalUSM(interp45Deg, sharpStrength, sharpLimit);
 
-    // 135° 
+    // 135Â° 
     interp135Deg[0] = p[INDEX(3, 1)];
     interp135Deg[1] = lerp(p[INDEX(3, 2)], p[INDEX(2, 1)], 0.5);
     interp135Deg[2] = p[INDEX(2, 2)];
@@ -272,4 +274,5 @@ technique Barbatos_NVSharpen <
         VertexShader = PostProcessVS;
         PixelShader = PS_NIS;
     }
+  }
 }
