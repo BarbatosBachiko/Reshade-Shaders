@@ -4,27 +4,26 @@
 
     MaterialFX
 
-    Version 1.2
+    Version 1.3 
     Author: Barbatos Bachiko
     License: MIT
 
-    About: Bits, Chromatic Aberration and fog.
-    History:
+    About: Bits, Chromatic Aberration and Fog.
+
+  History:
     (*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
 
-    Version 1.2
-    + restructuring
-    - removed pixelate, convolution and outline
+    Version 1.3
+    + Revised
+*/
 
-/*---------------.
-| :: Includes :: |
-'---------------*/
 #include "ReShade.fxh"
-#include "ReShadeUI.fxh"
+#define GetColor(c) tex2Dlod(ReShade::BackBuffer, float4((c).xy, 0, 0))
 
 /*---------------.
 | :: Settings :: |
 '---------------*/
+
 uniform int combo
 <
     ui_type = "combo";
@@ -41,7 +40,6 @@ uniform float CAStrength
 <
     ui_type = "slider";
     ui_label = "Chromatic Aberration Strength";
-    ui_tooltip = "Adjust the strength of chromatic aberration effect";
     ui_min = 0.0; ui_max = 0.050; ui_step = 0.001;
 >
 = 0.001;
@@ -50,25 +48,9 @@ uniform float fog_density
 <
     ui_type = "slider";
     ui_label = "Fog Density";
-    ui_tooltip = "Adjust the density of the fog effect";
     ui_min = 1.0; ui_max = 5.0; ui_step = 1.0;
 >
 = 3.0;
-
-/*---------------.
-| :: Textures :: |
-'---------------*/
-
-texture MaterialTex
-{
-    Width = BUFFER_WIDTH;
-    Height = BUFFER_HEIGHT;
-    Format = RGBA8;
-};
-sampler sMaterial
-{
-    Texture = MaterialTex;
-};
 
 /*----------------.
 | :: Functions :: |
@@ -76,7 +58,7 @@ sampler sMaterial
 
 float4 MaterialFXPass(float4 pos : SV_Position, float2 texcoord : TexCoord) : SV_Target
 {
-    float4 color = tex2D(ReShade::BackBuffer, texcoord);
+    float4 color = GetColor(texcoord);
 
     if (combo == 0) // Bits
     {
@@ -85,25 +67,17 @@ float4 MaterialFXPass(float4 pos : SV_Position, float2 texcoord : TexCoord) : SV
     else if (combo == 1) // Chromatic Aberration
     {
         float2 offsetAmount = float2(CAStrength, 0.0);
-        float4 redChannel = tex2D(ReShade::BackBuffer, texcoord + offsetAmount);
-        float4 greenChannel = tex2D(ReShade::BackBuffer, texcoord);
-        float4 blueChannel = tex2D(ReShade::BackBuffer, texcoord - offsetAmount);
-        color.rgb = float3(redChannel.r, greenChannel.g, blueChannel.b);
+        float4 redChannel = GetColor(texcoord + offsetAmount);
+        float4 blueChannel = GetColor(texcoord - offsetAmount);
+        color.rgb = float3(redChannel.r, color.g, blueChannel.b);
     }
     else if (combo == 2) // Fog
     {
         float fogFactor = smoothstep(0.0, fog_density, texcoord.y);
         color.rgb = lerp(color.rgb, float3(1.0, 1.0, 1.0), fogFactor);
     }
-    return float4(saturate(color.rgb), 1.0);
-}
 
-/*----------------.
-| :: Composite :: |
-'----------------*/
-float4 Composite_PS(float4 pos : SV_Position, float2 uv : TexCoord) : SV_Target
-{
-    return tex2D(sMaterial, uv);
+    return float4(saturate(color.rgb), 1.0);
 }
 
 /*-----------------.
@@ -115,11 +89,5 @@ technique MaterialFX
     {
         VertexShader = PostProcessVS;
         PixelShader = MaterialFXPass;
-        RenderTarget = MaterialTex;
-    }
-    pass
-    {
-        VertexShader = PostProcessVS;
-        PixelShader = Composite_PS;
     }
 }
