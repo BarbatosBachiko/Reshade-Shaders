@@ -4,7 +4,7 @@
 
     SSRT
 
-    Version 1.5
+    Version 1.5.1
     Author: Barbatos Bachiko
     Original SSRT by jebbyk : https://github.com/jebbyk/SSRT-for-reshade/blob/main/ssrt.fx
 
@@ -17,10 +17,10 @@
     History:
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
     
-    Version 1.5
-    * Add Diffuse Light
-    + Specular Improvement
-    
+    Version 1.5.1
+    + Specular and Diffuse
+    - Normal Threshold removed.
+    + remove unused codes from Temporal.
 */
 
 /*-------------------.
@@ -79,7 +79,7 @@ uniform bool EnableSpecularGI <
 uniform bool EnableDiffuseGI <
     ui_type = "checkbox";
     ui_category = "General";
-    ui_label = "Enable Diffuse GI";
+    ui_label = "Enable Diffuse GI (BETA)";
 > = false;
 
 uniform float ThicknessThreshold <
@@ -89,17 +89,6 @@ uniform float ThicknessThreshold <
     ui_category = "Advanced";
     ui_label = "Thickness Threshold";
 > = 0.010;
-
-uniform float NORMAL_THRESHOLD <
-
-        ui_type = "slider";
-        ui_min = -1.0;
-        ui_max = 1.0;
-        ui_step = 0.01;
-        ui_category = "Advanced";
-        ui_label = "Normal Threshold";
-        ui_tooltip = "Controls surface angle sensitivity. Lower values = more reflections";
- >  = -1.0;
 
 // Temporal Settings
 uniform float AccumFramesDF <
@@ -205,7 +194,7 @@ static const float PERSPECTIVE_COEFFITIENT = 1.0;
 static const float MaxTraceDistance = 1.0;
 static const float BASE_RAYS_LENGTH = 1.0;
 static const float RAYS_AMOUNT = 1.0;
-static const int STEPS_PER_RAY = 196;
+static const int STEPS_PER_RAY = 96;
 static const float EnableTemporal = true;
 
 // Adaptive step 
@@ -503,7 +492,7 @@ namespace SSRT5
         return float3((uv - 0.5) * z, z);
     }
     
-    // GNU 3 License functions
+    // GNU 3 License functions 
     struct PixelData
     {
         float PerspectiveFactor;
@@ -514,113 +503,155 @@ namespace SSRT5
         float3 ViewDir;
         float3 Normal;
     };
-    
-    // Main ray tracing function - Implements screen-space reflections using stochastic ray marching
-    float4 TraceSpecularGI(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
+
+    PixelData PreparePixelData(float2 uv)
     {
         PixelData pd;
         pd.PerspectiveFactor = PERSPECTIVE_COEFFITIENT;
         pd.InvSteps = rcp((float) STEPS_PER_RAY);
         pd.InvRays = rcp(RAYS_AMOUNT);
-
-        // Scene Data
-        pd.Depth = getDepth(texcoord);
-        pd.SelfPos = float3((texcoord - 0.5) * pd.Depth * pd.PerspectiveFactor, pd.Depth);
+        pd.Depth = getDepth(uv);
+        pd.SelfPos = float3((uv - 0.5) * pd.Depth * pd.PerspectiveFactor, pd.Depth);
         pd.ViewDir = normalize(pd.SelfPos);
-        pd.Normal = normalize(getNormal(texcoord));
+        pd.Normal = normalize(getNormal(uv));
+        return pd;
+    }
 
-        // Accumulated color
-        float4 accum = float4(0, 0, 0, 0);
-        float3 rayDir = reflect(pd.ViewDir, pd.Normal);
+    // Main ray tracing function - Implements screen-space reflections using stochastic ray marching
+    float4 TraceSpecularGI(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
+    {
+        PixelData pd = PreparePixelData(uv);
+        float4 accum = 0;
 
         if (EnableSpecularGI)
         {
-            const float ior = 1.5;
-            const float R0 = pow((1.0 - ior) / (1.0 + ior), 2.0);
+            // Compute reflection direction
+            float3 rayDir = reflect(pd.ViewDir, pd.Normal);
 
-            // IRV
-            float3 currSpec = pd.SelfPos;
-            float3 prevSpec = currSpec;
-            bool hitSpec = false;
-            float stepSize = MIN_STEP_SIZE;
-            float totalRayLength = 0.0;
+            bool hit = false;
+            float step = MIN_STEP_SIZE;
+            float totalLen = 0;
 
-            // Ray-marching loop
-            [loop]
+        // Ray-marching loop
+        [loop]
             for (int i = 0; i < STEPS_PER_RAY; ++i)
             {
-                prevSpec = currSpec;
+                float3 prev = pd.SelfPos + rayDir * totalLen;
+                float3 curr = prev + rayDir * step;
+                totalLen += step;
+                step = min(step * STEP_GROWTH, BASE_RAYS_LENGTH * pd.InvSteps);
 
-                // Advance along the reflected direction by the current step size
-                float stepAdvance = stepSize;
-                currSpec += rayDir * stepAdvance;
-                totalRayLength += stepAdvance;
+                float2 uvPrev = xyz_to_uv(prev);
+                float2 uvCurr = xyz_to_uv(curr);
 
-                float2 uvPrev = xyz_to_uv(prevSpec);
-                float2 uvNew = xyz_to_uv(currSpec);
-                if (all(abs(uvNew - uvPrev) < 0.0005))
-                {
+                if (any(uvCurr < 0) || any(uvCurr > 1) || totalLen > MaxTraceDistance)
                     break;
-                }
 
-                stepSize = min(stepSize * STEP_GROWTH, BASE_RAYS_LENGTH * pd.InvSteps);
-
-                float2 uvCheck = uvNew;
-
-                if (any(uvCheck < 0.0) || any(uvCheck > 1.0) || totalRayLength > MaxTraceDistance)
+                if (all(abs(uvCurr - uvPrev) < 0.0005))
                     break;
 
                 // Sample scene depth and normal at the new UV
-                float dScene = getDepth(uvCheck);
-                float thickness = abs(currSpec.z - dScene);
-                float3 hitN = normalize(getNormal(uvCheck));
+                float dScene = getDepth(uvCurr);
+                float thickness = abs(curr.z - dScene);
+                float3 nScene = normalize(getNormal(uvCurr));
 
-                if (currSpec.z < dScene || thickness > ThicknessThreshold)
+                // Skip if behind geometry or too thick
+                if (curr.z < dScene || thickness > ThicknessThreshold)
                     continue;
 
-                if (abs(dot(hitN, pd.Normal)) < NORMAL_THRESHOLD)
-                    continue;
-
-                // Binary refinement between prevSpec and currSpec to find a more precise hit point
-                float3 lowPos = prevSpec;
-                float3 highPos = currSpec;
+                // Binary refinement to find more precise hit point
+                float3 lo = prev, hi = curr;
+                [unroll]
                 for (int r = 0; r < REFINEMENT_STEPS; ++r)
                 {
-                    float3 midPos = 0.5 * (lowPos + highPos);
-                    float2 uvMid = xyz_to_uv(midPos);
-                    float dMid = getDepth(uvMid);
-
-                    if (midPos.z >= dMid)
-                        highPos = midPos;
+                    float3 mid = 0.5 * (lo + hi);
+                    float2 uvm = xyz_to_uv(mid);
+                    if (mid.z >= getDepth(uvm))
+                        hi = mid;
                     else
-                        lowPos = midPos; 
+                        lo = mid;
                 }
 
                 // Final hit position after refinement
-                float3 hitPos = highPos;
+                float3 hitPos = hi;
                 float2 uvHit = xyz_to_uv(hitPos);
-                float3 finalN = normalize(getNormal(uvHit));
+                float3 fn = normalize(getNormal(uvHit));
 
-                // Compute Fresnel term using Schlick’s approximation
-                float cosTheta = saturate(dot(finalN, rayDir));
-                float fresnel = R0 + (1.0 - R0) * pow(1.0 - cosTheta, 5.0);
+                 // Compute Fresnel term using Schlick’s approximation
+                const float ior = 1.5;
+                const float R0 = pow((1 - ior) / (1 + ior), 2);
+                float cosT = saturate(dot(fn, rayDir));
+                float fresnel = R0 + (1 - R0) * pow(1 - cosT, 5);
 
-                float angleWeight = pow(saturate(dot(pd.ViewDir, rayDir)), 2.0);
+                // Weight by view angle squared
+                float angleW = pow(saturate(dot(pd.ViewDir, rayDir)), 2);
 
-                accum.rgb += GetColor(uvHit).rgb * pd.InvRays * fresnel * angleWeight;
-                hitSpec = true;
+                accum.rgb += GetColor(uvHit).rgb * pd.InvRays * fresnel * angleW;
+                hit = true;
                 break;
             }
 
             // Fallback in case the ray never hit any geometry
-            if (!hitSpec)
+            if (!hit)
             {
-                float3 fallbackPos = pd.SelfPos + rayDir * (pd.Depth + 0.01) * BASE_RAYS_LENGTH;
-                float2 uvBack = saturate(xyz_to_uv(fallbackPos));
-                float viewAlignment = dot(rayDir, pd.ViewDir);
-                if (viewAlignment > 0.3 && fallbackPos.z > 0.0 && fallbackPos.z < MaxTraceDistance)
+                float3 fbPos = pd.SelfPos + rayDir * (pd.Depth + 0.01) * BASE_RAYS_LENGTH;
+                float2 uvFb = saturate(xyz_to_uv(fbPos));
+                float align = dot(rayDir, pd.ViewDir);
+                if (align > 0.3 && fbPos.z > 0 && fbPos.z < MaxTraceDistance)
+                    accum.rgb += GetColor(uvFb).rgb * 0.25 * pd.InvRays;
+            }
+        }
+
+         // Fade, Alpha and Remap
+        float fade = saturate((FadeEnd - pd.Depth) / max(FadeEnd - FadeStart, 0.001));
+        accum.rgb = saturate(accum.rgb * fade / (accum.rgb + 1));
+        accum.a = pd.Depth;
+        return accum;
+    }
+
+    // Diffuse GI 
+    float4 TraceDiffuseGI(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
+    {
+        PixelData pd = PreparePixelData(texcoord);
+        float4 accum = float4(0.0, 0.0, 0.0, 0.0);
+
+        if (EnableDiffuseGI)
+        {
+            for (int r = 0; r < RAYS_AMOUNT; ++r)
+            {
+                // Jitter
+                float3 jitter = rand3d(texcoord * (32.0 * (r + 1.0) + frac(FRAME_COUNT / 48.0)) * 2.0 - 1.0);
+                float3 pertN = normalize(pd.Normal + jitter * RandomIntensity * 0.2);
+                float3 rayD = normalize(pertN + jitter * 0.5);
+
+                float stepSize = MIN_STEP_SIZE;
+                float totalRayLength = 0.0;
+                float3 currPos = pd.SelfPos;
+                bool hitDiffuse = false;
+
+                [loop]// Ray-marching loop
+                for (int i = 0; i < STEPS_PER_RAY && !hitDiffuse; ++i)
                 {
-                    accum.rgb += GetColor(uvBack).rgb * 0.25 * pd.InvRays;
+                    float3 prevPos = currPos;
+                    currPos += rayD * stepSize;
+                    totalRayLength += stepSize;
+                    stepSize = min(stepSize * STEP_GROWTH, BASE_RAYS_LENGTH * pd.InvSteps);
+
+                    float2 uvPrev = xyz_to_uv(prevPos);
+                    float2 uvCurr = xyz_to_uv(currPos);
+                    if (all(abs(uvCurr - uvPrev) < 0.0005) || any(uvCurr < 0.0) || any(uvCurr > 1.0) || totalRayLength > MaxTraceDistance)
+                        break;
+
+                    float sceneDepth = getDepth(uvCurr);
+                    float thickness = abs(currPos.z - sceneDepth);
+
+                    if (currPos.z > sceneDepth + ThicknessThreshold)
+                        break;
+                    if (currPos.z < sceneDepth || thickness > ThicknessThreshold)
+                        continue;
+
+                    accum.rgb += GetColor(uvCurr).rgb * pd.InvRays * IndirectIntensity;
+                    hitDiffuse = true;
                 }
             }
         }
@@ -633,81 +664,6 @@ namespace SSRT5
         return accum;
     }
 
-    //Diffuse Light
-    float4 TraceDiffuseGI(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
-    {
-        PixelData pd;
-        pd.PerspectiveFactor = PERSPECTIVE_COEFFITIENT;
-        pd.InvSteps = rcp((float) STEPS_PER_RAY);
-        pd.InvRays = rcp(RAYS_AMOUNT);
-
-        // Scene setup
-        pd.Depth = getDepth(texcoord);
-        pd.SelfPos = float3((texcoord - 0.5) * pd.Depth * pd.PerspectiveFactor, pd.Depth);
-        pd.ViewDir = normalize(pd.SelfPos);
-        pd.Normal = normalize(getNormal(texcoord));
-
-        float4 accum = float4(0, 0, 0, 0);
-
-        if (EnableDiffuseGI)
-        {
-            for (int r = 0; r < RAYS_AMOUNT; ++r)
-            {
-                // Jitter
-                float3 jitter = rand3d(texcoord * (32.0 * (r + 1.0) + frac(FRAME_COUNT / 48.0)) * 2.0 - 1.0);
-                float3 pertN = normalize(pd.Normal + jitter * RandomIntensity * 0.2);
-                float3 rayDiffuse = normalize(pertN + jitter * 0.5);
-
-                float stepSize = MIN_STEP_SIZE;
-                float totalRayLength = 0.0;
-                float3 currDiff = pd.SelfPos;
-                bool hitDiff = false;
-
-                // Ray-marching loop
-                for (int i = 0; i < STEPS_PER_RAY && !hitDiff; ++i)
-                {
-                    float3 prevPos = currDiff;
-                    currDiff += rayDiffuse * stepSize;
-                    totalRayLength += stepSize;
-                    stepSize = min(stepSize * STEP_GROWTH, BASE_RAYS_LENGTH * pd.InvSteps);
-
-                    float2 uvPrev = xyz_to_uv(prevPos);
-                    float2 uvNew = xyz_to_uv(currDiff);
-                    if (all(abs(uvNew - uvPrev) < 0.0005))
-                        break;
-
-                   // Exit if off screen or max distance
-                    if (any(uvNew < 0.0) || any(uvNew > 1.0) || totalRayLength > MaxTraceDistance)
-                        break;
-
-                    float dScene = getDepth(uvNew);
-                    float thickness = abs(currDiff.z - dScene);
-                    float3 hitN = normalize(getNormal(uvNew));
-
-                    if (currDiff.z > dScene + ThicknessThreshold)
-                        break;
-
-                    if (currDiff.z < dScene || thickness > ThicknessThreshold)
-                        continue;
-                    if (abs(dot(hitN, pd.Normal)) < NORMAL_THRESHOLD)
-                        continue;
-
-                    float nDotL = saturate(dot(pertN, rayDiffuse));
-                    accum.rgb += GetColor(uvNew).rgb * pd.InvRays * nDotL * IndirectIntensity;
-                    hitDiff = true;
-                }
-            }
-        }
-
-        // Fade, Alpha e Remap
-        float fade = saturate((FadeEnd - pd.Depth) / max(FadeEnd - FadeStart, 0.001));
-        float3 remap = saturate(accum.rgb * fade / (accum.rgb + 1.0));
-        accum.rgb = remap;
-        accum.a = pd.Depth;
-        return accum;
-    }
-    //END GNU3
-    
     // Motion vector function
     float2 GetMotionVector(float2 texcoord)
     {
@@ -748,43 +704,30 @@ namespace SSRT5
     {
         float2 motion = GetMotionVector(uv);
 
-        //Diffuse
+        // Diffuse
         float3 currentGI = tex2Dlod(sDFGI, float4(uv, 0, 0)).rgb;
-        float3 currentGI_YC = RGBToYCoCg(currentGI);
-        float3 historyGI_YC = RGBToYCoCg(tex2Dlod(sDFGIHistory, float4(uv + motion, 0, 0)).rgb);
-
-        float accumulationWeight = 1.0f;
-        float3 accumulation = float3(1.0, 1.0, 1.0);
-        float3 safeAccumulation = max(float3(1e-10, 1e-10, 1e-10), accumulation + accumulationWeight);
-        float3 alpha = accumulationWeight / safeAccumulation;
-
-        float3 blendedGI_YC = lerp(historyGI_YC, currentGI_YC, alpha);
-        float3 resultGI = YCoCgToRGB(blendedGI_YC);
+        float3 historyGI = tex2Dlod(sDFGIHistory, float4(uv + motion, 0, 0)).rgb;
+        float3 blendedGI = currentGI;
 
         if (EnableTemporal && AccumFramesDF > 0 && FRAME_COUNT > 1)
         {
             uint N = min(FRAME_COUNT, (uint) AccumFramesDF);
-            float4 prev = tex2Dlod(sDFGIHistory, float4(uv + motion, 0, 0));
-            resultGI = (prev.rgb * (N - 1) + resultGI) / N;
+            blendedGI = (historyGI * (N - 1) + currentGI) / N;
         }
 
-        //Specular
+        // Specular
         float3 currentSpec = tex2Dlod(sSpecular, float4(uv, 0, 0)).rgb;
-        float3 currentSpec_YC = RGBToYCoCg(currentSpec);
-        float3 historySpec_YC = RGBToYCoCg(tex2Dlod(sSpecularHistory, float4(uv + motion, 0, 0)).rgb);
-
-        float3 blendedSpec_YC = lerp(historySpec_YC, currentSpec_YC, alpha);
-        float3 resultSpec = YCoCgToRGB(blendedSpec_YC);
+        float3 historySpec = tex2Dlod(sSpecularHistory, float4(uv + motion, 0, 0)).rgb;
+        float3 blendedSpec = currentSpec;
 
         if (EnableTemporal && AccumFramesSG > 0 && FRAME_COUNT > 1)
         {
             uint N = min(FRAME_COUNT, (uint) AccumFramesSG);
-            float4 prev = tex2Dlod(sSpecularHistory, float4(uv + motion, 0, 0));
-            resultSpec = (prev.rgb * (N - 1) + resultSpec) / N;
+            blendedSpec = (historySpec * (N - 1) + currentSpec) / N;
         }
 
-        outSpec = float4(resultSpec, currentSpec.r); 
-        return float4(resultGI, currentGI.r); 
+        outSpec = float4(blendedSpec, currentSpec.r);
+        return float4(blendedGI, currentGI.r);
     }
 
     float4 PS_SaveHistoryDFGI(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
