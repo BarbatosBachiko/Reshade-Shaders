@@ -4,7 +4,7 @@
 
     SSRT
 
-    Version 1.5.1
+    Version 1.5.2 
     Author: Barbatos Bachiko
     Original SSRT by jebbyk : https://github.com/jebbyk/SSRT-for-reshade/blob/main/ssrt.fx
 
@@ -17,10 +17,10 @@
     History:
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
     
-    Version 1.5.1
-    + Specular and Diffuse
-    - Normal Threshold removed.
-    + remove unused codes from Temporal.
+    Version 1.5.2
+    - Bump min 0.2
+    + lum
+    + Diffuse GI experiment
 */
 
 /*-------------------.
@@ -145,7 +145,7 @@ uniform float BumpIntensity <
     ui_category = "Bump Mapping";
     ui_label = "Bump Intensity";
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
-> = 0.5;
+> = 0.2;
 
 uniform int ViewMode <
     ui_type = "combo";
@@ -227,7 +227,7 @@ sampler sTexMotionVectorsSampler
 };
 #endif
 
-namespace SSRT5
+namespace SSRT9
 {
     texture DiffuseGI
     {
@@ -356,9 +356,9 @@ namespace SSRT5
         return float4(normalize(cross(wpCenter - wpNorth, wpCenter - wpEast)), 1.0);
     }
 
-    float GetLuminance(float3 color)
+    float lum(float3 color)
     {
-        return dot(color, float3(0.299, 0.587, 0.114));
+        return (color.r + color.g + color.b) * 0.3333333;
     }
 
     float4 computeNormal(float2 coords, float3 offset, bool reverse)
@@ -409,9 +409,9 @@ namespace SSRT5
     
         {
             float3 color = GetColor(coords).rgb;
-            float height = GetLuminance(color);
-            float heightRight = GetLuminance(GetColor(coords + offset.xz).rgb);
-            float heightUp = GetLuminance(GetColor(coords - offset.zy).rgb);
+            float height = lum(color);
+            float heightRight = lum(GetColor(coords + offset.xz).rgb);
+            float heightUp = lum(GetColor(coords - offset.zy).rgb);
         
             float2 slope = float2(
             (height - heightRight) * BumpIntensity * BumpDirection.x,
@@ -471,14 +471,13 @@ namespace SSRT5
         return ACEScg_to_sRGB(toneMapped);
     }
 
-    
     float3 rand3d(float2 uv)
     {
         uv += random;
         float3 r;
-        r.x = frac(sin(dot(uv, float2(12.9898, 78.233))) * 43758.5453);
-        r.y = frac(sin(dot(uv, float2(93.9898, 67.345))) * 12741.3427);
-        r.z = frac(sin(dot(uv, float2(29.533, 94.729))) * 31415.9265);
+        r.x = frac(sin(dot(uv, float2(12.9898, 78.233))) * 43758.5453) * 2.0 - 1.0;
+        r.y = frac(sin(dot(uv, float2(93.9898, 67.345))) * 12741.3427) * 2.0 - 1.0;
+        r.z = frac(sin(dot(uv, float2(29.533, 94.729))) * 31415.9265) * 2.0 - 1.0;
         return r;
     }
 
@@ -577,7 +576,7 @@ namespace SSRT5
                 float2 uvHit = xyz_to_uv(hitPos);
                 float3 fn = normalize(getNormal(uvHit));
 
-                 // Compute Fresnel term using Schlick’s approximation
+                // Compute Fresnel term using Schlick’s approximation
                 const float ior = 1.5;
                 const float R0 = pow((1 - ior) / (1 + ior), 2);
                 float cosT = saturate(dot(fn, rayDir));
@@ -598,7 +597,7 @@ namespace SSRT5
                 float2 uvFb = saturate(xyz_to_uv(fbPos));
                 float align = dot(rayDir, pd.ViewDir);
                 if (align > 0.3 && fbPos.z > 0 && fbPos.z < MaxTraceDistance)
-                    accum.rgb += GetColor(uvFb).rgb * 0.25 * pd.InvRays;
+                    accum.rgb += GetColor(uvFb).rgb * 0.4 * pd.InvRays;
             }
         }
 
@@ -614,56 +613,73 @@ namespace SSRT5
     {
         PixelData pd = PreparePixelData(texcoord);
         float4 accum = float4(0.0, 0.0, 0.0, 0.0);
-
+        float invRays = pd.InvRays;
+        float fadeRange = max(FadeEnd - FadeStart, 0.001);
+        float3 baseNormal = pd.Normal;
+    
+        const float JITTER_INTENSITY = 0.09;
+        const float DIR_PERTURB = 0.09;
+    
         if (EnableDiffuseGI)
         {
+        [unroll]
             for (int r = 0; r < RAYS_AMOUNT; ++r)
             {
                 // Jitter
-                float3 jitter = rand3d(texcoord * (32.0 * (r + 1.0) + frac(FRAME_COUNT / 48.0)) * 2.0 - 1.0);
-                float3 pertN = normalize(pd.Normal + jitter * RandomIntensity * 0.2);
-                float3 rayD = normalize(pertN + jitter * 0.5);
-
+                float seed = 32.0 * (r + 1.0) + frac(FRAME_COUNT / 48.0);
+                float3 jitter = rand3d(texcoord * seed) * 2.0 - 1.0;
+                float3 pertN = normalize(baseNormal + jitter * JITTER_INTENSITY);
+                float3 rayD = normalize(pertN + jitter * DIR_PERTURB);
+            
+                // Ray-marching
                 float stepSize = MIN_STEP_SIZE;
                 float totalRayLength = 0.0;
                 float3 currPos = pd.SelfPos;
                 bool hitDiffuse = false;
-
-                [loop]// Ray-marching loop
+            
+            [loop]
                 for (int i = 0; i < STEPS_PER_RAY && !hitDiffuse; ++i)
                 {
-                    float3 prevPos = currPos;
+                    //Advance
                     currPos += rayD * stepSize;
                     totalRayLength += stepSize;
                     stepSize = min(stepSize * STEP_GROWTH, BASE_RAYS_LENGTH * pd.InvSteps);
-
-                    float2 uvPrev = xyz_to_uv(prevPos);
+                
+                    float2 uvPrev = xyz_to_uv(currPos - rayD * stepSize);
                     float2 uvCurr = xyz_to_uv(currPos);
-                    if (all(abs(uvCurr - uvPrev) < 0.0005) || any(uvCurr < 0.0) || any(uvCurr > 1.0) || totalRayLength > MaxTraceDistance)
+                
+                    if (any(uvCurr < 0.0) || any(uvCurr > 1.0) ||
+                     all(abs(uvCurr - uvPrev) < 0.0005) ||
+                     totalRayLength > MaxTraceDistance)
+                    {
                         break;
-
+                    }
+                
                     float sceneDepth = getDepth(uvCurr);
                     float thickness = abs(currPos.z - sceneDepth);
-
-                    if (currPos.z > sceneDepth + ThicknessThreshold)
-                        break;
-                    if (currPos.z < sceneDepth || thickness > ThicknessThreshold)
+                
+                    if (currPos.z > sceneDepth + ThicknessThreshold ||
+                     currPos.z < sceneDepth ||
+                     thickness > ThicknessThreshold)
+                    {
                         continue;
-
-                    accum.rgb += GetColor(uvCurr).rgb * pd.InvRays * IndirectIntensity;
+                    }
+                
+                    accum.rgb += GetColor(uvCurr).rgb * invRays * IndirectIntensity;
                     hitDiffuse = true;
                 }
             }
         }
-
+    
         // Fade, Alpha and Remap
-        float fade = saturate((FadeEnd - pd.Depth) / max(FadeEnd - FadeStart, 0.001));
-        float3 remap = saturate(accum.rgb * fade / (accum.rgb + 1.0));
-        accum.rgb = remap;
+        float fade = saturate((FadeEnd - pd.Depth) / fadeRange);
+        float3 remapColor = saturate(accum.rgb * fade / (accum.rgb + 1.0));
+        accum.rgb = remapColor;
         accum.a = pd.Depth;
         return accum;
     }
-
+    //End GNU3
+    
     // Motion vector function
     float2 GetMotionVector(float2 texcoord)
     {
@@ -777,7 +793,7 @@ namespace SSRT5
         if (EnableACES)
             giColor = ApplyACES(giColor);
     
-        float luminance = GetLuminance(giColor);
+        float luminance = lum(giColor);
         giColor = lerp(luminance.xxx, giColor, Saturation);
 
         // Debug visualization
