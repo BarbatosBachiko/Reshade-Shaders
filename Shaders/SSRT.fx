@@ -17,7 +17,7 @@
     History:
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
     
-    Version 1.5.3
+    Version 1.5.31
     + Performance
 */
 
@@ -192,7 +192,7 @@ static const float PERSPECTIVE_COEFFITIENT = 1.0;
 static const float MaxTraceDistance = 1.0;
 static const float BASE_RAYS_LENGTH = 1.0;
 static const float RAYS_AMOUNT = 1.0;
-static const int STEPS_PER_RAY = 96;
+static const int STEPS_PER_RAY = 128;
 static const float EnableTemporal = true;
 
 // Adaptive step 
