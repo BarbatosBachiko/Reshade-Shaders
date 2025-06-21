@@ -4,7 +4,7 @@
 
     SSRT
 
-    Version 1.5.3
+    Version 1.5.32
     Author: Barbatos Bachiko
     Original SSRT by jebbyk : https://github.com/jebbyk/SSRT-for-reshade/blob/main/ssrt.fx
 
@@ -17,8 +17,8 @@
     History:
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
     
-    Version 1.5.31
-    + Performance
+    Version 1.5.32
+    + Tiny fix
 */
 
 /*-------------------.
@@ -192,12 +192,13 @@ static const float PERSPECTIVE_COEFFITIENT = 1.0;
 static const float MaxTraceDistance = 1.0;
 static const float BASE_RAYS_LENGTH = 1.0;
 static const float RAYS_AMOUNT = 1.0;
+
 static const int STEPS_PER_RAY = 128;
 static const float EnableTemporal = true;
 
 // Adaptive step 
 static const float MIN_STEP_SIZE = 0.001;
-static const float STEP_GROWTH = 1.2;
+static const float STEP_GROWTH = 1.0803;
 static const int REFINEMENT_STEPS = 6;
 
 /*---------------.
@@ -260,6 +261,18 @@ namespace BSSRT
         Texture = DiffuseHistory;
         SRGBTexture = false;
     };
+    
+    texture2D Luma
+    {
+        Width = RES_WIDTH;
+        Height = RES_HEIGHT;
+        Format = RGBA16f;
+    };
+    sampler2D sLuma
+    {
+        Texture = DiffuseHistory;
+    };
+
 
     texture Specular
     {
@@ -558,7 +571,7 @@ namespace BSSRT
             if (enableRefinement)
             {
                 float3 lo = prevPos, hi = currPos;
-        [unroll]
+                
                 for (int r = 0; r < REFINEMENT_STEPS; ++r)
                 {
                     float3 mid = 0.5 * (lo + hi);
@@ -579,7 +592,7 @@ namespace BSSRT
             return true;
         }
 
-        return false; 
+        return false;
     }
 
     // Implements screen-space reflections using stochastic ray marching
@@ -619,17 +632,18 @@ namespace BSSRT
                 float align = dot(rayDir, pd.ViewDir);
                 if (align > 0.3 && fbPos.z > 0 && fbPos.z < MaxTraceDistance)
                     
-                accum.rgb += GetColor(float4(uvFb, 0, 0)).rgb * 0.4 * pd.InvRays;
+                    accum.rgb += GetColor(float4(uvFb, 0, 0)).rgb * 0.4 * pd.InvRays;
             }
         }
         //Fade, Tone
-        float fade = saturate((FadeEnd - pd.Depth) / max(FadeEnd - FadeStart, 0.001));
-        accum.rgb = saturate(accum.rgb * fade / (accum.rgb + 1));
+        float fadeRange = max(FadeEnd - FadeStart, 0.001);
+        float fade = saturate((FadeEnd - pd.Depth) / fadeRange);
+        accum.rgb = 1.0 - exp(-accum.rgb * fade);
         accum.a = pd.Depth;
         return accum;
     }
 
-// Diffuse GI 
+    // Diffuse GI 
     float4 TraceDiffuseGI(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
     {
         PixelData pd = PreparePixelData(texcoord);
@@ -661,8 +675,9 @@ namespace BSSRT
         }
 
        //Fade, Tone
-        float fade = saturate((FadeEnd - pd.Depth) / max(FadeEnd - FadeStart, 0.001));
-        accum.rgb = saturate(accum.rgb * fade / (accum.rgb + 1.0));
+        float fadeRange = max(FadeEnd - FadeStart, 0.001);
+        float fade = saturate((FadeEnd - pd.Depth) / fadeRange);
+        accum.rgb = 1.0 - exp(-accum.rgb * fade);
         accum.a = pd.Depth;
         return accum;
     }
@@ -685,23 +700,6 @@ namespace BSSRT
     {
         float3 normal = GetNormal(uv);
         return float4(normal * 0.5 + 0.5, 1.0);
-    }
-
-    // For Temporal
-    float3 RGBToYCoCg(float3 rgb)
-    {
-        float Y = dot(rgb, float3(0.25, 0.5, 0.25));
-        float Co = dot(rgb, float3(0.5, 0.0, -0.5));
-        float Cg = dot(rgb, float3(-0.25, 0.5, -0.25));
-        return float3(Y, Co, Cg);
-    }
-
-    float3 YCoCgToRGB(float3 ycocg)
-    {
-        float Y = ycocg.x;
-        float Co = ycocg.y;
-        float Cg = ycocg.z;
-        return float3(Y + Co - Cg, Y + Cg, Y - Co - Cg);
     }
    
     float4 PS_Temporal(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outSpec : SV_Target1) : SV_Target
@@ -733,7 +731,7 @@ namespace BSSRT
         outSpec = float4(blendedSpec, currentSpec.r);
         return float4(blendedGI, currentGI.r);
     }
-
+    
     float4 PS_SaveHistoryDFGI(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
         float3 gi = EnableTemporal ? tex2Dlod(sDiffuseTemp, float4(uv, 0, 0)).rgb : tex2Dlod(sDFGI, float4(uv, 0, 0)).rgb;
