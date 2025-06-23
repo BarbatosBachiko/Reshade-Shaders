@@ -6,7 +6,7 @@ _  _ ____ ____ ____ ____ ____ ____
 |\ | |___ |  | [__  [__  |__| |  | 
 | \| |___ |__| ___] ___] |  | |__| 
                                                                        
-    Version 1.7.7
+    Version 1.7.71
     Author: Barbatos Bachiko
     License: MIT
     Smooth Normals use AlucardDH MIT License : https://github.com/AlucardDH/dh-reshade-shaders-mit/blob/master/LICENSE
@@ -15,8 +15,9 @@ _  _ ____ ____ ____ ____ ____ ____
     History:
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
     
-    Version 1.7.7
+    Version 1.7.71
     * Revised
+    x tiny fix
     
 */ 
 
@@ -470,8 +471,8 @@ namespace NEOSPACE
         return float3(Y + Co - Cg, Y + Cg, Y - Co - Cg);
     }
    
-    float4 PS_Temporal(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outSpec : SV_Target1) : SV_Target
-    {
+   float4 PS_Temporal(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
+ {
         float2 motion = GetMotionVector(uv);
         
         float3 currentAO = tex2Dlod(sAO, float4(uv, 0, 0)).rgb;
