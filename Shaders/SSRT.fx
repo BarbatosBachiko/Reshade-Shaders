@@ -52,7 +52,7 @@
 | :: Parameters ::   |
 '-------------------*/
 
-uniform float Intensity <
+uniform float SPIntensity <
     ui_type = "drag";
     ui_min = 0.1; ui_max = 3.0;
     ui_step = 0.001;
@@ -60,7 +60,7 @@ uniform float Intensity <
     ui_label = "Specular Intensity";
 > = 2.0;
 
-uniform float IndirectIntensity <
+uniform float DFIntensity <
     ui_type = "drag";
     ui_min = 0.1; ui_max = 3.0;
     ui_step = 0.001;
@@ -68,16 +68,16 @@ uniform float IndirectIntensity <
     ui_label = "Diffuse Intensity";
 > = 2.0;
 
-uniform bool EnableSpecularGI <
+uniform bool EnableSpecular <
     ui_type = "checkbox";
     ui_category = "General";
-    ui_label = "Enable Specular GI";
+    ui_label = "Enable Specular";
 > = true;
 
-uniform bool EnableDiffuseGI <
+uniform bool EnableDiffuse <
     ui_type = "checkbox";
     ui_category = "General";
-    ui_label = "Enable Diffuse GI (BETA)";
+    ui_label = "Enable Diffuse (BETA)";
 > = false;
 
 // Bump Mapping Settings
@@ -122,7 +122,7 @@ uniform float AccumFramesDF <
     ui_category = "Temporal";
     ui_label = "GI Temporal";
     ui_min = 1.0; ui_max = 32.0; ui_step = 1.0;
-> = 12.0;
+> = 32.0;
 
 uniform float AccumFramesSG <
     ui_type = "slider";
@@ -226,85 +226,73 @@ sampler sTexMotionVectorsSampler
 };
 #endif
 
-namespace BSSRT1
+namespace BSSRT2
 {
-    texture DiffuseGI
+    texture DF
     {
         Width = RES_WIDTH;
         Height = RES_HEIGHT;
         Format = RGBA16f;
     };
-    sampler sDFGI
+    sampler sDF
     {
-        Texture = DiffuseGI;
+        Texture = DF;
     };
     
-    texture DiffuseTemp
+    texture DF_TEMP
     {
         Width = RES_WIDTH;
         Height = RES_HEIGHT;
         Format = RGBA16f;
     };
-    sampler sDiffuseTemp
+    sampler sDF_TEMP
     {
-        Texture = DiffuseTemp;
+        Texture = DF_TEMP;
     };
 
-    texture2D DiffuseHistory
+    texture2D DF_HISTORY
     {
         Width = RES_WIDTH;
         Height = RES_HEIGHT;
         Format = RGBA16f;
     };
-    sampler2D sDFGIHistory
+    sampler2D sDF_HISTORY
     {
-        Texture = DiffuseHistory;
+        Texture = DF_HISTORY;
         SRGBTexture = false;
     };
     
-    texture2D Luma
-    {
-        Width = RES_WIDTH;
-        Height = RES_HEIGHT;
-        Format = RGBA16f;
-    };
-    sampler2D sLuma
-    {
-        Texture = DiffuseHistory;
-    };
-
-
-    texture Specular
+    texture SP
     {
         Width = RES_WIDTH;
         Height = RES_HEIGHT;
         Format = RGBA8;
     };
-    sampler sSpecular
+    sampler sSP
     {
-        Texture = Specular;
+        Texture = SP;
     };
     
-    texture SpecularTemp
+    texture SP_TEMP
     {
         Width = RES_WIDTH;
         Height = RES_HEIGHT;
         Format = RGBA8;
     };
-    sampler sSpecularTemp
+    sampler sSP_TEMP
     {
-        Texture = SpecularTemp;
+        Texture = SP_TEMP;
     };
     
-    texture SpecularHistory
+    texture SP_HISTORY
     {
         Width = RES_WIDTH;
         Height = RES_HEIGHT;
         Format = RGBA8;
     };
-    sampler sSpecularHistory
+    sampler sSP_HISTORY
     {
-        Texture = SpecularHistory;
+        Texture = SP_HISTORY;
     };
     
     texture normalTex
@@ -336,6 +324,11 @@ namespace BSSRT1
 );
     //End
 
+    float lum(float3 color)
+    {
+        return (color.r + color.g + color.b) * 0.3333333;
+    }
+    
     // MIT License functions
     float3 getWorldPositionForNormal(float2 coords)
     {
@@ -351,11 +344,6 @@ namespace BSSRT1
     float4 computeNormal(float3 wpCenter, float3 wpNorth, float3 wpEast)
     {
         return float4(normalize(cross(wpCenter - wpNorth, wpCenter - wpEast)), 1.0);
-    }
-
-    float lum(float3 color)
-    {
-        return (color.r + color.g + color.b) * 0.3333333;
     }
 
     float4 computeNormal(float2 coords, float3 offset, bool reverse)
@@ -434,6 +422,7 @@ namespace BSSRT1
         return normalize(normal);
     }
 
+    // Color
     float3 LinearizeSRGB(float3 color)
     {
         return pow(color, 2.2);
@@ -467,7 +456,7 @@ namespace BSSRT1
 
         return ACEScg_to_sRGB(toneMapped);
     }
-
+    
     float3 rand3d(float2 uv)
     {
         uv += random;
@@ -582,12 +571,12 @@ namespace BSSRT1
         return false;
     }
 
-    float4 TraceSpecularGI(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
+    float4 Specular(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
         PixelData pd = PreparePixelData(uv);
         float4 accum = 0;
 
-        if (EnableSpecularGI)
+        if (EnableSpecular)
         {
             float3 rayDir = normalize(reflect(pd.ViewDir, pd.Normal));
             float3 hitPos;
@@ -623,13 +612,12 @@ namespace BSSRT1
         return accum;
     }
 
-    // Diffuse GI 
-    float4 TraceDiffuseGI(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
+    float4 Diffuse(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
     {
         PixelData pd = PreparePixelData(texcoord);
         float4 accum = 0;
          
-        if (EnableDiffuseGI)
+        if (EnableDiffuse)
         {
         float3 baseNormal = pd.Normal;
             
@@ -641,7 +629,7 @@ namespace BSSRT1
             {
                 // Jitter
                 float seed = 32.0 * (r + 1.0) + frac(FRAME_COUNT / 48.0);
-                float3 jitter = rand3d(texcoord + seed) * 2.0 - 1.0; 
+                float3 jitter = rand3d(texcoord + seed) * 8.0 - 4.0; 
                 float3 pertN = normalize(baseNormal + jitter * JITTER_INTENSITY);
                 float3 rayDir = normalize(pertN + jitter * DIR_PERTURB);
                 float3 hitPos;
@@ -649,12 +637,11 @@ namespace BSSRT1
 
                 if (RayGen(pd.SelfPos, rayDir, hitPos, uvHit, false))
                 {
-                    accum.rgb += GetColor(uvHit).rgb * pd.InvRays * IndirectIntensity;
+                    accum.rgb += GetColor(uvHit).rgb * pd.InvRays * DFIntensity;
                 }
             }
         }
 
-       //Fade, Tone
         float fadeRange = max(FadeEnd - FadeStart, 0.001);
         float fade = saturate((FadeEnd - pd.Depth) / fadeRange);
         fade *= fade;
@@ -688,8 +675,8 @@ namespace BSSRT1
         float2 motion = GetMotionVector(uv);
 
         // Diffuse
-        float3 currentGI = tex2Dlod(sDFGI, float4(uv, 0, 0)).rgb;
-        float3 historyGI = tex2Dlod(sDFGIHistory, float4(uv + motion, 0, 0)).rgb;
+        float3 currentGI = tex2Dlod(sDF, float4(uv, 0, 0)).rgb;
+        float3 historyGI = tex2Dlod(sDF_HISTORY, float4(uv + motion, 0, 0)).rgb;
         float3 blendedGI = currentGI;
 
         if (EnableTemporal && AccumFramesDF > 0 && FRAME_COUNT > 1)
@@ -699,8 +686,8 @@ namespace BSSRT1
         }
 
         // Specular
-        float3 currentSpec = tex2Dlod(sSpecular, float4(uv, 0, 0)).rgb;
-        float3 historySpec = tex2Dlod(sSpecularHistory, float4(uv + motion, 0, 0)).rgb;
+        float3 currentSpec = tex2Dlod(sSP, float4(uv, 0, 0)).rgb;
+        float3 historySpec = tex2Dlod(sSP_HISTORY, float4(uv + motion, 0, 0)).rgb;
         float3 blendedSpec = currentSpec;
 
         if (EnableTemporal && AccumFramesSG > 0 && FRAME_COUNT > 1)
@@ -713,15 +700,15 @@ namespace BSSRT1
         return float4(blendedGI, currentGI.r);
     }
     
-    float4 PS_SaveHistoryDFGI(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
+    float4 PS_SaveHistoryDF(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
-        float3 gi = EnableTemporal ? tex2Dlod(sDiffuseTemp, float4(uv, 0, 0)).rgb : tex2Dlod(sDFGI, float4(uv, 0, 0)).rgb;
+        float3 gi = EnableTemporal ? tex2Dlod(sDF_TEMP, float4(uv, 0, 0)).rgb : tex2Dlod(sDF, float4(uv, 0, 0)).rgb;
         return float4(gi, 1.0);
     }
     
-    float4 PS_SaveHistorySpecular(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
+    float4 PS_SaveHistorySP(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
-        float3 gi = EnableTemporal ? tex2Dlod(sSpecularTemp, float4(uv, 0, 0)).rgb : tex2Dlod(sSpecular, float4(uv, 0, 0)).rgb;
+        float3 gi = EnableTemporal ? tex2Dlod(sSP_TEMP, float4(uv, 0, 0)).rgb : tex2Dlod(sSP, float4(uv, 0, 0)).rgb;
         return float4(gi, 1.0);
     }
 
@@ -743,15 +730,15 @@ namespace BSSRT1
     
         // Tex
         float3 diffuseGI = EnableTemporal
-        ? tex2Dlod(sDiffuseTemp, float4(texcoord, 0, 0)).rgb 
-        : tex2Dlod(sDFGI, float4(texcoord, 0, 0)).rgb;
+        ? tex2Dlod(sDF_TEMP, float4(texcoord, 0, 0)).rgb 
+        : tex2Dlod(sDF, float4(texcoord, 0, 0)).rgb;
     
         float3 specularGI = EnableTemporal
-        ? tex2Dlod(sSpecularTemp, float4(texcoord, 0, 0)).rgb 
-        : tex2Dlod(sSpecular, float4(texcoord, 0, 0)).rgb;
+        ? tex2Dlod(sSP_TEMP, float4(texcoord, 0, 0)).rgb 
+        : tex2Dlod(sSP, float4(texcoord, 0, 0)).rgb;
     
-        diffuseGI *= IndirectIntensity;
-        specularGI *= Intensity;
+        diffuseGI *= DFIntensity;
+        specularGI *= SPIntensity;
         float3 giColor = diffuseGI + specularGI;
 
         // post-processing
@@ -822,33 +809,33 @@ namespace BSSRT1
         pass Specular
         {
             VertexShader = PostProcessVS;
-            PixelShader = TraceSpecularGI;
-            RenderTarget = Specular;
+            PixelShader = Specular;
+            RenderTarget = SP;
         }
         pass Diffuse
         {
             VertexShader = PostProcessVS;
-            PixelShader = TraceDiffuseGI;
-            RenderTarget = DiffuseGI;
+            PixelShader = Diffuse;
+            RenderTarget = DF;
         }
         pass Temporal
         {
             VertexShader = PostProcessVS;
             PixelShader = PS_Temporal;
-            RenderTarget0 = DiffuseTemp;
-            RenderTarget1 = SpecularTemp;
+            RenderTarget0 = DF_TEMP;
+            RenderTarget1 = SP_TEMP;
         }
         pass Save_History_Specular
         {
             VertexShader = PostProcessVS;
-            PixelShader = PS_SaveHistorySpecular;
-            RenderTarget = SpecularHistory;
+            PixelShader = PS_SaveHistorySP;
+            RenderTarget = SP_HISTORY;
         }
         pass Save_History_Diffuse
         {
             VertexShader = PostProcessVS;
-            PixelShader = PS_SaveHistoryDFGI;
-            RenderTarget = DiffuseHistory;
+            PixelShader = PS_SaveHistoryDF;
+            RenderTarget = DF_HISTORY;
         }
         pass Combine
         {
