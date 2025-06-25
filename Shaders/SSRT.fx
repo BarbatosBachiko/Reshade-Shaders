@@ -4,7 +4,7 @@
 
     SSRT
 
-    Version 1.5.33
+    Version 1.5.34
     Author: Barbatos Bachiko
     Original SSRT by jebbyk : https://github.com/jebbyk/SSRT-for-reshade/blob/main/ssrt.fx
 
@@ -17,7 +17,7 @@
     History:
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
     
-    Version 1.5.33
+    Version 1.5.34
     + Tiny improvements
 */
 
@@ -571,11 +571,23 @@ namespace BSSRT2
         return false;
     }
 
-    float4 Specular(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
+    struct PS_OUTPUT
+    {
+        float4 diffuse : SV_Target0; // DF_TEMP
+        float4 specular : SV_Target1; // SP_TEMP
+    };
+
+    PS_OUTPUT SPDF(float4 pos : SV_Position, float2 uv : TEXCOORD)
     {
         PixelData pd = PreparePixelData(uv);
-        float4 accum = 0;
+        PS_OUTPUT output;
+    
+        output.diffuse = 0;
+        output.specular = 0;
+    
+        const float specularRayWeight = 1.0;
 
+        // Reflections
         if (EnableSpecular)
         {
             float3 rayDir = normalize(reflect(pd.ViewDir, pd.Normal));
@@ -586,50 +598,38 @@ namespace BSSRT2
 
             if (hit)
             {
-                // Weight by view angle squared
                 float angleW = saturate(dot(pd.ViewDir, rayDir));
-                angleW *= angleW;
-
+                angleW *= angleW; // Quadratic weighting
                 float distFactor = saturate(1.0 - length(hitPos - pd.SelfPos) / MaxTraceDistance);
-                accum.rgb += GetColor(uvHit).rgb * pd.InvRays * angleW * distFactor;
+                float3 specColor = GetColor(uvHit).rgb;
+                output.specular.rgb = specColor * specularRayWeight * angleW * distFactor;
             }
             else
             {
-                // Fallback in case the ray never hit any geometry
+                // Fallback for missed rays
                 float3 fbPos = pd.SelfPos + rayDir * (pd.Depth + 0.01) * BASE_RAYS_LENGTH;
                 float2 uvFb = saturate(xyz_to_uv(fbPos));
                 float align = saturate(dot(rayDir, pd.ViewDir));
                 float3 fbColor = GetColor(uvFb).rgb;
-                accum.rgb += fbColor * 0.4 * pd.InvRays * step(0.3, align) * step(0.0, fbPos.z) * step(fbPos.z, MaxTraceDistance);
+                output.specular.rgb = fbColor * 0.4 * specularRayWeight *
+                                  step(0.3, align) *
+                                  step(0.0, fbPos.z) *
+                                  step(fbPos.z, MaxTraceDistance);
             }
         }
 
-        float fadeRange = max(FadeEnd - FadeStart, 0.001);
-        float fade = saturate((FadeEnd - pd.Depth) / fadeRange);
-        fade *= fade;
-        accum.rgb *= fade;
-        accum.a = pd.Depth;
-        return accum;
-    }
-
-    float4 Diffuse(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
-    {
-        PixelData pd = PreparePixelData(texcoord);
-        float4 accum = 0;
-         
+        // Light
         if (EnableDiffuse)
         {
-        float3 baseNormal = pd.Normal;
-            
-        const float JITTER_INTENSITY = 0.09;
-        const float DIR_PERTURB = 0.09;
-            
-            [unroll]
+            float3 baseNormal = pd.Normal;
+            const float JITTER_INTENSITY = 0.09;
+            const float DIR_PERTURB = 0.09;
+            float3 diffuseAccum = 0;
+
             for (int r = 0; r < RAYS_AMOUNT; ++r)
             {
-                // Jitter
                 float seed = 32.0 * (r + 1.0) + frac(FRAME_COUNT / 48.0);
-                float3 jitter = rand3d(texcoord + seed) * 8.0 - 4.0; 
+                float3 jitter = rand3d(uv + seed) * 8.0 - 4.0;
                 float3 pertN = normalize(baseNormal + jitter * JITTER_INTENSITY);
                 float3 rayDir = normalize(pertN + jitter * DIR_PERTURB);
                 float3 hitPos;
@@ -637,17 +637,22 @@ namespace BSSRT2
 
                 if (RayGen(pd.SelfPos, rayDir, hitPos, uvHit, false))
                 {
-                    accum.rgb += GetColor(uvHit).rgb * pd.InvRays * DFIntensity;
+                    diffuseAccum += GetColor(uvHit).rgb * DFIntensity;
                 }
             }
+            output.diffuse.rgb = diffuseAccum * pd.InvRays;
         }
 
         float fadeRange = max(FadeEnd - FadeStart, 0.001);
         float fade = saturate((FadeEnd - pd.Depth) / fadeRange);
-        fade *= fade;
-        accum.rgb *= fade;
-        accum.a = pd.Depth;
-        return accum;
+        fade *= fade; // Quadratic falloff
+    
+        output.diffuse.rgb *= fade;
+        output.specular.rgb *= fade;
+        output.diffuse.a = pd.Depth;
+        output.specular.a = pd.Depth;
+
+        return output;
     }
     //End GNU3
     
@@ -761,19 +766,13 @@ namespace BSSRT2
                     float3 hsv = float3((angle / 6.283185) + 0.5, 1.0, saturate(velocity));
                     return float4(HSVtoRGB(hsv), 1.0);
             
-                case 2: // Combined GI
+                case 2: //GI
                     return float4(giColor, 1.0);
             
-                case 3: // Diffuse GI
-                    return float4(diffuseGI, 1.0);
-            
-                case 4: // Specular GI
-                    return float4(specularGI, 1.0);
-            
-                case 5: // Normals
+                case 3: // Normals
                     return float4(normal * 0.5 + 0.5, 1.0);
             
-                case 6: // Depth
+                case 4: // Depth
                     return float4(depth.xxx, 1.0);
             }
             return originalColor;
@@ -806,17 +805,12 @@ namespace BSSRT2
             PixelShader = PS_Normals;
             RenderTarget = normalTex;
         }
-        pass Specular
+        pass SPDF
         {
             VertexShader = PostProcessVS;
-            PixelShader = Specular;
-            RenderTarget = SP;
-        }
-        pass Diffuse
-        {
-            VertexShader = PostProcessVS;
-            PixelShader = Diffuse;
-            RenderTarget = DF;
+            PixelShader = SPDF;
+            RenderTarget0 = DF;
+            RenderTarget1 = SP;
         }
         pass Temporal
         {
