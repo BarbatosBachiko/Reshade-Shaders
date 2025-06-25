@@ -4,7 +4,7 @@
 
     SSRT
 
-    Version 1.5.34
+    Version 1.5.4
     Author: Barbatos Bachiko
     Original SSRT by jebbyk : https://github.com/jebbyk/SSRT-for-reshade/blob/main/ssrt.fx
 
@@ -12,13 +12,13 @@
     Smooth Normals use AlucardDH MIT License : https://github.com/AlucardDH/dh-reshade-shaders-mit/blob/master/LICENSE
     Aces Tonemapping use Pentalimbed Unlicense: https://github.com/Pentalimbed/YASSGI/blob/main/UNLICENSE
 
-    About: Screen Space Ray Tracing
-
+    About: Screen Space Ray Tracing focused on reflections.
+ 
     History:
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
     
-    Version 1.5.34
-    + Tiny improvements
+    Version 1.5.4
+    + NormalMap
 */
 
 /*-------------------.
@@ -47,6 +47,10 @@
 #define getDepth(coords)      (ReShade::GetLinearizedDepth(coords) * DepthMultiplier)
 #define GetColor(c) tex2Dlod(ReShade::BackBuffer, float4((c).xy, 0, 0))
 #define S_PC MagFilter=POINT;MinFilter=POINT;MipFilter=POINT;AddressU=Clamp;AddressV=Clamp;AddressW=Clamp;
+#define fov 28.6
+#define FAR_PLANE RESHADE_DEPTH_LINEARIZATION_FAR_PLANE 
+#define AspectRatio BUFFER_WIDTH/BUFFER_HEIGHT
+#define pix float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT);
 
 /*-------------------.
 | :: Parameters ::   |
@@ -58,7 +62,7 @@ uniform float SPIntensity <
     ui_step = 0.001;
     ui_category = "General";
     ui_label = "Specular Intensity";
-> = 2.0;
+> = 1.1;
 
 uniform float DFIntensity <
     ui_type = "drag";
@@ -66,7 +70,7 @@ uniform float DFIntensity <
     ui_step = 0.001;
     ui_category = "General";
     ui_label = "Diffuse Intensity";
-> = 2.0;
+> = 1.5;
 
 uniform bool EnableSpecular <
     ui_type = "checkbox";
@@ -156,12 +160,12 @@ uniform int ViewMode <
 uniform bool AssumeSRGB < 
     ui_category = "Tone Mapping";
     ui_label = "Assume sRGB Input";
-> = true;
+> = false;
 
 uniform bool EnableACES <
     ui_category = "Tone Mapping";
     ui_label = "Enable ACES Tone Mapping";
-> = true;
+> = false;
 
 uniform float Saturation <
     ui_type = "slider";
@@ -179,6 +183,9 @@ uniform int BlendMode <
 
 uniform int FRAME_COUNT < source = "framecount"; >;
 uniform int random < source = "random";min = 0; max = 512; >;
+
+static const float PI2div360 = 0.01745329;
+#define rad(x) (x * PI2div360)
 
 //Random
 static const float RandomIntensity = 0.0;
@@ -328,94 +335,126 @@ namespace BSSRT2
     {
         return (color.r + color.g + color.b) * 0.3333333;
     }
-    
-    // MIT License functions
-    float3 getWorldPositionForNormal(float2 coords)
+ 
+    float3 UVtoPos(float2 texcoord)
     {
-        float depth = getDepth(coords).x;
-        return float3((coords - 0.5) * depth, depth);
+        float3 scrncoord = float3(texcoord.xy * 2 - 1, getDepth(texcoord) * FAR_PLANE);
+        scrncoord.xy *= scrncoord.z;
+        scrncoord.x *= AspectRatio;
+        scrncoord.xy *= rad(fov);
+        return scrncoord.xyz;
     }
 
-    float4 mulByA(float4 v)
+    float3 UVtoPos(float2 texcoord, float depth)
     {
-        return float4(v.rgb * v.a, v.a);
+        float3 scrncoord = float3(texcoord.xy * 2 - 1, depth * FAR_PLANE);
+        scrncoord.xy *= scrncoord.z;
+        scrncoord.x *= AspectRatio;
+        scrncoord *= rad(fov);
+        return scrncoord.xyz;
     }
 
-    float4 computeNormal(float3 wpCenter, float3 wpNorth, float3 wpEast)
+    float2 PostoUV(float3 position)
     {
-        return float4(normalize(cross(wpCenter - wpNorth, wpCenter - wpEast)), 1.0);
+        float2 scrnpos = position.xy;
+        scrnpos /= rad(fov);
+        scrnpos.x /= AspectRatio;
+        scrnpos /= position.z;
+        return scrnpos / 2 + 0.5;
     }
 
-    float4 computeNormal(float2 coords, float3 offset, bool reverse)
+    float3 computeNormal(float2 texcoord)
     {
-        float3 posCenter = getWorldPositionForNormal(coords);
-        float3 posNorth = getWorldPositionForNormal(coords - (reverse ? -1 : 1) * offset.zy);
-        float3 posEast = getWorldPositionForNormal(coords + (reverse ? -1 : 1) * offset.xz);
-    
-        float4 r = computeNormal(posCenter, posNorth, posEast);
-        float mD = max(abs(posCenter.z - posNorth.z), abs(posCenter.z - posEast.z));
-        if (mD > 16)
-            r.a = 0;
-        return r;
+        float2 p = pix;
+        float3 u, d, l, r, u2, d2, l2, r2;
+	
+        u = UVtoPos(texcoord + float2(0, p.y));
+        d = UVtoPos(texcoord - float2(0, p.y));
+        l = UVtoPos(texcoord + float2(p.x, 0));
+        r = UVtoPos(texcoord - float2(p.x, 0));
+	
+        p *= 2;
+	
+        u2 = UVtoPos(texcoord + float2(0, p.y));
+        d2 = UVtoPos(texcoord - float2(0, p.y));
+        l2 = UVtoPos(texcoord + float2(p.x, 0));
+        r2 = UVtoPos(texcoord - float2(p.x, 0));
+	
+        u2 = u + (u - u2);
+        d2 = d + (d - d2);
+        l2 = l + (l - l2);
+        r2 = r + (r - r2);
+	
+        float3 c = UVtoPos(texcoord);
+	
+        float3 v = u - c;
+        float3 h = r - c;
+	
+        if (abs(d2.z - c.z) < abs(u2.z - c.z))
+            v = c - d;
+        if (abs(l2.z - c.z) < abs(r2.z - c.z))
+            h = c - l;
+	
+        return normalize(cross(v, h));
     }
 
-    float3 GetNormal(float2 coords)
+    // SmoothNormal by AlucardDH MIT Licence
+    float3 GetNormal(float2 texcoord)
     {
         float3 offset = float3(ReShade::PixelSize, 0.0);
-        float4 normal = computeNormal(coords, offset, false);
-    
-        if (normal.a == 0)
-        {
-            normal = computeNormal(coords, offset, true);
-        }
-    
+        float3 normal = computeNormal(texcoord);
+
         if (bSmoothNormals)
         {
-            float3 offset2 = offset * 7.5 * (1.0 - getDepth(coords).x);
-            float4 normalTop = computeNormal(coords - offset2.zy, offset, false);
-            float4 normalBottom = computeNormal(coords + offset2.zy, offset, false);
-            float4 normalLeft = computeNormal(coords - offset2.xz, offset, false);
-            float4 normalRight = computeNormal(coords + offset2.xz, offset, false);
-        
-            normalTop.a *= smoothstep(1, 0, distance(normal.xyz, normalTop.xyz) * 1.5) * 2;
-            normalBottom.a *= smoothstep(1, 0, distance(normal.xyz, normalBottom.xyz) * 1.5) * 2;
-            normalLeft.a *= smoothstep(1, 0, distance(normal.xyz, normalLeft.xyz) * 1.5) * 2;
-            normalRight.a *= smoothstep(1, 0, distance(normal.xyz, normalRight.xyz) * 1.5) * 2;
-        
-            float4 normal2 = mulByA(normal) + mulByA(normalTop) + mulByA(normalBottom) +
-                         mulByA(normalLeft) + mulByA(normalRight);
-        
-            if (normal2.a > 0)
+            float2 offset2 = ReShade::PixelSize * 7.5 * (1.0 - getDepth(texcoord));
+    
+            float3 normalTop = computeNormal(texcoord - float2(0, offset2.y));
+            float3 normalBottom = computeNormal(texcoord + float2(0, offset2.y));
+            float3 normalLeft = computeNormal(texcoord - float2(offset2.x, 0));
+            float3 normalRight = computeNormal(texcoord + float2(offset2.x, 0));
+    
+            float weightTop = smoothstep(1, 0, distance(normal, normalTop) * 1.5) * 2;
+            float weightBottom = smoothstep(1, 0, distance(normal, normalBottom) * 1.5) * 2;
+            float weightLeft = smoothstep(1, 0, distance(normal, normalLeft) * 1.5) * 2;
+            float weightRight = smoothstep(1, 0, distance(normal, normalRight) * 1.5) * 2;
+    
+            float4 weightedNormal =
+        float4(normal, 1.0) +
+        float4(normalTop * weightTop, weightTop) +
+        float4(normalBottom * weightBottom, weightBottom) +
+        float4(normalLeft * weightLeft, weightLeft) +
+        float4(normalRight * weightRight, weightRight);
+    
+            if (weightedNormal.a > 0)
             {
-                normal2.xyz /= normal2.a;
-                normal.xyz = normalize(normal2.xyz);
+                normal = normalize(weightedNormal.xyz / weightedNormal.a);
             }
         }
-    
-        {
-            float3 color = GetColor(coords).rgb;
+
+    {
+            float3 color = GetColor(texcoord).rgb;
             float height = lum(color);
-            float heightRight = lum(GetColor(coords + offset.xz).rgb);
-            float heightUp = lum(GetColor(coords - offset.zy).rgb);
-        
+            float heightRight = lum(GetColor(texcoord + offset.xz).rgb);
+            float heightUp = lum(GetColor(texcoord - offset.zy).rgb);
+    
             float2 slope = float2(
-            (height - heightRight) * BumpIntensity * BumpDirection.x,
-            (height - heightUp) * BumpIntensity * BumpDirection.y
-        );
+        (height - heightRight) * BumpIntensity * BumpDirection.x,
+        (height - heightUp) * BumpIntensity * BumpDirection.y
+    );
             float holeDepth = (1.0 - height) * BumpDepth * BumpDirection.z;
-        
-            float3 N = normal.xyz;
+    
+            float3 N = normal;
             float3 T = normalize(cross(N, float3(0, 1, 0)));
             float3 B = cross(N, T);
-        
+    
             float3 bumpedNormal = N + (T * slope.x + B * slope.y + N * holeDepth);
             bumpedNormal = normalize(bumpedNormal);
             normal = bumpedNormal;
         }
-    
-        return normal.xyz;
-    }
 
+        return normal;
+    }
+    
     float3 getNormal(float2 coords)
     {
         float3 normal = -(tex2Dlod(sNormal, float4(coords, 0, 0)).xyz - 0.5) * 2;
@@ -466,21 +505,10 @@ namespace BSSRT2
         r.z = frac(sin(dot(uv, float2(29.533, 94.729))) * 31415.9265) * 2.0 - 1.0;
         return r;
     }
-
-    float2 xyz_to_uv(float3 pos)
-    {
-        return pos.xy / pos.z + 0.5;
-    }
-
-    float3 uvz_to_xyz(float2 uv, float z)
-    {
-        return float3((uv - 0.5) * z, z);
-    }
     
    // GNU 3 License functions 
     struct PixelData
     {
-        float PerspectiveFactor;
         float InvSteps;
         float InvRays;
         float Depth;
@@ -492,11 +520,10 @@ namespace BSSRT2
     PixelData PreparePixelData(float2 uv)
     {
         PixelData pd;
-        pd.PerspectiveFactor = PERSPECTIVE_COEFFITIENT;
         pd.InvSteps = rcp((float) STEPS_PER_RAY);
         pd.InvRays = rcp(RAYS_AMOUNT);
         pd.Depth = getDepth(uv).x; 
-        pd.SelfPos = float3((uv - 0.5) * pd.Depth * pd.PerspectiveFactor, pd.Depth);
+        pd.SelfPos = float3((uv - 0.5) * pd.Depth, pd.Depth);
         pd.ViewDir = normalize(pd.SelfPos);
         pd.Normal = normalize(getNormal(uv));
 
@@ -514,7 +541,7 @@ namespace BSSRT2
         float stepSize = MIN_STEP_SIZE;
         float totalDist = 0.0;
         float3 prevPos = rayOrigin;
-        float2 uvPrev = xyz_to_uv(rayOrigin);
+        float2 uvPrev = PostoUV(rayOrigin);
         float minStep = BASE_RAYS_LENGTH / (float) STEPS_PER_RAY;
 
     [loop]
@@ -524,7 +551,7 @@ namespace BSSRT2
             totalDist += stepSize;
             stepSize = min(stepSize * STEP_GROWTH, minStep);
 
-            float2 uvCurr = xyz_to_uv(currPos);
+            float2 uvCurr = PostoUV(currPos);
 
             if (any(uvCurr < 0.0) || any(uvCurr > 1.0) ||
             all(abs(uvCurr - uvPrev) < 0.0005) ||
@@ -550,7 +577,7 @@ namespace BSSRT2
                 for (int r = 0; r < REFINEMENT_STEPS; ++r)
                 {
                     float3 mid = 0.5 * (lo + hi);
-                    float2 uvm = xyz_to_uv(mid);
+                    float2 uvm = PostoUV(mid);
                     if (mid.z >= getDepth(uvm).x)
                         hi = mid;
                     else
@@ -564,7 +591,7 @@ namespace BSSRT2
                 hitPos = currPos;
             }
 
-            uvHit = xyz_to_uv(hitPos);
+            uvHit = PostoUV(hitPos);
             return true;
         }
 
@@ -608,7 +635,7 @@ namespace BSSRT2
             {
                 // Fallback for missed rays
                 float3 fbPos = pd.SelfPos + rayDir * (pd.Depth + 0.01) * BASE_RAYS_LENGTH;
-                float2 uvFb = saturate(xyz_to_uv(fbPos));
+                float2 uvFb = saturate(PostoUV(fbPos));
                 float align = saturate(dot(rayDir, pd.ViewDir));
                 float3 fbColor = GetColor(uvFb).rgb;
                 output.specular.rgb = fbColor * 0.4 * specularRayWeight *
