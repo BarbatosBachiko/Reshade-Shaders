@@ -4,7 +4,7 @@
 
     SSRT
 
-    Version 1.5.32
+    Version 1.5.33
     Author: Barbatos Bachiko
     Original SSRT by jebbyk : https://github.com/jebbyk/SSRT-for-reshade/blob/main/ssrt.fx
 
@@ -17,8 +17,8 @@
     History:
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
     
-    Version 1.5.32
-    + Tiny fix
+    Version 1.5.33
+    + Tiny improvements
 */
 
 /*-------------------.
@@ -53,19 +53,19 @@
 '-------------------*/
 
 uniform float Intensity <
-    ui_type = "slider";
-    ui_min = 0.1; ui_max = 5.0;
+    ui_type = "drag";
+    ui_min = 0.1; ui_max = 3.0;
     ui_step = 0.001;
     ui_category = "General";
     ui_label = "Specular Intensity";
 > = 2.0;
 
 uniform float IndirectIntensity <
-    ui_type = "slider";
-    ui_min = 0.1; ui_max = 5.0;
+    ui_type = "drag";
+    ui_min = 0.1; ui_max = 3.0;
     ui_step = 0.001;
     ui_category = "General";
-    ui_label = "GI Intensity";
+    ui_label = "Diffuse Intensity";
 > = 2.0;
 
 uniform bool EnableSpecularGI <
@@ -87,6 +87,26 @@ uniform float BumpIntensity <
     ui_label = "Bump Intensity";
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
 > = 0.2;
+
+uniform float FadeStart
+    <
+        ui_category = "Fade Settings";
+        ui_type = "slider";
+        ui_label = "Fade Start";
+        ui_tooltip = "Distance starts to fade out";
+        ui_min = 0.0; ui_max = 1.0; ui_step = 0.001;
+    >
+    = 0.0;
+
+uniform float FadeEnd
+    <
+        ui_category = "Fade Settings";
+        ui_type = "slider";
+        ui_label = "Fade End";
+        ui_tooltip = "Distance completely fades out";
+        ui_min = 0.0; ui_max = 5.0; ui_step = 0.001;
+    >
+    = 4.999;
 
 uniform float ThicknessThreshold <
     ui_type = "slider";
@@ -110,26 +130,6 @@ uniform float AccumFramesSG <
      ui_label = "SSR Temporal";
     ui_min = 1.0; ui_max = 32.0; ui_step = 1.0;
 > = 1.0;
-
-uniform float FadeStart
-    <
-        ui_category = "Fade Settings";
-        ui_type = "slider";
-        ui_label = "Fade Start";
-        ui_tooltip = "Distance starts to fade out";
-        ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
-    >
-    = 0.0;
-
-uniform float FadeEnd
-    <
-        ui_category = "Fade Settings";
-        ui_type = "slider";
-        ui_label = "Fade End";
-        ui_tooltip = "Distance completely fades out";
-        ui_min = 0.0; ui_max = 2.0; ui_step = 0.01;
-    >
-    = 1.0;
 
 // Depth Settings
 uniform float DepthMultiplier <
@@ -161,14 +161,14 @@ uniform bool AssumeSRGB <
 uniform bool EnableACES <
     ui_category = "Tone Mapping";
     ui_label = "Enable ACES Tone Mapping";
-> = false;
+> = true;
 
 uniform float Saturation <
     ui_type = "slider";
     ui_category = "Extra";
     ui_label = "Saturation";
     ui_min = 0.0; ui_max = 2.0; ui_step = 0.05;
-> = 1.0;
+> = 1.05;
 
 uniform int BlendMode <
     ui_type = "combo";
@@ -226,7 +226,7 @@ sampler sTexMotionVectorsSampler
 };
 #endif
 
-namespace BSSRT
+namespace BSSRT1
 {
     texture DiffuseGI
     {
@@ -316,20 +316,6 @@ namespace BSSRT
     sampler sNormal
     {
         Texture = normalTex;S_PC
-    };
-
-    texture depthTex
-    {
-        Width = BUFFER_WIDTH;
-        Height = BUFFER_HEIGHT;
-        Format = R32F;
-        MipLevels = 6;
-    };
-    sampler sDepth
-    {
-        Texture = depthTex;
-        MinLOD = 0.0f;
-        MaxLOD = 5.0f;
     };
     
 /*----------------.
@@ -520,10 +506,11 @@ namespace BSSRT
         pd.PerspectiveFactor = PERSPECTIVE_COEFFITIENT;
         pd.InvSteps = rcp((float) STEPS_PER_RAY);
         pd.InvRays = rcp(RAYS_AMOUNT);
-        pd.Depth = getDepth(uv);
+        pd.Depth = getDepth(uv).x; 
         pd.SelfPos = float3((uv - 0.5) * pd.Depth * pd.PerspectiveFactor, pd.Depth);
         pd.ViewDir = normalize(pd.SelfPos);
         pd.Normal = normalize(getNormal(uv));
+
         return pd;
     }
 
@@ -538,10 +525,10 @@ namespace BSSRT
         float stepSize = MIN_STEP_SIZE;
         float totalDist = 0.0;
         float3 prevPos = rayOrigin;
-        float2 uvPrev = xyz_to_uv(rayOrigin); 
-        float minStep = BASE_RAYS_LENGTH / (float) STEPS_PER_RAY; 
+        float2 uvPrev = xyz_to_uv(rayOrigin);
+        float minStep = BASE_RAYS_LENGTH / (float) STEPS_PER_RAY;
 
-[loop]
+    [loop]
         for (int i = 0; i < STEPS_PER_RAY; ++i)
         {
             float3 currPos = prevPos + rayDir * stepSize;
@@ -555,15 +542,14 @@ namespace BSSRT
             totalDist > MaxTraceDistance)
                 break;
 
-            // 
-            float sceneDepth = getDepth(uvCurr);
-            float thickness = abs(currPos.z - sceneDepth); 
+            float sceneDepth = getDepth(uvCurr).x;
+            float thickness = abs(currPos.z - sceneDepth);
 
             // Skip if behind geometry or too thick
             if (currPos.z < sceneDepth || thickness > ThicknessThreshold)
             {
                 prevPos = currPos;
-                uvPrev = uvCurr; 
+                uvPrev = uvCurr;
                 continue;
             }
 
@@ -571,16 +557,17 @@ namespace BSSRT
             if (enableRefinement)
             {
                 float3 lo = prevPos, hi = currPos;
-                
+
                 for (int r = 0; r < REFINEMENT_STEPS; ++r)
                 {
                     float3 mid = 0.5 * (lo + hi);
                     float2 uvm = xyz_to_uv(mid);
-                    if (mid.z >= getDepth(uvm))
+                    if (mid.z >= getDepth(uvm).x)
                         hi = mid;
                     else
                         lo = mid;
                 }
+
                 hitPos = hi;
             }
             else
@@ -595,7 +582,6 @@ namespace BSSRT
         return false;
     }
 
-    // Implements screen-space reflections using stochastic ray marching
     float4 TraceSpecularGI(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
         PixelData pd = PreparePixelData(uv);
@@ -603,7 +589,7 @@ namespace BSSRT
 
         if (EnableSpecularGI)
         {
-            float3 rayDir = reflect(pd.ViewDir, pd.Normal);
+            float3 rayDir = normalize(reflect(pd.ViewDir, pd.Normal));
             float3 hitPos;
             float2 uvHit;
 
@@ -611,34 +597,28 @@ namespace BSSRT
 
             if (hit)
             {
-                // Compute Fresnel term using Schlick’s approximation
-                const float ior = 1.5;
-                const float R0 = pow((1 - ior) / (1 + ior), 2);
-                float3 fn = normalize(getNormal(uvHit));
-                float cosT = saturate(dot(fn, rayDir));
-                float fresnel = R0 + (1 - R0) * pow(1 - cosT, 5);
-                
                 // Weight by view angle squared
-                float angleW = pow(saturate(dot(pd.ViewDir, rayDir)), 2);
-                float distFactor = saturate(1.0 - length(hitPos - pd.SelfPos) / MaxTraceDistance); 
-                
-                accum.rgb += GetColor(uvHit).rgb * pd.InvRays * fresnel * angleW * distFactor;
+                float angleW = saturate(dot(pd.ViewDir, rayDir));
+                angleW *= angleW;
+
+                float distFactor = saturate(1.0 - length(hitPos - pd.SelfPos) / MaxTraceDistance);
+                accum.rgb += GetColor(uvHit).rgb * pd.InvRays * angleW * distFactor;
             }
             else
             {
                 // Fallback in case the ray never hit any geometry
                 float3 fbPos = pd.SelfPos + rayDir * (pd.Depth + 0.01) * BASE_RAYS_LENGTH;
                 float2 uvFb = saturate(xyz_to_uv(fbPos));
-                float align = dot(rayDir, pd.ViewDir);
-                if (align > 0.3 && fbPos.z > 0 && fbPos.z < MaxTraceDistance)
-                    
-                    accum.rgb += GetColor(float4(uvFb, 0, 0)).rgb * 0.4 * pd.InvRays;
+                float align = saturate(dot(rayDir, pd.ViewDir));
+                float3 fbColor = GetColor(uvFb).rgb;
+                accum.rgb += fbColor * 0.4 * pd.InvRays * step(0.3, align) * step(0.0, fbPos.z) * step(fbPos.z, MaxTraceDistance);
             }
         }
-        //Fade, Tone
+
         float fadeRange = max(FadeEnd - FadeStart, 0.001);
         float fade = saturate((FadeEnd - pd.Depth) / fadeRange);
-        accum.rgb = 1.0 - exp(-accum.rgb * fade);
+        fade *= fade;
+        accum.rgb *= fade;
         accum.a = pd.Depth;
         return accum;
     }
@@ -648,7 +628,7 @@ namespace BSSRT
     {
         PixelData pd = PreparePixelData(texcoord);
         float4 accum = 0;
-        
+         
         if (EnableDiffuseGI)
         {
         float3 baseNormal = pd.Normal;
@@ -677,7 +657,8 @@ namespace BSSRT
        //Fade, Tone
         float fadeRange = max(FadeEnd - FadeStart, 0.001);
         float fade = saturate((FadeEnd - pd.Depth) / fadeRange);
-        accum.rgb = 1.0 - exp(-accum.rgb * fade);
+        fade *= fade;
+        accum.rgb *= fade;
         accum.a = pd.Depth;
         return accum;
     }
@@ -837,7 +818,6 @@ namespace BSSRT
             VertexShader = PostProcessVS;
             PixelShader = PS_Normals;
             RenderTarget = normalTex;
-            RenderTarget1 = depthTex;
         }
         pass Specular
         {
