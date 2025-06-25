@@ -335,7 +335,52 @@ namespace BSSRT2
     {
         return (color.r + color.g + color.b) * 0.3333333;
     }
- 
+
+    // Color
+    float3 LinearizeSRGB(float3 color)
+    {
+        return pow(color, 2.2);
+    }
+
+    float3 sRGB_to_ACEScg(float3 srgb)
+    {
+        return mul(g_sRGBToACEScg, srgb);
+    }
+
+    float3 ACEScg_to_sRGB(float3 acescg)
+    {
+        return mul(g_ACEScgToSRGB, acescg);
+    }
+
+    // ACES tone mapping approximation (RRT + ODT)
+    float3 ApplyACES(float3 color)
+    {
+        if (!EnableACES)
+            return color;
+    
+        float3 acescg = sRGB_to_ACEScg(color);
+
+        const float A = 2.51;
+        const float B = 0.03;
+        const float C = 2.43;
+        const float D = 0.59;
+        const float E = 0.14;
+
+        float3 toneMapped = (acescg * (A * acescg + B)) / (acescg * (C * acescg + D) + E);
+
+        return ACEScg_to_sRGB(toneMapped);
+    }
+    
+    float3 rand3d(float2 uv)
+    {
+        uv += random;
+        float3 r;
+        r.x = frac(sin(dot(uv, float2(12.9898, 78.233))) * 43758.5453) * 2.0 - 1.0;
+        r.y = frac(sin(dot(uv, float2(93.9898, 67.345))) * 12741.3427) * 2.0 - 1.0;
+        r.z = frac(sin(dot(uv, float2(29.533, 94.729))) * 31415.9265) * 2.0 - 1.0;
+        return r;
+    }
+    
     float3 UVtoPos(float2 texcoord)
     {
         float3 scrncoord = float3(texcoord.xy * 2 - 1, getDepth(texcoord) * FAR_PLANE);
@@ -460,50 +505,16 @@ namespace BSSRT2
         float3 normal = -(tex2Dlod(sNormal, float4(coords, 0, 0)).xyz - 0.5) * 2;
         return normalize(normal);
     }
-
-    // Color
-    float3 LinearizeSRGB(float3 color)
-    {
-        return pow(color, 2.2);
-    }
-
-    float3 sRGB_to_ACEScg(float3 srgb)
-    {
-        return mul(g_sRGBToACEScg, srgb);
-    }
-
-    float3 ACEScg_to_sRGB(float3 acescg)
-    {
-        return mul(g_ACEScgToSRGB, acescg);
-    }
-
-    // ACES tone mapping approximation (RRT + ODT)
-    float3 ApplyACES(float3 color)
-    {
-        if (!EnableACES)
-            return color;
     
-        float3 acescg = sRGB_to_ACEScg(color);
-
-        const float A = 2.51;
-        const float B = 0.03;
-        const float C = 2.43;
-        const float D = 0.59;
-        const float E = 0.14;
-
-        float3 toneMapped = (acescg * (A * acescg + B)) / (acescg * (C * acescg + D) + E);
-
-        return ACEScg_to_sRGB(toneMapped);
-    }
-    
-    float3 rand3d(float2 uv)
+    float2 GetMotionVector(float2 texcoord)
     {
-        uv += random;
-        float3 r;
-        r.x = frac(sin(dot(uv, float2(12.9898, 78.233))) * 43758.5453) * 2.0 - 1.0;
-        r.y = frac(sin(dot(uv, float2(93.9898, 67.345))) * 12741.3427) * 2.0 - 1.0;
-        r.z = frac(sin(dot(uv, float2(29.533, 94.729))) * 31415.9265) * 2.0 - 1.0;
-        return r;
+#if USE_MARTY_LAUNCHPAD_MOTION
+        return tex2Dlod(Deferred::sMotionVectorsTex, float4(texcoord, 0, 0)).xy;
+#elif USE_VORT_MOTION
+        return tex2Dlod(sMotVectTexVort, float4(texcoord, 0, 0)).xy;
+#else
+        return tex2Dlod(sTexMotionVectorsSampler, float4(texcoord, 0, 0)).xy;
+#endif
     }
     
    // GNU 3 License functions 
@@ -683,18 +694,6 @@ namespace BSSRT2
     }
     //End GNU3
     
-    // Motion vector function
-    float2 GetMotionVector(float2 texcoord)
-    {
-#if USE_MARTY_LAUNCHPAD_MOTION
-        return tex2Dlod(Deferred::sMotionVectorsTex, float4(texcoord, 0, 0)).xy;
-#elif USE_VORT_MOTION
-        return tex2Dlod(sMotVectTexVort, float4(texcoord, 0, 0)).xy;
-#else
-        return tex2Dlod(sTexMotionVectorsSampler, float4(texcoord, 0, 0)).xy;
-#endif
-    }
-
     // Shader passes
     float4 PS_Normals(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
