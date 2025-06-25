@@ -149,7 +149,7 @@ uniform int ViewMode <
     ui_type = "combo";
     ui_category = "Debug";
     ui_label = "View Mode";
-    ui_items = "None\0Motion\0GI\0Diffuse Light\0Specular\0Normal\0Depth\0";
+    ui_items = "None\0Motion\0GI\0Normal\0Depth\0";
 > = 0;
 
 // Extra Settings
