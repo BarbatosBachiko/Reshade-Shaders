@@ -4,7 +4,7 @@
 
     Directional Anti-Aliasing (DAA)
     
-    Version 1.5.1
+    Version 1.6
     Author: Barbatos Bachiko
     License: MIT
 
@@ -14,51 +14,19 @@
     History:
     (*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
 
-    Version 1.5.1
-    * Limit TAA to edges
+    Version 1.6
+    + Temporal
 */
 
 // Includes
 #include "ReShade.fxh"
-#include "ReShadeUI.fxh"
-
-// Motion vector configuration
-#ifndef USE_MARTY_LAUNCHPAD_MOTION
-#define USE_MARTY_LAUNCHPAD_MOTION 0
-#endif
-#ifndef USE_VORT_MOTION
-#define USE_VORT_MOTION 0
-#endif
 
 // Utility macros
 #define getColor(c) tex2Dlod(ReShade::BackBuffer, float4((c).xy, 0, 0))
-#define GetLum(color) dot(color, float3(0.299, 0.587, 0.114))
+#define getDepth(coords)      (ReShade::GetLinearizedDepth(coords))
 #define S_PC MagFilter=POINT;MinFilter=POINT;MipFilter= POINT;AddressU=Clamp;AddressV=Clamp;AddressW=Clamp;
-
-// version-number.fxh
-#ifndef _VERSION_NUMBER_H
-#define _VERSION_NUMBER_H
-
-#define MAJOR_VERSION 1
-#define MINOR_VERSION 5
-#define PATCH_VERSION 1
-
-#define BUILD_DOT_VERSION_(mav, miv, pav) #mav "." #miv "." #pav
-#define BUILD_DOT_VERSION(mav, miv, pav) BUILD_DOT_VERSION_(mav, miv, pav)
-#define DOT_VERSION_STR BUILD_DOT_VERSION(MAJOR_VERSION, MINOR_VERSION, PATCH_VERSION)
-
-#define BUILD_UNDERSCORE_VERSION_(prefix, mav, miv, pav) prefix ## _ ## mav ## _ ## miv ## _ ## pav
-#define BUILD_UNDERSCORE_VERSION(p, mav, miv, pav) BUILD_UNDERSCORE_VERSION_(p, mav, miv, pav)
-#define APPEND_VERSION_SUFFIX(prefix) BUILD_UNDERSCORE_VERSION(prefix, MAJOR_VERSION, MINOR_VERSION, PATCH_VERSION)
-
-#endif  //  _VERSION_NUMBER_H
-
-uniform int APPEND_VERSION_SUFFIX(version) <
-    ui_text = "Version: "
-DOT_VERSION_STR;
-    ui_label = " ";
-    ui_type = "radio";
->;
+#define SkyDepth 0.99
+#define MAX_Frames 64
 
     /*-------------------.
     | :: Settings ::    |
@@ -68,7 +36,7 @@ uniform int View_Mode
 <
     ui_category = "Anti-Aliasing";
     ui_type = "combo";
-    ui_items = "Output\0Edge Mask\0Edge Mask Overlay\0Gradient Direction\0Motion Vectors\0";
+    ui_items = "Output\0Edge Mask\0Edge Mask Overlay\0Gradient Direction\0";
     ui_label = "View Mode";
 > = 0;
 
@@ -106,39 +74,9 @@ uniform float EdgeFalloff
     ui_category = "Edge Detection";
 > = 2.0;
 
-uniform bool EnableTemporalAA
-<
-    ui_category = "Temporal";
-    ui_type = "checkbox";
-    ui_label = "Temporal";
-> = false;
-
-uniform int TemporalMode
-<
-    ui_category = "Temporal";
-    ui_type = "combo";
-    ui_items = "Blurry\0Standard\0Quality\0";
-    ui_label = "TemporalMode";
-    ui_tooltip = "";
-> = 2;
-
-uniform float TemporalAAFactor
-<
-    ui_category = "Temporal";
-    ui_type = "slider";
-    ui_label = "Temporal Strength";
-    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
-> = 0.5;
-
-uniform bool LimitTAAtoEdges <
-    ui_category = "Temporal";
-    ui_type = "checkbox";
-    ui_label = "Limit TAA to Edges";
-    ui_tooltip = "Restricts Temporal AA only to detected edges";
-> = false;
-
-uniform uint framecount < source = "framecount"; >;
-
+static float EnableTemporalAA = true;
+static float AccumFrames = 16;
+uniform int FRAME_COUNT < source = "framecount"; >;
     /*---------------.
     | :: Textures :: |
     '---------------*/
@@ -167,45 +105,28 @@ sampler2D sDAAHistory
     Texture = DAAHistory;
 };
 
-#if USE_MARTY_LAUNCHPAD_MOTION
-namespace Deferred {
-    texture MotionVectorsTex { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
-    sampler sMotionVectorsTex { Texture = MotionVectorsTex;  };
-}
-#elif USE_VORT_MOTION
-    texture2D MotVectTexVort {  Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
-    sampler2D sMotVectTexVort { Texture = MotVectTexVort; S_PC  };
-#else
-texture texMotionVectors
-{
-    Width = BUFFER_WIDTH;
-    Height = BUFFER_HEIGHT;
-    Format = RG16F;
-};
-sampler sTexMotionVectorsSampler
-{
-    Texture = texMotionVectors;
-    S_PC
-};
-#endif
-
     /*----------------.
     | :: Functions :: |
     '----------------*/
+
+float lum(float3 color)
+{
+    return (color.r + color.g + color.b) * 0.3333333;
+}
 
 // Calculates the gradient using the Scharr operator
 float2 ComputeGradient(float2 texcoord)
 {
     const float2 offset = ReShade::PixelSize.xy * PixelWidth;
 
-    float lumTL = GetLum(getColor(float4(texcoord + float2(-offset.x, -offset.y), 0, 0)).rgb);
-    float lumT = GetLum(getColor(float4(texcoord + float2(0, -offset.y), 0, 0)).rgb);
-    float lumTR = GetLum(getColor(float4(texcoord + float2(offset.x, -offset.y), 0, 0)).rgb);
-    float lumL = GetLum(getColor(float4(texcoord + float2(-offset.x, 0), 0, 0)).rgb);
-    float lumR = GetLum(getColor(float4(texcoord + float2(offset.x, 0), 0, 0)).rgb);
-    float lumBL = GetLum(getColor(float4(texcoord + float2(-offset.x, offset.y), 0, 0)).rgb);
-    float lumB = GetLum(getColor(float4(texcoord + float2(0, offset.y), 0, 0)).rgb);
-    float lumBR = GetLum(getColor(float4(texcoord + float2(offset.x, offset.y), 0, 0)).rgb);
+    float lumTL = lum(getColor(float4(texcoord + float2(-offset.x, -offset.y), 0, 0)).rgb);
+    float lumT = lum(getColor(float4(texcoord + float2(0, -offset.y), 0, 0)).rgb);
+    float lumTR = lum(getColor(float4(texcoord + float2(offset.x, -offset.y), 0, 0)).rgb);
+    float lumL = lum(getColor(float4(texcoord + float2(-offset.x, 0), 0, 0)).rgb);
+    float lumR = lum(getColor(float4(texcoord + float2(offset.x, 0), 0, 0)).rgb);
+    float lumBL = lum(getColor(float4(texcoord + float2(-offset.x, offset.y), 0, 0)).rgb);
+    float lumB = lum(getColor(float4(texcoord + float2(0, offset.y), 0, 0)).rgb);
+    float lumBR = lum(getColor(float4(texcoord + float2(offset.x, offset.y), 0, 0)).rgb);
 
     float gx = (-3.0 * lumTL - 10.0 * lumL - 3.0 * lumBL) + (3.0 * lumTR + 10.0 * lumR + 3.0 * lumBR);
     float gy = (-3.0 * lumTL - 10.0 * lumT - 3.0 * lumTR) + (3.0 * lumBL + 10.0 * lumB + 3.0 * lumBR);
@@ -237,153 +158,113 @@ float4 DirectionalAA(float2 texcoord)
     return originalColor;
 }
 
-float2 GetMotionVector(float2 texcoord)
-{
-#if USE_MARTY_LAUNCHPAD_MOTION
-    return tex2Dlod(Deferred::sMotionVectorsTex, float4(texcoord, 0, 0)).xy;
-#elif USE_VORT_MOTION
-    return tex2Dlod(sMotVectTexVort, float4(texcoord, 0, 0)).xy;
-#else
-    return tex2Dlod(sTexMotionVectorsSampler, float4(texcoord, 0, 0)).xy;
-#endif
-}
-
-float3 HSVtoRGB(float3 c)
-{
-    float4 K = float4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
-    float3 p = abs(frac(c.xxx + K.xyz) * 6.0 - K.www);
-    return c.z * lerp(K.xxx, saturate(p - K.xxx), c.y);
-}
-
- // Convert RGB to YCoCg
 float3 RGBToYCoCg(float3 rgb)
 {
-    float Y = dot(rgb, float3(0.25, 0.5, 0.25));
-    float Co = dot(rgb, float3(0.5, 0.0, -0.5));
-    float Cg = dot(rgb, float3(-0.25, 0.5, -0.25));
-    return float3(Y, Co, Cg);
+    float Y = .299 * rgb.x + .587 * rgb.y + .114 * rgb.z; // Luminance
+    float Cb = -.169 * rgb.x - .331 * rgb.y + .500 * rgb.z; // Chrominance Blue
+    float Cr = .500 * rgb.x - .419 * rgb.y - .081 * rgb.z; // Chrominance Red
+    return float3(Y, Cb + 128. / 255., Cr + 128. / 255.);
 }
 
-// Convert YCoCg back to RGB
-float3 YCoCgToRGB(float3 ycocg)
+float3 YCoCgToRGB(float3 ycc)
 {
-    float Y = ycocg.x;
-    float Co = ycocg.y;
-    float Cg = ycocg.z;
-    return float3(Y + Co - Cg, Y + Cg, Y - Co - Cg);
+    float3 c = ycc - float3(0., 128. / 255., 128. / 255.);
+    
+    float R = c.x + 1.400 * c.z;
+    float G = c.x - 0.343 * c.y - 0.711 * c.z;
+    float B = c.x + 1.765 * c.y;
+    return float3(R, G, B);
 }
 
-//Temporal DAA
-float4 PS_TemporalDAA(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
+float4 PS_Temporal(float4 pos : SV_Position, float2 texcoord : TEXCOORD, out float outHistoryLength : SV_Target1) : SV_Target
 {
-    float2 motion = GetMotionVector(texcoord);
+
     float4 current = DirectionalAA(texcoord);
-    
-    // Calculate edge weight for current pixel
-    float2 gradient = ComputeGradient(texcoord);
-    float edgeStrength = length(gradient);
-    float edgeWeight = smoothstep(EdgeThreshold, EdgeThreshold + EdgeFalloff, edgeStrength);
-    
-    if (TemporalMode == 0) // Method A - Blurry
-    {
-        float2 reprojectedTexcoord = texcoord + motion;
-        float4 historyCenter = tex2Dlod(sDAAHistory, float4(reprojectedTexcoord, 0, 0));
-        
-        // Apply edge weight limitation if enabled
-        float factor = EnableTemporalAA ? TemporalAAFactor : 0.0;
-        factor = LimitTAAtoEdges ? factor * edgeWeight : factor;
-        
-        return lerp(current, historyCenter, factor);
-    }
-    else if (TemporalMode == 1) // Method B - Standard
-    {
-        float3 currentYCoCg = RGBToYCoCg(current.rgb);
-        float2 reprojectedTexcoord = texcoord + motion;
-        float4 history = tex2Dlod(sDAAHistory, float4(reprojectedTexcoord, 0, 0));
-        float3 historyYCoCg = RGBToYCoCg(history.rgb);
-        
-        float factor = EnableTemporalAA ? TemporalAAFactor : 0.0;
-        factor = LimitTAAtoEdges ? factor * edgeWeight : factor;
-        
-        float3 blendedYCoCg = lerp(currentYCoCg, historyYCoCg, factor);
-        float3 finalRGB = YCoCgToRGB(blendedYCoCg);
-        
-        return float4(finalRGB, current.a);
-    }
-    else // Method C - Quality
+    float3 currentYCoCg = RGBToYCoCg(current.rgb);
+
+    float depth = getDepth(texcoord);
+    bool validHistory = (depth <= SkyDepth) &&
+                        all(saturate(texcoord) == texcoord) &&
+                        FRAME_COUNT > 1;
+
+    float3 historyYCoCg = currentYCoCg;
+
+    if (EnableTemporalAA && validHistory)
     {
         float2 pixelSize = ReShade::PixelSize.xy;
-        float3 currentYCoCg = RGBToYCoCg(current.rgb);
-        float2 reproTexcoord = texcoord + motion;
-    
-        static const float FLT_MAX = 3.40282347e+38;
-        static const float NEG_FLT_MAX = -3.40282347e+38;
 
-        // Initialize AABB
-        float3 minColor = float3(FLT_MAX, FLT_MAX, FLT_MAX);
-        float3 maxColor = float3(NEG_FLT_MAX, NEG_FLT_MAX, NEG_FLT_MAX);
-    
-        // Sample 3×3 neighborhood
-        for (int j = -1; j <= 1; ++j)
+        // Neighborhood sampling for AABB clamping
+        float3 minColor = currentYCoCg;
+        float3 maxColor = currentYCoCg;
+        float3 meanColor = currentYCoCg;
+        float3 m2Color = currentYCoCg * currentYCoCg;
+        int sampleCount = 1;
+
+        static const int2 offsets[8] =
         {
-            for (int i = -1; i <= 1; ++i)
-            {
-                if (i != 0 || j != 0)
-                {
-                    float2 offset = pixelSize * float2(i, j);
-                    float3 sampleYCoCg = RGBToYCoCg(
-                        getColor(float4(texcoord + offset, 0, 0)).rgb
-                    );
-                    minColor = min(minColor, sampleYCoCg);
-                    maxColor = max(maxColor, sampleYCoCg);
-                }
-            }
+            int2(-1, 0), int2(1, 0), int2(0, -1), int2(0, 1),
+            int2(-1, -1), int2(1, -1), int2(-1, 1), int2(1, 1)
+        };
+
+        [unroll]
+        for (int i = 0; i < 8; ++i)
+        {
+            float2 offset = texcoord + pixelSize * offsets[i];
+            float3 sampleYCoCg = RGBToYCoCg(getColor(float4(offset, 0, 0)).rgb);
+
+            minColor = min(minColor, sampleYCoCg);
+            maxColor = max(maxColor, sampleYCoCg);
+            meanColor += sampleYCoCg;
+            m2Color += sampleYCoCg * sampleYCoCg;
+            sampleCount++;
         }
-    
-        // Expand AABB by 50%
-        float3 halfSize = (maxColor - minColor) * 0.5;
-        minColor -= halfSize;
-        maxColor += halfSize;
-    
-        // Sample history and clamp it
-        float3 historyYCoCg = RGBToYCoCg(
-            tex2Dlod(sDAAHistory, float4(reproTexcoord, 0, 0)).rgb
+
+        meanColor /= sampleCount;
+        m2Color /= sampleCount;
+
+        float3 variance = abs(m2Color - meanColor * meanColor);
+        float3 stdDev = sqrt(variance);
+
+        float3 expansion = lerp(0.5, 1.5, saturate(length(stdDev)));
+        float3 halfSize = (maxColor - minColor) * expansion;
+        minColor = meanColor - halfSize * 0.5;
+        maxColor = meanColor + halfSize * 0.5;
+
+        float3 rawHistoryYCoCg = RGBToYCoCg(
+            tex2Dlod(sDAAHistory, float4(texcoord, 0, 0)).rgb
         );
-        historyYCoCg = clamp(historyYCoCg, minColor, maxColor);
-    
-        // Compute blend factor
-        float motionLen = length(motion) * 100.0;
-        float blendFactor = EnableTemporalAA
-            ? clamp(TemporalAAFactor * (1.0 - motionLen), 0.0, TemporalAAFactor)
-            : 0.0;
-        
-        // Apply edge weight limitation if enabled
-        blendFactor = LimitTAAtoEdges ? blendFactor * edgeWeight : blendFactor;
-    
-        float3 resultYCoCg = lerp(currentYCoCg, historyYCoCg, blendFactor);
-        float3 resultRGB = YCoCgToRGB(resultYCoCg);
-        return float4(resultRGB, current.a);
+
+        // Soft AABB clamping
+        float3 center = (minColor + maxColor) * 0.5;
+        float3 extents = (maxColor - minColor) * 0.5;
+        historyYCoCg = center + clamp(rawHistoryYCoCg - center, -extents, extents);
+
+        // Blend
+        float alpha = 1.0 / min(FRAME_COUNT, (float) AccumFrames);
+        currentYCoCg = lerp(historyYCoCg, currentYCoCg, alpha);
     }
+
+    outHistoryLength = validHistory ? min(FRAME_COUNT, MAX_Frames) : 0;
+    return float4(YCoCgToRGB(currentYCoCg), current.a);
 }
 
 // History pass
-float4 PS_SaveHistoryDAA(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
+float4 PS_SaveHistory(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
 {
     float4 temporalResult = tex2Dlod(sDAATemporal, float4(texcoord, 0, 0));
     return temporalResult;
 }
 
 // Composite pass
-float4 PS_CompositeDAA(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
+float4 PS_Composite(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
 {
-    float4 originalColor = tex2Dlod(ReShade::BackBuffer, float4(texcoord, 0, 0));
+    float4 originalColor = getColor(texcoord);
     float4 daaColor = tex2Dlod(sDAATemporal, float4(texcoord, 0, 0));
     
     float2 gradient = ComputeGradient(texcoord);
     float edgeStrength = length(gradient);
     float weight = smoothstep(EdgeThreshold, EdgeThreshold + EdgeFalloff, edgeStrength);
     
-    float2 motion = GetMotionVector(texcoord);
 
     switch (View_Mode)
     {
@@ -402,12 +283,6 @@ float4 PS_CompositeDAA(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : S
             float2 normGrad = (edgeStrength > 0.0) ? normalize(gradient) : float2(0.0, 0.0);
             return float4(normGrad.x * 0.5 + 0.5, normGrad.y * 0.5 + 0.5, 0.0, 1.0);
             
-        case 4: // Motion Vectors
-            float magnitude = length(motion) * 50.0;
-            float angle = atan2(motion.y, motion.x);
-            float3 hsv = float3((angle / 6.283185) + 0.5, 1.0, saturate(magnitude));
-            return float4(HSVtoRGB(hsv), 1.0);
-            
         default:
             return originalColor;
     }
@@ -419,24 +294,24 @@ float4 PS_CompositeDAA(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : S
 
 technique DAA
 <
-    ui_tooltip = "Directional Anti-Aliasing. Enable Quark_Motion or any Motion Vectors for Temporal Anti-Aliasing";
+    ui_tooltip = "Directional SpatioTemporal Anti-Aliasing";
 >
 {
     pass Temporal
     {
         VertexShader = PostProcessVS;
-        PixelShader = PS_TemporalDAA;
+        PixelShader = PS_Temporal;
         RenderTarget = DAATemporal;
     }
     pass SaveHistory
     {
         VertexShader = PostProcessVS;
-        PixelShader = PS_SaveHistoryDAA;
+        PixelShader = PS_SaveHistory;
         RenderTarget = DAAHistory;
     }
     pass Composite
     {
         VertexShader = PostProcessVS;
-        PixelShader = PS_CompositeDAA;
+        PixelShader = PS_Composite;
     }
 }
