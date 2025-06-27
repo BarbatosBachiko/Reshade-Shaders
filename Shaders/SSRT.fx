@@ -4,7 +4,7 @@
 
     SSRT
 
-    Version 1.5.4
+    Version 1.5.5
     Author: Barbatos Bachiko
     Original SSRT by jebbyk : https://github.com/jebbyk/SSRT-for-reshade/blob/main/ssrt.fx
 
@@ -17,8 +17,10 @@
     History:
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
     
-    Version 1.5.4
-    + NormalMap
+    Version 1.5.5
+    + Temporal
+    + Noise
+    + Modified DF
 */
 
 /*-------------------.
@@ -52,6 +54,9 @@
 #define AspectRatio BUFFER_WIDTH/BUFFER_HEIGHT
 #define pix float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT);
 
+#define MVErrorTolerance 0.96
+#define SkyDepth 0.99
+#define MAX_Frames 64
 /*-------------------.
 | :: Parameters ::   |
 '-------------------*/
@@ -70,7 +75,7 @@ uniform float DFIntensity <
     ui_step = 0.001;
     ui_category = "General";
     ui_label = "Diffuse Intensity";
-> = 1.5;
+> = 2.0;
 
 uniform bool EnableSpecular <
     ui_type = "checkbox";
@@ -207,7 +212,7 @@ static const float EnableTemporal = true;
 static const float MIN_STEP_SIZE = 0.001;
 static const float STEP_GROWTH = 1.0803;
 static const int REFINEMENT_STEPS = 6;
-
+uniform bool GI = true;
 /*---------------.
 | :: Textures :: |
 '---------------*/
@@ -216,10 +221,16 @@ static const int REFINEMENT_STEPS = 6;
     namespace Deferred {
         texture MotionVectorsTex { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
         sampler sMotionVectorsTex { Texture = MotionVectorsTex; };
+        float2 sampleMotion(float2 texcoord) {
+            return tex2D(sMotionVectorsTex, texcoord).rg;
+        }
     }
 #elif USE_VORT_MOTION
     texture2D MotVectTexVort { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
     sampler2D sMotVectTexVort { Texture = MotVectTexVort; S_PC };
+    float2 sampleMotion(float2 texcoord) {
+        return tex2D(sMotVectTexVort, texcoord).rg;
+    }
 #else
 texture texMotionVectors
 {
@@ -231,6 +242,10 @@ sampler sTexMotionVectorsSampler
 {
     Texture = texMotionVectors;S_PC
 };
+float2 sampleMotion(float2 texcoord)
+{
+    return tex2D(sTexMotionVectorsSampler, texcoord).rg;
+}
 #endif
 
 namespace BSSRT2
@@ -301,6 +316,22 @@ namespace BSSRT2
     {
         Texture = SP_HISTORY;
     };
+
+    texture NOISE < source = "SS_BN.png"; >
+    {
+        Width = 1024;
+        Height = 1024;
+        Format = RGBA8;
+    };
+    sampler sNOISE
+    {
+        Texture = NOISE;
+        AddressU = REPEAT;
+        AddressV = REPEAT;
+        MipFilter = Point;
+        MinFilter = Point;
+        MagFilter = Point;
+    };
     
     texture normalTex
     {
@@ -370,17 +401,7 @@ namespace BSSRT2
 
         return ACEScg_to_sRGB(toneMapped);
     }
-    
-    float3 rand3d(float2 uv)
-    {
-        uv += random;
-        float3 r;
-        r.x = frac(sin(dot(uv, float2(12.9898, 78.233))) * 43758.5453) * 2.0 - 1.0;
-        r.y = frac(sin(dot(uv, float2(93.9898, 67.345))) * 12741.3427) * 2.0 - 1.0;
-        r.z = frac(sin(dot(uv, float2(29.533, 94.729))) * 31415.9265) * 2.0 - 1.0;
-        return r;
-    }
-    
+
     float3 UVtoPos(float2 texcoord)
     {
         float3 scrncoord = float3(texcoord.xy * 2 - 1, getDepth(texcoord) * FAR_PLANE);
@@ -505,16 +526,121 @@ namespace BSSRT2
         float3 normal = -(tex2Dlod(sNormal, float4(coords, 0, 0)).xyz - 0.5) * 2;
         return normalize(normal);
     }
-    
+ 
     float2 GetMotionVector(float2 texcoord)
     {
+        float2 p = pix;
+        float2 MV = sampleMotion(texcoord);
+
+        if (MVErrorTolerance < 1)
+        {
+            if (abs(MV.x) < p.x && abs(MV.y) < p.y)
+                MV = 0;
+        }
+
 #if USE_MARTY_LAUNCHPAD_MOTION
-        return tex2Dlod(Deferred::sMotionVectorsTex, float4(texcoord, 0, 0)).xy;
+    MV = tex2Dlod(Deferred::sMotionVectorsTex, float4(texcoord, 0, 0)).xy;
 #elif USE_VORT_MOTION
-        return tex2Dlod(sMotVectTexVort, float4(texcoord, 0, 0)).xy;
-#else
-        return tex2Dlod(sTexMotionVectorsSampler, float4(texcoord, 0, 0)).xy;
+    MV = tex2Dlod(sMotVectTexVort, float4(texcoord, 0, 0)).xy;
 #endif
+
+        return MV;
+    }
+
+    bool IsTextureAvailable()
+    {
+        float4 testPixel = tex2Dlod(sNOISE, float4(0.5, 0.5, 0, 0));
+        bool isBlack = all(testPixel.rgb == 0);
+        bool isWhite = all(testPixel.rgb == 1);
+        bool hasVariation = any(abs(testPixel.rgb - 0.5) > 0.1);
+    
+        return !isBlack && !isWhite && hasVariation;
+    }
+    
+    float IGN(float2 n)
+    {
+        float f = 0.06711056 * n.x + 0.00583715 * n.y;
+        return frac(52.9829189 * frac(f));
+    }
+
+    float3 IGN3dts(float2 texcoord, float HL)
+    {
+        float3 OutColor;
+        float2 seed = texcoord * BUFFER_SCREEN_SIZE + (FRAME_COUNT % HL) * 5.588238;
+        OutColor.r = IGN(seed);
+        OutColor.g = IGN(seed + 91.534651 + 189.6854);
+        OutColor.b = IGN(seed + 167.28222 + 281.9874);
+        return OutColor;
+    }
+
+    float3 ProceduralBN3dts(float2 texcoord, float HL)
+    {
+        float2 uv = texcoord * BUFFER_SCREEN_SIZE;
+        float frame = FRAME_COUNT % HL;
+        float3 noise = float3(0, 0, 0);
+        float2 p = uv * 0.1 + frame * 0.01;
+    
+        for (int i = 0; i < 4; i++)
+        {
+            float scale = pow(2.0, i);
+            float2 coord = p * scale + frame * (i + 1) * 0.1;
+            noise.r += IGN(coord) / scale;
+            noise.g += IGN(coord + 127.1) / scale;
+            noise.b += IGN(coord + 311.7) / scale;
+        }
+    
+        return frac(noise);
+    }
+
+    float3 BN3dts(float2 texcoord, float HL)
+    {
+        static bool textureChecked = false;
+        static bool textureAvailable = false;
+    
+        if (!textureChecked)
+        {
+            textureAvailable = IsTextureAvailable();
+            textureChecked = true;
+        }
+
+        if (textureAvailable)
+        {
+            texcoord *= BUFFER_SCREEN_SIZE;
+            texcoord = texcoord % 128;
+            int frame = int(FRAME_COUNT % HL);
+            int2 F;
+            F.x = frame % 8;
+            F.y = (frame / 8) % 8;
+            F *= 128;
+            texcoord += F;
+            texcoord /= 1024.0;
+            return tex2Dlod(sNOISE, float4(texcoord, 0.0, 0.0)).rgb;
+        }
+        else
+        {
+            return ProceduralBN3dts(texcoord, HL);
+        }
+    }
+
+    float WN(float2 co)
+    {
+        return frac(sin(dot(co.xy, float2(1.0, 73))) * 437580.5453);
+    }
+
+    float3 WN3dts(float2 co, float HL)
+    {
+        co += (FRAME_COUNT % HL) / 120.3476687;
+        return float3(WN(co), WN(co + 0.6432168421), WN(co + 0.19216811));
+    }
+
+    float3 GetNoise3dts(float2 texcoord, float HL, bool GI)
+    {
+        float3 BlueNoise = BN3dts(texcoord, HL);
+        float3 IGNoise = IGN3dts(texcoord, HL);
+        float3 WhiteNoise = WN3dts(texcoord, HL);
+        return (HL <= 0) ? IGNoise :
+           (HL > 64) ? WhiteNoise :
+                       BlueNoise;
     }
     
    // GNU 3 License functions 
@@ -608,7 +734,7 @@ namespace BSSRT2
 
         return false;
     }
-
+    
     struct PS_OUTPUT
     {
         float4 diffuse : SV_Target0; // DF_TEMP
@@ -619,21 +745,20 @@ namespace BSSRT2
     {
         PixelData pd = PreparePixelData(uv);
         PS_OUTPUT output;
-    
         output.diffuse = 0;
         output.specular = 0;
-    
         const float specularRayWeight = 1.0;
-
+        
         // Reflections
         if (EnableSpecular)
         {
-            float3 rayDir = normalize(reflect(pd.ViewDir, pd.Normal));
+            float3 position = UVtoPos(uv);
+            float3 eyedir = normalize(position);
+            float3 rayDir = reflect(eyedir, pd.Normal);
+            
             float3 hitPos;
             float2 uvHit;
-
             bool hit = RayGen(pd.SelfPos, rayDir, hitPos, uvHit, true);
-
             if (hit)
             {
                 float angleW = saturate(dot(pd.ViewDir, rayDir));
@@ -650,46 +775,47 @@ namespace BSSRT2
                 float align = saturate(dot(rayDir, pd.ViewDir));
                 float3 fbColor = GetColor(uvFb).rgb;
                 output.specular.rgb = fbColor * 0.4 * specularRayWeight *
-                                  step(0.3, align) *
-                                  step(0.0, fbPos.z) *
-                                  step(fbPos.z, MaxTraceDistance);
+                                step(0.3, align) *
+                                step(0.0, fbPos.z) *
+                                step(fbPos.z, MaxTraceDistance);
             }
         }
-
         // Light
         if (EnableDiffuse)
         {
             float3 baseNormal = pd.Normal;
-            const float JITTER_INTENSITY = 0.09;
-            const float DIR_PERTURB = 0.09;
             float3 diffuseAccum = 0;
 
+        [loop]
             for (int r = 0; r < RAYS_AMOUNT; ++r)
             {
-                float seed = 32.0 * (r + 1.0) + frac(FRAME_COUNT / 48.0);
-                float3 jitter = rand3d(uv + seed) * 8.0 - 4.0;
-                float3 pertN = normalize(baseNormal + jitter * JITTER_INTENSITY);
-                float3 rayDir = normalize(pertN + jitter * DIR_PERTURB);
+                float HL = 48.0;
+                float3 noise = GetNoise3dts(uv, HL, GI);
+                float3 jitter = noise * 2.0 - 1.0;
+                
+                float3 position = UVtoPos(uv);
+                float3 eyedir = normalize(position);
+                float3 rayDir = normalize(noise * 2 - 1);
+                
+                float normalAffinity = saturate(dot(rayDir, baseNormal));
                 float3 hitPos;
                 float2 uvHit;
-
                 if (RayGen(pd.SelfPos, rayDir, hitPos, uvHit, false))
                 {
-                    diffuseAccum += GetColor(uvHit).rgb * DFIntensity;
+                    diffuseAccum += GetColor(uvHit).rgb * DFIntensity * normalAffinity;
                 }
             }
             output.diffuse.rgb = diffuseAccum * pd.InvRays;
         }
-
+    
         float fadeRange = max(FadeEnd - FadeStart, 0.001);
         float fade = saturate((FadeEnd - pd.Depth) / fadeRange);
-        fade *= fade; // Quadratic falloff
-    
+        fade *= fade; 
+
         output.diffuse.rgb *= fade;
         output.specular.rgb *= fade;
         output.diffuse.a = pd.Depth;
         output.specular.a = pd.Depth;
-
         return output;
     }
     //End GNU3
@@ -700,33 +826,43 @@ namespace BSSRT2
         float3 normal = GetNormal(uv);
         return float4(normal * 0.5 + 0.5, 1.0);
     }
-   
-    float4 PS_Temporal(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outSpec : SV_Target1) : SV_Target
+
+    float4 PS_Temporal(float4 pos : SV_Position, float2 uv : TEXCOORD,
+                              out float4 outSpec : SV_Target1,
+                              out float outHistoryLength : SV_Target2) : SV_Target
     {
         float2 motion = GetMotionVector(uv);
-
-        // Diffuse
+        float2 reprojectedUV = uv + motion;
+    
         float3 currentGI = tex2Dlod(sDF, float4(uv, 0, 0)).rgb;
-        float3 historyGI = tex2Dlod(sDF_HISTORY, float4(uv + motion, 0, 0)).rgb;
-        float3 blendedGI = currentGI;
-
-        if (EnableTemporal && AccumFramesDF > 0 && FRAME_COUNT > 1)
-        {
-            uint N = min(FRAME_COUNT, (uint) AccumFramesDF);
-            blendedGI = (historyGI * (N - 1) + currentGI) / N;
-        }
-
-        // Specular
         float3 currentSpec = tex2Dlod(sSP, float4(uv, 0, 0)).rgb;
-        float3 historySpec = tex2Dlod(sSP_HISTORY, float4(uv + motion, 0, 0)).rgb;
+    
+        float3 historyGI = tex2Dlod(sDF_HISTORY, float4(reprojectedUV, 0, 0)).rgb;
+        float3 historySpec = tex2Dlod(sSP_HISTORY, float4(reprojectedUV, 0, 0)).rgb;
+    
+        // Disocclusion
+        float depth = getDepth(uv);
+        bool validHistory = (depth <= SkyDepth) &&
+                       all(saturate(reprojectedUV) == reprojectedUV) &&
+                       FRAME_COUNT > 1;
+    
+        float3 blendedGI = currentGI;
         float3 blendedSpec = currentSpec;
-
-        if (EnableTemporal && AccumFramesSG > 0 && FRAME_COUNT > 1)
+    
+        if (EnableTemporal && validHistory)
         {
-            uint N = min(FRAME_COUNT, (uint) AccumFramesSG);
-            blendedSpec = (historySpec * (N - 1) + currentSpec) / N;
+            if (AccumFramesDF > 0)
+            {
+                float alphaGI = 1.0 / min(FRAME_COUNT, (float) AccumFramesDF);
+                blendedGI = lerp(historyGI, currentGI, alphaGI);
+            }
+            if (AccumFramesSG > 0)
+            {
+                float alphaSpec = 1.0 / min(FRAME_COUNT, (float) AccumFramesSG);
+                blendedSpec = lerp(historySpec, currentSpec, alphaSpec);
+            }
         }
-
+        outHistoryLength = validHistory ? min(FRAME_COUNT, MAX_Frames) : 0;
         outSpec = float4(blendedSpec, currentSpec.r);
         return float4(blendedGI, currentGI.r);
     }
@@ -851,7 +987,7 @@ namespace BSSRT2
             PixelShader = PS_SaveHistorySP;
             RenderTarget = SP_HISTORY;
         }
-        pass Save_History_Diffuse
+        pass Save_History_IL
         {
             VertexShader = PostProcessVS;
             PixelShader = PS_SaveHistoryDF;
