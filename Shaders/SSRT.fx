@@ -146,7 +146,7 @@ uniform float DepthMultiplier <
     ui_category = "Depth/Normal";
     ui_label = "Depth Multiplier";
     ui_min = 0.1; ui_max = 5.0; ui_step = 0.1;
-> = 0.5;
+> = 0.3;
 
 // Normal Settings
 uniform bool bSmoothNormals <
