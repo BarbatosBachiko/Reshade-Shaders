@@ -6,7 +6,7 @@ _  _ ____ ____ ____ ____ ____ ____
 |\ | |___ |  | [__  [__  |__| |  | 
 | \| |___ |__| ___] ___] |  | |__| 
                                                                        
-    Version 1.8
+    Version 1.8.1
     Author: Barbatos Bachiko
     License: MIT
     Smooth Normals use AlucardDH MIT License : https://github.com/AlucardDH/dh-reshade-shaders-mit/blob/master/LICENSE
@@ -16,11 +16,7 @@ _  _ ____ ____ ____ ____ ____ ____
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
     
     Version 1.8
-    + ray march fix
-    + AO
-    + Motion Vectors Support
-    + Temporal
-    
+    x IMMERSE Launchpad working
 */ 
 
 #include "ReShade.fxh"
@@ -171,22 +167,23 @@ static const float PI2div360 = 0.01745329;
     /*---------------.
     | :: Textures :: |
     '---------------*/
-
 #if USE_MARTY_LAUNCHPAD_MOTION
-    namespace Deferred {
-        texture MotionVectorsTex { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
-        sampler sMotionVectorsTex { Texture = MotionVectorsTex; };
-        float2 sampleMotion(float2 texcoord) {
-            return tex2D(sMotionVectorsTex, texcoord).rg;
-        }
-    }
+namespace Deferred {
+    texture MotionVectorsTex { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
+    sampler sMotionVectorsTex { Texture = MotionVectorsTex; };
+}
+float2 sampleMotion(float2 texcoord) {
+    return tex2D(Deferred::sMotionVectorsTex, texcoord).rg;
+}
+
 #elif USE_VORT_MOTION
-    texture2D MotVectTexVort { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
-    sampler2D sMotVectTexVort { Texture = MotVectTexVort; S_PC };
-    float2 sampleMotion(float2 texcoord) {
-        return tex2D(sMotVectTexVort, texcoord).rg;
-    }
+texture2D MotVectTexVort { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
+sampler2D sMotVectTexVort { Texture = MotVectTexVort; S_PC };
+float2 sampleMotion(float2 texcoord) {
+    return tex2D(sMotVectTexVort, texcoord).rg;
+}
 #else
+
 texture texMotionVectors
 {
     Width = BUFFER_WIDTH;
