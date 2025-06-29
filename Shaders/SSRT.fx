@@ -4,7 +4,7 @@
 
     SSRT
 
-    Version 1.6
+    Version 1.6.1
     Author: Barbatos Bachiko
     Original SSRT by jebbyk : https://github.com/jebbyk/SSRT-for-reshade/blob/main/ssrt.fx
 
@@ -17,9 +17,8 @@
     History:
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
     
-    Version 1.6
-    - Remove DF
-    x Marty Mods Launchpad working 
+    Version 1.6.1
+    + Bump Mapping 
 */
 
 /*-------------------.
@@ -381,6 +380,47 @@ namespace SSRT24
         return normalize(cross(v, h));
     }
 
+    float3 ApplyBump(float2 texcoord, float3 normal)
+    {
+        float2 px = ReShade::PixelSize;
+
+        float3 col00 = GetColor(texcoord + px * float2(-1, -1)).rgb;
+        float3 col10 = GetColor(texcoord + px * float2( 0, -1)).rgb;
+        float3 col20 = GetColor(texcoord + px * float2( 1, -1)).rgb;
+        float3 col01 = GetColor(texcoord + px * float2(-1,  0)).rgb;
+        float3 col21 = GetColor(texcoord + px * float2( 1,  0)).rgb;
+        float3 col02 = GetColor(texcoord + px * float2(-1,  1)).rgb;
+        float3 col12 = GetColor(texcoord + px * float2( 0,  1)).rgb;
+        float3 col22 = GetColor(texcoord + px * float2( 1,  1)).rgb;
+        float3 colCenter = GetColor(texcoord).rgb;
+
+        float h00 = lum(col00);
+        float h10 = lum(col10);
+        float h20 = lum(col20);
+        float h01 = lum(col01);
+        float h21 = lum(col21);
+        float h02 = lum(col02);
+        float h12 = lum(col12);
+        float h22 = lum(col22);
+        float height = lum(colCenter);
+
+        // Sobel
+        float dx = (h00 + 2 * h01 + h02) - (h20 + 2 * h21 + h22);
+        float dy = (h00 + 2 * h10 + h20) - (h02 + 2 * h12 + h22);
+        float2 slope = float2(dx, dy) * BumpIntensity;
+
+        float holeDepth = (1.0 - height) * BumpDepth * BumpDirection.z;
+
+        //TBN
+        float3 up = abs(normal.y) < 0.99 ? float3(0, 1, 0) : float3(1, 0, 0);
+        float3 T = normalize(cross(up, normal));
+        float3 B = cross(normal, T);
+
+        float3 bumpedNormal = normal + (T * slope.x * BumpDirection.x + B * slope.y * BumpDirection.y + normal * holeDepth);
+
+        return normalize(bumpedNormal);
+    }
+
     // SmoothNormal by AlucardDH MIT Licence
     float3 GetNormal(float2 texcoord)
     {
@@ -414,32 +454,7 @@ namespace SSRT24
             }
         }
 
-    // Bump mapping 
-    {
-            float h00 = lum(GetColor(texcoord + px * float2(-1, -1)).rgb);
-            float h10 = lum(GetColor(texcoord + px * float2( 0, -1)).rgb);
-            float h20 = lum(GetColor(texcoord + px * float2( 1, -1)).rgb);
-            float h01 = lum(GetColor(texcoord + px * float2(-1,  0)).rgb);
-            float h21 = lum(GetColor(texcoord + px * float2( 1,  0)).rgb);
-            float h02 = lum(GetColor(texcoord + px * float2(-1,  1)).rgb);
-            float h12 = lum(GetColor(texcoord + px * float2( 0,  1)).rgb);
-            float h22 = lum(GetColor(texcoord + px * float2( 1,  1)).rgb);
-
-            float dx = (h00 + 2 * h01 + h02) - (h20 + 2 * h21 + h22);
-            float dy = (h00 + 2 * h10 + h20) - (h02 + 2 * h12 + h22);
-
-            float2 slope = float2(dx, dy) * BumpIntensity;
-
-            float height = lum(GetColor(texcoord).rgb);
-            float holeDepth = (1.0 - height) * BumpDepth * BumpDirection.z;
-
-            float3 N = normal;
-            float3 T = normalize(cross(N, float3(0, 1, 0)));
-            float3 B = cross(N, T);
-
-            float3 bumpedNormal = N + (T * slope.x * BumpDirection.x + B * slope.y * BumpDirection.y + N * holeDepth);
-            normal = normalize(bumpedNormal);
-        }
+        normal = ApplyBump(texcoord, normal);
 
         return normal;
     }
