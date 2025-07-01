@@ -4,7 +4,7 @@
 
     SSRT
 
-    Version 1.6.1
+    Version 1.6.2
     Author: Barbatos Bachiko
     Original SSRT by jebbyk : https://github.com/jebbyk/SSRT-for-reshade/blob/main/ssrt.fx
 
@@ -17,8 +17,8 @@
     History:
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
     
-    Version 1.6.1
-    + Bump Mapping 
+    Version 1.6.2
+    + Color
 */
 
 /*-------------------.
@@ -55,6 +55,7 @@
 #define MVErrorTolerance 0.96
 #define SkyDepth 0.99
 #define MAX_Frames 64
+
 /*-------------------.
 | :: Parameters ::   |
 '-------------------*/
@@ -129,7 +130,7 @@ uniform int ViewMode <
     ui_type = "combo";
     ui_category = "Debug";
     ui_label = "View Mode";
-    ui_items = "None\0Motion\0GI\0Normal\0Depth\0";
+    ui_items = "None\0Motion\0Reflection\0Normal\0Depth\0";
 > = 0;
 
 // Extra Settings
@@ -143,12 +144,10 @@ uniform bool EnableACES <
     ui_label = "Enable ACES Tone Mapping";
 > = false;
 
-uniform float Saturation <
-    ui_type = "slider";
-    ui_category = "Extra";
-    ui_label = "Saturation";
-    ui_min = 0.0; ui_max = 2.0; ui_step = 0.05;
-> = 1.05;
+uniform float3 Adjustments <
+    ui_category = "Tone Mapping";
+    ui_label = "Saturation / Exposure / Contrast";
+> = float3(1.5, 0.8, 1.1);
 
 uniform int BlendMode <
     ui_type = "combo";
@@ -583,47 +582,61 @@ namespace SSRT24
 
     PS_OUTPUT SPDF(float4 pos : SV_Position, float2 uv : TEXCOORD)
     {
+        float Saturation = Adjustments.r;
+        float Exposure = Adjustments.g;
+        float Contrast = Adjustments.b;
+    
         PixelData pd = PreparePixelData(uv);
         PS_OUTPUT output;
         output.specular = 0;
         const float specularRayWeight = 1.0;
-
         float3 position = UVtoPos(uv);
         float3 eyedir = normalize(position);
         float3 rayDir = normalize(reflect(eyedir, pd.Normal));
-    
+
         float3 hitPos;
         float2 uvHit;
         bool hit = RayGen(pd.SelfPos, rayDir, hitPos, uvHit, true);
+    
         if (hit)
         {
             float angleW = saturate(dot(pd.ViewDir, rayDir));
             angleW *= angleW; // Quadratic weighting
-
             float distFactor = saturate(1.0 - length(hitPos - pd.SelfPos) / MaxTraceDistance);
             float3 specColor = GetColor(uvHit).rgb;
             output.specular.rgb = specColor * specularRayWeight * angleW * distFactor;
         }
         else
-    {
-        // Fallback para raios que não bateram
-        float3 fbWorld = pd.SelfPos + rayDir * (pd.Depth + 0.01) * BASE_RAYS_LENGTH;
-        float2 uvFb = saturate(PostoUV(fbWorld));
-        float align = saturate(dot(rayDir, pd.ViewDir));
-        float3 fbColor = GetColor(uvFb).rgb;
-        output.specular.rgb = fbColor * 0.4 * specularRayWeight *
-                          step(0.3, align) *
-                          step(0.0, fbWorld.z) *
-                          step(fbWorld.z, MaxTraceDistance);
-    }
+        {
+            // Fallback
+            float3 fbWorld = pd.SelfPos + rayDir * (pd.Depth + 0.01) * BASE_RAYS_LENGTH;
+            float2 uvFb = saturate(PostoUV(fbWorld));
+            float align = saturate(dot(rayDir, pd.ViewDir));
+            float3 fbColor = GetColor(uvFb).rgb;
+            output.specular.rgb = fbColor * 0.4 * specularRayWeight *
+                      step(0.3, align) *
+                      step(0.0, fbWorld.z) *
+                      step(fbWorld.z, MaxTraceDistance);
+        }
 
+        // ToneMapping
+        if (AssumeSRGB)
+            output.specular.rgb = LinearizeSRGB(output.specular.rgb);
+        if (EnableACES)
+            output.specular.rgb = ApplyACES(output.specular.rgb);
+    
+        // Color Adjust
+        float luminance = lum(output.specular.rgb);
+        output.specular.rgb = lerp(luminance.xxx, output.specular.rgb, Saturation); 
+        output.specular.rgb *= Exposure;
+        output.specular.rgb = (output.specular.rgb - 0.5) * Contrast + 0.5; 
 
         float fadeRange = max(FadeEnd - FadeStart, 0.001);
         float fade = saturate((FadeEnd - pd.Depth) / fadeRange);
         fade *= fade;
-
         output.specular.rgb *= fade;
         output.specular.a = pd.Depth;
+    
         return output;
     }
     //End GNU3
@@ -686,24 +699,15 @@ namespace SSRT24
         float3 normal = getNormal(texcoord);
         float2 motion = GetMotionVector(texcoord);
         bool isValidScene = depth < 1.0;
-    
-        // Tex 
+
+         // Tex 
         float3 specularGI = EnableTemporal
-            ? tex2Dlod(sSP_TEMP, float4(texcoord, 0, 0)).rgb 
-            : tex2Dlod(sSP, float4(texcoord, 0, 0)).rgb;
-    
+        ? tex2Dlod(sSP_TEMP, float4(texcoord, 0, 0)).rgb 
+        : tex2Dlod(sSP, float4(texcoord, 0, 0)).rgb;
+
         specularGI *= SPIntensity;
         float3 giColor = specularGI;
-
-        // post-processing
-        if (AssumeSRGB)
-            giColor = LinearizeSRGB(giColor);
-        if (EnableACES)
-            giColor = ApplyACES(giColor);
     
-        float luminance = lum(giColor);
-        giColor = lerp(luminance.xxx, giColor, Saturation);
-
         // Debug visualization
         if (ViewMode != 0)
         {
@@ -714,31 +718,30 @@ namespace SSRT24
                     float angle = atan2(motion.y, motion.x);
                     float3 hsv = float3((angle / 6.283185) + 0.5, 1.0, saturate(velocity));
                     return float4(HSVtoRGB(hsv), 1.0);
-                
-                case 2: // GI (agora apenas especular)
+            
+                case 2: // GI
                     return float4(giColor, 1.0);
-                
+            
                 case 3: // Normals
                     return float4(normal * 0.5 + 0.5, 1.0);
-                
+            
                 case 4: // Depth
                     return float4(depth.xxx, 1.0);
             }
             return originalColor;
         }
-
+    
         switch (BlendMode)
         {
             case 0: // Additive
                 return float4(originalColor.rgb + giColor, originalColor.a);
-            
+        
             case 1: // Multiplicative
                 return float4(1.0 - (1.0 - originalColor.rgb) * (1.0 - giColor), originalColor.a);
-            
+        
             case 2: // Alpha Blend
                 return float4(lerp(originalColor.rgb, giColor, saturate(giColor.r)), originalColor.a);
         }
-
         return originalColor;
     }
     
