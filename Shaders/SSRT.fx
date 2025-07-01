@@ -4,7 +4,7 @@
 
     SSRT
 
-    Version 1.6.2
+    Version 1.6.3
     Author: Barbatos Bachiko
     Original SSRT by jebbyk : https://github.com/jebbyk/SSRT-for-reshade/blob/main/ssrt.fx
 
@@ -17,8 +17,10 @@
     History:
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
     
-    Version 1.6.2
-    + Color
+    Version 1.6.3
+    + Perfomance
+    + Normal Map
+    + Ray Marching
 */
 
 /*-------------------.
@@ -50,7 +52,6 @@
 #define fov 28.6
 #define FAR_PLANE RESHADE_DEPTH_LINEARIZATION_FAR_PLANE 
 #define AspectRatio BUFFER_WIDTH/BUFFER_HEIGHT
-#define pix float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT);
 
 #define MVErrorTolerance 0.96
 #define SkyDepth 0.99
@@ -70,7 +71,7 @@ uniform float SPIntensity <
 
 // Bump Mapping Settings
 uniform float BumpIntensity <
-    ui_type = "slider";
+    ui_type = "drag";
     ui_category = "Bump Mapping";
     ui_label = "Bump Intensity";
     ui_min = 0.030; ui_max = 1.0; ui_step = 0.001;
@@ -166,14 +167,15 @@ static const float3 BumpDirection = float3(-2.0, 1.0, -0.5);
 static const float BumpDepth = 0.7;
 
 //Ray Marching
-static const float MaxTraceDistance = 1.0;
-static const float BASE_RAYS_LENGTH = 1.0;
+#define  MaxTraceDistance 1
+static const float BASE_RAYS_LENGTH = 5.0;
 static const int STEPS_PER_RAY = 128;
 
 // Adaptive step 
-static const float MIN_STEP_SIZE = 0.001;
-static const float STEP_GROWTH = 1.0803;
-static const int REFINEMENT_STEPS = 6;
+#define STEP_SCALE  0.7
+#define MIN_STEP_SIZE 0.001 
+#define MAX_STEP_SIZE 1.0
+static const int REFINEMENT_STEPS = 5;
 
 static const float EnableTemporal = true;
 /*---------------.
@@ -346,37 +348,18 @@ namespace SSRT24
 
     float3 computeNormal(float2 texcoord)
     {
-        float2 p = pix;
-        float3 u, d, l, r, u2, d2, l2, r2;
-	
-        u = UVtoPos(texcoord + float2(0, p.y));
-        d = UVtoPos(texcoord - float2(0, p.y));
-        l = UVtoPos(texcoord + float2(p.x, 0));
-        r = UVtoPos(texcoord - float2(p.x, 0));
-	
-        p *= 2;
-	
-        u2 = UVtoPos(texcoord + float2(0, p.y));
-        d2 = UVtoPos(texcoord - float2(0, p.y));
-        l2 = UVtoPos(texcoord + float2(p.x, 0));
-        r2 = UVtoPos(texcoord - float2(p.x, 0));
-	
-        u2 = u + (u - u2);
-        d2 = d + (d - d2);
-        l2 = l + (l - l2);
-        r2 = r + (r - r2);
-	
-        float3 c = UVtoPos(texcoord);
-	
-        float3 v = u - c;
-        float3 h = r - c;
-	
-        if (abs(d2.z - c.z) < abs(u2.z - c.z))
-            v = c - d;
-        if (abs(l2.z - c.z) < abs(r2.z - c.z))
-            h = c - l;
-	
-        return normalize(cross(v, h));
+        float2 p = ReShade::PixelSize;
+
+        float3 center = UVtoPos(texcoord);
+        float3 up = UVtoPos(texcoord + float2(0, p.y));
+        float3 down = UVtoPos(texcoord - float2(0, p.y));
+        float3 left = UVtoPos(texcoord - float2(p.x, 0));
+        float3 right = UVtoPos(texcoord + float2(p.x, 0));
+        float3 dx = right - left;
+        float3 dy = up - down;
+        float3 normal = normalize(cross(dy, dx));
+
+        return normal;
     }
 
     float3 ApplyBump(float2 texcoord, float3 normal)
@@ -466,7 +449,7 @@ namespace SSRT24
  
     float2 GetMotionVector(float2 texcoord)
     {
-        float2 p = pix;
+        float2 p = ReShade::PixelSize;
         float2 MV = sampleMotion(texcoord);
 
         if (MVErrorTolerance < 1)
@@ -482,6 +465,77 @@ namespace SSRT24
 #endif
 
         return MV;
+    }
+    
+    bool RayGen(
+    in float3 rayOrigin,
+    in float3 rayDir,
+    out float3 hitPos,
+    out float2 uvHit,
+    bool enableRefinement
+)
+    {
+        float stepSize = MIN_STEP_SIZE;
+        float totalDist = 0.0;
+        float3 prevPos = rayOrigin;
+        float2 uvPrev = PostoUV(rayOrigin);
+
+    [loop]
+        for (int i = 0; i < STEPS_PER_RAY; ++i)
+        {
+            float3 currPos = prevPos + rayDir * stepSize;
+            totalDist += stepSize;
+
+            float2 uvCurr = PostoUV(currPos);
+
+            if (any(uvCurr < 0.0) || any(uvCurr > 1.0) ||
+            all(abs(uvCurr - uvPrev) < 0.0005) ||
+            totalDist > MaxTraceDistance)
+                break;
+
+            float sceneDepth = getDepth(uvCurr).x;
+            float thickness = abs(currPos.z - sceneDepth);
+
+            if (currPos.z < sceneDepth || thickness > ThicknessThreshold)
+            {
+                prevPos = currPos;
+                uvPrev = uvCurr;
+
+                float distToDepth = abs(currPos.z - sceneDepth);
+                stepSize = clamp(distToDepth * STEP_SCALE, MIN_STEP_SIZE, MAX_STEP_SIZE);
+                continue;
+            }
+
+            if (enableRefinement)
+            {
+                float3 lo = prevPos, hi = currPos;
+
+            [unroll]
+                for (int r = 0; r < REFINEMENT_STEPS; ++r)
+                {
+                    float3 mid = 0.5 * (lo + hi);
+                    float2 uvm = PostoUV(mid);
+                    float midDepth = getDepth(uvm).x;
+
+                    if (mid.z >= midDepth)
+                        hi = mid;
+                    else
+                        lo = mid;
+                }
+
+                hitPos = hi;
+                uvHit = PostoUV(hi);
+            }
+            else
+            {
+                hitPos = currPos;
+                uvHit = uvCurr;
+            }
+
+            return true;
+        }
+
+        return false;
     }
     
     // GNU 3 License functions
@@ -506,74 +560,6 @@ namespace SSRT24
 
         return pd;
     }
-
-    bool RayGen(
-        in float3 rayOrigin,
-        in float3 rayDir,
-        out float3 hitPos,
-        out float2 uvHit,
-        bool enableRefinement
-    )
-    {
-        float stepSize = MIN_STEP_SIZE;
-        float totalDist = 0.0;
-        float3 prevPos = rayOrigin;
-        float2 uvPrev = PostoUV(rayOrigin);
-        float minStep = BASE_RAYS_LENGTH / (float) STEPS_PER_RAY;
-
-    [loop]
-        for (int i = 0; i < STEPS_PER_RAY; ++i)
-        {
-            float3 currPos = prevPos + rayDir * stepSize;
-            totalDist += stepSize;
-            stepSize = min(stepSize * STEP_GROWTH, minStep);
-
-            float2 uvCurr = PostoUV(currPos);
-
-            if (any(uvCurr < 0.0) || any(uvCurr > 1.0) ||
-                all(abs(uvCurr - uvPrev) < 0.0005) ||
-                totalDist > MaxTraceDistance)
-                break;
-
-            float sceneDepth = getDepth(uvCurr).x;
-            float thickness = abs(currPos.z - sceneDepth);
-
-            // Skip if behind geometry or too thick
-            if (currPos.z < sceneDepth || thickness > ThicknessThreshold)
-            {
-                prevPos = currPos;
-                uvPrev = uvCurr;
-                continue;
-            }
-
-            // Binary refinement to find more precise hit point (Specular)
-            if (enableRefinement)
-            {
-                float3 lo = prevPos, hi = currPos;
-
-                for (int r = 0; r < REFINEMENT_STEPS; ++r)
-                {
-                    float3 mid = 0.5 * (lo + hi);
-                    float2 uvm = PostoUV(mid);
-                    if (mid.z >= getDepth(uvm).x)
-                        hi = mid;
-                    else
-                        lo = mid;
-                }
-
-                hitPos = hi;
-            }
-            else
-            {
-                hitPos = currPos;
-            }
-
-            uvHit = PostoUV(hitPos);
-            return true;
-        }
-
-        return false;
-    }
     
     struct PS_OUTPUT
     {
@@ -585,7 +571,7 @@ namespace SSRT24
         float Saturation = Adjustments.r;
         float Exposure = Adjustments.g;
         float Contrast = Adjustments.b;
-    
+
         PixelData pd = PreparePixelData(uv);
         PS_OUTPUT output;
         output.specular = 0;
@@ -597,7 +583,7 @@ namespace SSRT24
         float3 hitPos;
         float2 uvHit;
         bool hit = RayGen(pd.SelfPos, rayDir, hitPos, uvHit, true);
-    
+
         if (hit)
         {
             float angleW = saturate(dot(pd.ViewDir, rayDir));
@@ -614,29 +600,30 @@ namespace SSRT24
             float align = saturate(dot(rayDir, pd.ViewDir));
             float3 fbColor = GetColor(uvFb).rgb;
             output.specular.rgb = fbColor * 0.4 * specularRayWeight *
-                      step(0.3, align) *
-                      step(0.0, fbWorld.z) *
-                      step(fbWorld.z, MaxTraceDistance);
+                              step(0.3, align) *
+                              step(0.0, fbWorld.z) *
+                              step(fbWorld.z, MaxTraceDistance);
         }
 
-        // ToneMapping
+        output.specular.rgb *= Exposure;
+
         if (AssumeSRGB)
             output.specular.rgb = LinearizeSRGB(output.specular.rgb);
+
         if (EnableACES)
             output.specular.rgb = ApplyACES(output.specular.rgb);
-    
-        // Color Adjust
+        
         float luminance = lum(output.specular.rgb);
-        output.specular.rgb = lerp(luminance.xxx, output.specular.rgb, Saturation); 
-        output.specular.rgb *= Exposure;
-        output.specular.rgb = (output.specular.rgb - 0.5) * Contrast + 0.5; 
+        output.specular.rgb = lerp(luminance.xxx, output.specular.rgb, Saturation);
+        output.specular.rgb = (output.specular.rgb - 0.5) * Contrast + 0.5;
 
         float fadeRange = max(FadeEnd - FadeStart, 0.001);
         float fade = saturate((FadeEnd - pd.Depth) / fadeRange);
         fade *= fade;
         output.specular.rgb *= fade;
+
         output.specular.a = pd.Depth;
-    
+
         return output;
     }
     //End GNU3
@@ -648,23 +635,21 @@ namespace SSRT24
         return float4(normal * 0.5 + 0.5, 1.0);
     }
     
-    float4 PS_Temporal(float4 pos : SV_Position, float2 uv : TEXCOORD,
-                                     out float outHistoryLength : SV_Target1) : SV_Target
+    float4 PS_Temporal(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
         float2 motion = GetMotionVector(uv);
         float2 reprojectedUV = uv + motion;
-    
+
         float3 currentSpec = tex2Dlod(sSP, float4(uv, 0, 0)).rgb;
         float3 historySpec = tex2Dlod(sSP_HISTORY, float4(reprojectedUV, 0, 0)).rgb;
-    
-        // Disocclusion
+
         float depth = getDepth(uv);
         bool validHistory = (depth <= SkyDepth) &&
-                          all(saturate(reprojectedUV) == reprojectedUV) &&
-                          FRAME_COUNT > 1;
-    
+                        all(saturate(reprojectedUV) == reprojectedUV) &&
+                        FRAME_COUNT > 1;
+
         float3 blendedSpec = currentSpec;
-    
+
         if (EnableTemporal && validHistory)
         {
             if (AccumFramesSG > 0)
@@ -673,10 +658,12 @@ namespace SSRT24
                 blendedSpec = lerp(historySpec, currentSpec, alphaSpec);
             }
         }
-        
-        outHistoryLength = validHistory ? min(FRAME_COUNT, MAX_Frames) : 0;
-        return float4(blendedSpec, currentSpec.r);
+
+        float historyLengthPacked = validHistory ? min(FRAME_COUNT, MAX_Frames) : 0;
+
+        return float4(blendedSpec, historyLengthPacked);
     }
+
     
     float4 PS_SaveHistorySP(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
