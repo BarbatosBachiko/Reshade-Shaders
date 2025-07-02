@@ -4,7 +4,7 @@
 
     SSRT
 
-    Version 1.6.3
+    Version 1.6.31
     Author: Barbatos Bachiko
     Original SSRT by jebbyk : https://github.com/jebbyk/SSRT-for-reshade/blob/main/ssrt.fx
 
@@ -17,10 +17,11 @@
     History:
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
     
-    Version 1.6.3
+    Version 1.6.31
     + Perfomance
     + Normal Map
     + Ray Marching
+    + fix fallback
 */
 
 /*-------------------.
@@ -594,17 +595,16 @@ namespace SSRT24
         }
         else
         {
-            // Fallback
-            float3 fbWorld = pd.SelfPos + rayDir * (pd.Depth + 0.01) * BASE_RAYS_LENGTH;
+            //fallback
+            float adaptiveDist = pd.Depth * 1.2 + 0.01;
+            float3 fbWorld = pd.SelfPos + rayDir * adaptiveDist;
             float2 uvFb = saturate(PostoUV(fbWorld));
-            float align = saturate(dot(rayDir, pd.ViewDir));
             float3 fbColor = GetColor(uvFb).rgb;
-            output.specular.rgb = fbColor * 0.4 * specularRayWeight *
-                              step(0.3, align) *
-                              step(0.0, fbWorld.z) *
-                              step(fbWorld.z, MaxTraceDistance);
+            float angleWeight = pow(saturate(dot(pd.ViewDir, rayDir)), 2.0);
+            float depthFactor = saturate(1.0 - pd.Depth / MaxTraceDistance);
+            float weight = specularRayWeight * angleWeight * depthFactor;
+            output.specular.rgb = fbColor * weight;
         }
-
         output.specular.rgb *= Exposure;
 
         if (AssumeSRGB)
