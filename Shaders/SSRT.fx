@@ -4,7 +4,7 @@
 
     SSRT
 
-    Version 1.6.31
+    Version 1.6.32
     Author: Barbatos Bachiko
     Original SSRT by jebbyk : https://github.com/jebbyk/SSRT-for-reshade/blob/main/ssrt.fx
 
@@ -17,7 +17,7 @@
     History:
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
     
-    Version 1.6.31
+    Version 1.6.32
     + Perfomance
     + Normal Map
     + Ray Marching
@@ -169,7 +169,6 @@ static const float BumpDepth = 0.7;
 
 //Ray Marching
 #define  MaxTraceDistance 1
-static const float BASE_RAYS_LENGTH = 5.0;
 static const int STEPS_PER_RAY = 128;
 
 // Adaptive step 
@@ -488,10 +487,7 @@ namespace SSRT24
             totalDist += stepSize;
 
             float2 uvCurr = PostoUV(currPos);
-
-            if (any(uvCurr < 0.0) || any(uvCurr > 1.0) ||
-            all(abs(uvCurr - uvPrev) < 0.0005) ||
-            totalDist > MaxTraceDistance)
+            if ((any(uvCurr < 0.0) || any(uvCurr > 1.0)) || totalDist > MaxTraceDistance)
                 break;
 
             float sceneDepth = getDepth(uvCurr).x;
@@ -543,7 +539,6 @@ namespace SSRT24
     struct PixelData
     {
         float InvSteps;
-        float InvRays;
         float Depth;
         float3 SelfPos;
         float3 ViewDir;
