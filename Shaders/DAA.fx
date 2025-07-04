@@ -74,7 +74,13 @@ uniform float EdgeFalloff
     ui_category = "Edge Detection";
 > = 2.0;
 
-static float EnableTemporalAA = true;
+uniform bool EnableTemporalAA
+<
+    ui_category = "Temporal";
+    ui_type = "checkbox";
+    ui_label = "Temporal";
+> = false;
+
 static float AccumFrames = 16;
 uniform int FRAME_COUNT < source = "framecount"; >;
     /*---------------.
