@@ -75,7 +75,7 @@ uniform float BumpIntensity <
     ui_type = "drag";
     ui_category = "Bump Mapping";
     ui_label = "Bump Intensity";
-    ui_min = 0.030; ui_max = 1.0; ui_step = 0.001;
+    ui_min = 0.000; ui_max = 1.0; ui_step = 0.001;
 > = 0.030;
 
 uniform float FadeStart
