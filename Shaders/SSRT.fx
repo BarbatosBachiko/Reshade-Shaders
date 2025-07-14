@@ -4,7 +4,7 @@
 
     SSRT
 
-    Version 1.6.32
+    Version 1.6.33
     Author: Barbatos Bachiko
     Original SSRT by jebbyk : https://github.com/jebbyk/SSRT-for-reshade/blob/main/ssrt.fx
 
@@ -17,11 +17,8 @@
     History:
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
     
-    Version 1.6.32
-    + Perfomance
-    + Normal Map
-    + Ray Marching
-    + fix fallback
+    Version 1.6.33
+    + resolution scale to normalmap
 */
 
 /*-------------------.
@@ -252,9 +249,9 @@ namespace SSRT24
 
     texture normalTex
     {
-        Width = BUFFER_WIDTH;
-        Height = BUFFER_HEIGHT;
-        Format = RGBA16F;
+        Width = RES_WIDTH;
+        Height = RES_HEIGHT;
+        Format = RGBA16f;
     };
     sampler sNormal
     {
