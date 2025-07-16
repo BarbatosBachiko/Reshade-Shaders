@@ -6,7 +6,7 @@ _  _ ____ ____ ____ ____ ____ ____
 |\ | |___ |  | [__  [__  |__| |  | 
 | \| |___ |__| ___] ___] |  | |__| 
                                                                        
-    Version 1.8.1
+    Version 1.8.2
     Author: Barbatos Bachiko
     License: MIT
     Smooth Normals use AlucardDH MIT License : https://github.com/AlucardDH/dh-reshade-shaders-mit/blob/master/LICENSE
@@ -15,8 +15,8 @@ _  _ ____ ____ ____ ____ ____ ____
     History:
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
     
-    Version 1.8
-    x IMMERSE Launchpad working
+    Version 1.8.2
+    + Temporal Filter
 */ 
 
 #include "ReShade.fxh"
@@ -48,15 +48,6 @@ _  _ ____ ____ ____ ____ ____ ____
 #define MVErrorTolerance 0.96
 #define SkyDepth 0.99
 #define MAX_Frames 64
-    uniform int ViewMode
-    < 
-        ui_category = "Geral";
-        ui_type = "combo";
-        ui_label = "View Mode";
-        ui_tooltip = "Select the view mode for SSAO";
-        ui_items = "None\0AO Debug\0Depth\0Sky Debug\0Normal Debug\0";
-    >
-    = 0;
 
     uniform float Intensity
     <
@@ -103,14 +94,14 @@ uniform bool EnableTemporal
         ui_type = "checkbox";
         ui_label = "Temporal Filtering";
     >
-    = false;
+    = true;
 
-uniform float AccumFramesAO <
+uniform float AccumFrames <
     ui_type = "slider";
     ui_category = "Temporal";
     ui_label = "AO Temporal";
-    ui_min = 0.0; ui_max = 16.0; ui_step = 1.0;
-> = 1.0;
+    ui_min = 1.0; ui_max = 16.0; ui_step = 1.0;
+> = 4.0;
 
     uniform float DepthMultiplier
     <
@@ -154,6 +145,17 @@ uniform float AccumFramesAO <
     >
     = float4(0.0, 0.0, 0.0, 1.0);
     
+uniform int ViewMode
+    < 
+        ui_category = "Debug";
+        ui_type = "combo";
+        ui_label = "View Mode";
+        ui_tooltip = "Select the view mode for SSAO";
+        ui_items = "None\0AO Debug\0Depth\0Sky Debug\0Normal Debug\0";
+    >
+    = 0;
+
+
 uniform int FRAME_COUNT < source = "framecount"; >;
 static const float SampleRadius = 1.0;
 static const int SampleCount = 8;
@@ -209,14 +211,14 @@ namespace NEOSPACEAO
         Format = RGBA8;
     };
 
-    texture2D AO_TEMP
+    texture2D TEMP
     {
         Width = RES_WIDTH;
         Height = RES_HEIGHT;
         Format = RGBA8;
     };
 
-    texture2D AO_HISTORY
+    texture2D HISTORY
     {
         Width = RES_WIDTH;
         Height = RES_HEIGHT;
@@ -229,22 +231,22 @@ namespace NEOSPACEAO
         SRGBTexture = false;
     };
 
-    sampler2D sAO_TEMP
+    sampler2D sTEMP
     {
-        Texture = AO_TEMP;
+        Texture = TEMP;
         SRGBTexture = false;
     };
 
-    sampler2D sAO_HISTORY
+    sampler2D sHISTORY
     {
-        Texture = AO_HISTORY;
+        Texture = HISTORY;
         SRGBTexture = false;
     };
     
     texture normalTex
     {
-        Width = BUFFER_WIDTH;
-        Height = BUFFER_HEIGHT;
+        Width = RES_WIDTH;
+        Height = RES_HEIGHT;
         Format = RGBA16F;
     };
     sampler sNormal
@@ -255,6 +257,25 @@ namespace NEOSPACEAO
     /*----------------.
     | :: Functions :: |
     '----------------*/
+    
+    float3 RGBToYCoCg(float3 rgb)
+    {
+        float Y = dot(rgb, float3(0.25, 0.5, 0.25));
+        float Co = dot(rgb, float3(0.5, 0, -0.5));
+        float Cg = dot(rgb, float3(-0.25, 0.5, -0.25));
+        return float3(Y, Co, Cg);
+    }
+
+    float3 YCoCgToRGB(float3 ycocg)
+    {
+        float Y = ycocg.x;
+        float Co = ycocg.y;
+        float Cg = ycocg.z;
+        float r = Y + Co - Cg;
+        float g = Y + Cg;
+        float b = Y - Co - Cg;
+        return float3(r, g, b);
+    }
     
     float lum(float3 color)
     {
@@ -374,7 +395,7 @@ namespace NEOSPACEAO
         float stepSize = ReShade::PixelSize.x / RayScale;
         int numSteps = max(int(MaxRayDistance / stepSize), 2);
 
-    [loop]
+        [loop]
         for (int i = 0; i < numSteps; i++)
         {
             float t = float(i) * rcp(float(numSteps - 1));
@@ -389,7 +410,7 @@ namespace NEOSPACEAO
 
             if (hitFactor > 0.01)
             {
-                float angleFactor = saturate(dot(normal, +rayDir));
+                float angleFactor = saturate(dot(normal, rayDir));
                 float weight = (1.0 - (sampleDistance / MaxRayDistance)) * hitFactor * angleFactor;
 
                 occlusion += weight;
@@ -404,18 +425,12 @@ namespace NEOSPACEAO
 
     static const float3 hemisphereSamples[12] =
     {
-        float3(0.5381, 0.1856, 0.4319),
-    float3(0.1379, 0.2486, 0.6581),
-    float3(-0.3371, 0.5679, 0.6981),
-    float3(-0.7250, 0.4233, 0.5429),
-    float3(-0.4571, -0.5329, 0.7116),
-    float3(0.0649, -0.9270, 0.3706),
-    float3(0.3557, -0.6380, 0.6827),
-    float3(0.6494, -0.2861, 0.7065),
-    float3(0.7969, 0.5845, 0.1530),
-    float3(-0.0195, 0.8512, 0.5234),
-    float3(-0.5890, -0.7287, 0.3487),
-    float3(-0.6729, 0.2057, 0.7117)
+    float3(0.5381, 0.1856, 0.4319),   float3(0.1379, 0.2486, 0.6581),
+    float3(-0.3371, 0.5679, 0.6981),  float3(-0.7250, 0.4233, 0.5429),
+    float3(-0.4571, -0.5329, 0.7116), float3(0.0649, -0.9270, 0.3706),
+    float3(0.3557, -0.6380, 0.6827),  float3(0.6494, -0.2861, 0.7065),
+    float3(0.7969, 0.5845, 0.1530),   float3(-0.0195, 0.8512, 0.5234),
+    float3(-0.5890, -0.7287, 0.3487), float3(-0.6729, 0.2057, 0.7117)
     };
 
     float4 PS_SSAO(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
@@ -472,33 +487,47 @@ namespace NEOSPACEAO
         return MV;
     }
    
-    float4 PS_Temporal(float4 pos : SV_Position, float2 uv : TEXCOORD, out float outHistoryLength : SV_Target1) : SV_Target
+    float4 PS_ApplyTemporalFilter(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
+        float3 currentSpec = tex2D(sAO, uv).rgb;
+        float currentDepth = getDepth(uv);
+
         float2 motion = GetMotionVector(uv);
         float2 reprojectedUV = uv + motion;
-    
-        float3 currentAO = tex2Dlod(sAO, float4(uv, 0, 0)).rgb;
-        float3 historyAO= tex2Dlod(sAO_HISTORY, float4(reprojectedUV, 0, 0)).rgb;
-    
-        float depth = getDepth(uv);
-        bool validHistory = (depth <= SkyDepth) &&
-                       all(saturate(reprojectedUV) == reprojectedUV) &&
-                       FRAME_COUNT > 1;
-    
-        float3 blendedAO = currentAO;
-    
+
+        float historyDepth = getDepth(reprojectedUV);
+        bool validHistory = all(saturate(reprojectedUV) == reprojectedUV) &&
+                                  FRAME_COUNT > 1 &&
+                                  abs(historyDepth - currentDepth) < 0.01;
+
+        float3 blendedSpec = currentSpec;
+
         if (EnableTemporal && validHistory)
         {
-            if (AccumFramesAO > 0)
+            float3 minBox = RGBToYCoCg(currentSpec);
+            float3 maxBox = minBox;
+
+            [unroll]
+            for (int x = -1; x <= 1; x++)
             {
-                float alphaGI = 1.0 / min(FRAME_COUNT, (float) AccumFramesAO);
-                blendedAO = lerp(historyAO, currentAO, alphaGI);
+                for (int y = -1; y <= 1; y++)
+                {
+                    if (x == 0 && y == 0)
+                        continue;
+                    float3 neighborSpec = RGBToYCoCg(tex2Dlod(sAO, float4(uv + float2(x, y) * (ReShade::PixelSize), 0, 0)).rgb);
+                    minBox = min(minBox, neighborSpec);
+                    maxBox = max(maxBox, neighborSpec);
+                }
             }
-       
+        
+            float3 historySpec = RGBToYCoCg(tex2Dlod(sHISTORY, float4(reprojectedUV, 0, 0)).rgb);
+            float3 clampedHistorySpec = clamp(historySpec, minBox, maxBox);
+            float alpha = 1.0 / min(FRAME_COUNT, AccumFrames);
+            blendedSpec = YCoCgToRGB(lerp(clampedHistorySpec, RGBToYCoCg(currentSpec), alpha));
         }
-    
-        outHistoryLength = validHistory ? min(FRAME_COUNT, MAX_Frames) : 0;
-        return float4(blendedAO, currentAO.r);
+
+        float historyLengthPacked = validHistory ? min(FRAME_COUNT, MAX_Frames) : 0;
+        return float4(blendedSpec, historyLengthPacked);
     }
 
     float4 PS_Normals(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
@@ -507,26 +536,25 @@ namespace NEOSPACEAO
         return float4(normal * 0.5 + 0.5, 1.0);
     }
     
-    // History
-    float4 PS_SaveHistory(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
+    float4 PS_UpdateHistory(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
         float occlusion = EnableTemporal
-        ? tex2Dlod(sAO_TEMP, float4(uv, 0, 0)).r 
+        ? tex2Dlod(sTEMP, float4(uv, 0, 0)).r 
         : tex2Dlod(sAO, float4(uv, 0, 0)).r;
         return float4(occlusion, occlusion, occlusion, 1.0);
     }
     
     // Final Image
-    float4 PS_Composite(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
+    float4 PS_Output(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
         float4 originalColor = GetColor(uv);
         
         float occlusion = EnableTemporal 
-        ? tex2Dlod(sAO_TEMP, float4(uv, 0, 0)).r 
+        ? tex2Dlod(sTEMP, float4(uv, 0, 0)).r 
         : tex2Dlod(sAO, float4(uv, 0, 0)).r;
 
         float depthValue = getDepth(uv);
-        float3 normal = GetNormal(uv);
+        float3 normal = getNormal(uv);
 
         switch (ViewMode)
         {
@@ -578,20 +606,20 @@ namespace NEOSPACEAO
         pass Temporal
         {
             VertexShader = PostProcessVS;
-            PixelShader = PS_Temporal;
-            RenderTarget = AO_TEMP;
+            PixelShader = PS_ApplyTemporalFilter;
+            RenderTarget = TEMP;
             ClearRenderTargets = true;
         }
-        pass SaveHistory
+        pass UpdateHistory
         {
             VertexShader = PostProcessVS;
-            PixelShader = PS_SaveHistory;
-            RenderTarget = AO_HISTORY;
+            PixelShader = PS_UpdateHistory;
+            RenderTarget = HISTORY;
         }
-        pass Composite
+        pass Output
         {
             VertexShader = PostProcessVS;
-            PixelShader = PS_Composite;
+            PixelShader = PS_Output;
             SRGBWriteEnable = false;
             BlendEnable = false;
         }
