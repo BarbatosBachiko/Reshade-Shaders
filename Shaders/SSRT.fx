@@ -4,7 +4,7 @@
 
     SSRT
 
-    Version 1.6.5
+    Version 1.6.6
     Author: Barbatos Bachiko
     Original SSRT by jebbyk : https://github.com/jebbyk/SSRT-for-reshade/blob/main/ssrt.fx
 
@@ -17,15 +17,17 @@
     History:
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
     
-    Version 1.6.5
-    + Revised
+    Version 1.6.6
+    + Add Fade to fallback
+    * Geometry Corretion
+    + Bump Mapping
 */
 
 #include "ReShade.fxh"
 
-//------------------------------------------------------------------------------------------------|
-// :: Preprocessor Definitions & Constants ::
-//------------------------------------------------------------------------------------------------|
+//-------------------------------------------|
+// :: Preprocessor Definitions & Constants ::|
+//-------------------------------------------|
 
 #ifndef USE_MARTY_LAUNCHPAD_MOTION
 #define USE_MARTY_LAUNCHPAD_MOTION 0
@@ -42,10 +44,9 @@
 #define RES_WIDTH (ReShade::ScreenSize.x * RES_SCALE)
 #define RES_HEIGHT (ReShade::ScreenSize.y * RES_SCALE)
 
-#define getDepth(coords)      (ReShade::GetLinearizedDepth(coords) * DepthMultiplier)
+#define getDepth(coords)       (ReShade::GetLinearizedDepth(coords) * DepthMultiplier)
 #define GetColor(c) tex2Dlod(ReShade::BackBuffer, float4((c).xy, 0, 0))
 #define S_PC MagFilter=POINT;MinFilter=POINT;MipFilter=POINT;AddressU=Clamp;AddressV=Clamp;AddressW=Clamp;
-#define fov 28.6
 #define FAR_PLANE RESHADE_DEPTH_LINEARIZATION_FAR_PLANE 
 #define AspectRatio BUFFER_WIDTH/BUFFER_HEIGHT
 
@@ -56,7 +57,7 @@
 static const float PI2div360 = 0.01745329;
 #define rad(x) (x * PI2div360)
 
-//Bump Mapping
+// Original Bump Mapping Constants
 static const float3 BumpDirection = float3(-2.0, 1.0, -0.5);
 static const float BumpDepth = 0.7;
 
@@ -70,12 +71,12 @@ static const int STEPS_PER_RAY = 128;
 #define MAX_STEP_SIZE 1.0
 static const int REFINEMENT_STEPS = 5;
 
-static const float EnableTemporal = true;
+static const bool EnableTemporal = true;
 
-//------------------------------------------------------------------------------------------------|
-// :: UI Parameters ::
-//------------------------------------------------------------------------------------------------|
-
+//--------------------|
+// :: UI Parameters ::|
+//--------------------|
+#define fov 28.6
 uniform float SPIntensity <
     ui_type = "drag";
     ui_min = 0.1; ui_max = 3.0;
@@ -86,10 +87,10 @@ uniform float SPIntensity <
 
 uniform float BumpIntensity <
     ui_type = "drag";
-    ui_category = "Bump Mapping";
-    ui_label = "Bump Intensity";
-    ui_min = 0.000; ui_max = 1.0; ui_step = 0.001;
-> = 0.030;
+    ui_category = "BumpMapping";
+    ui_label = "Bump Mapping Intensity";
+    ui_min = 0.000; ui_max = 0.07; ui_step = 0.001;
+> = 0.025;
 
 uniform float FadeStart <
     ui_category = "Fade Settings";
@@ -106,6 +107,13 @@ uniform float FadeEnd <
     ui_tooltip = "Distance completely fades out";
     ui_min = 0.0; ui_max = 5.0; ui_step = 0.001;
 > = 4.999;
+
+uniform float GeoCorrectionIntensity <
+    ui_type = "drag";
+    ui_category = "Advanced";
+    ui_label = "Geometry Correction";
+    ui_min = -0.070; ui_max = 0.0; ui_step = 0.001;
+> = -0.015;
 
 uniform float ThicknessThreshold <
     ui_type = "slider";
@@ -155,7 +163,7 @@ uniform bool EnableACES <
 uniform float3 Adjustments <
     ui_category = "Tone Mapping";
     ui_label = "Saturation / Exposure / Contrast";
-> = float3(1.5, 0.8, 1.1);
+> = float3(1.5, 1.0, 1.1);
 
 uniform int BlendMode <
     ui_type = "combo";
@@ -203,7 +211,7 @@ float2 SampleMotionVectors(float2 texcoord)
 }
 #endif
 
-namespace SSRT165
+namespace SSRT166
 {
     texture SSR
     {
@@ -291,9 +299,10 @@ namespace SSRT165
     -0.024127059936902, -0.124620612286390, 1.148822109913262
 );
 
-    float GetLuminance(float3 color)
+    float GetLuminance(float3 linearColor)
     {
-        return (color.r + color.g + color.b) * 0.3333333;
+        const float3 LUMINANCE_VECTOR = float3(0.2126, 0.7152, 0.0722);
+        return dot(linearColor, LUMINANCE_VECTOR);
     }
 
     float3 LinearizeSRGB(float3 color)
@@ -331,6 +340,9 @@ namespace SSRT165
 
     float3 ApplyBumpMapping(float2 texcoord, float3 normal)
     {
+        if (BumpIntensity == 0.0)
+            return normal;
+
         float2 px = ReShade::PixelSize;
 
         float3 col00 = GetColor(texcoord + px * float2(-1, -1)).rgb;
@@ -353,21 +365,37 @@ namespace SSRT165
         float h22 = GetLuminance(col22);
         float height = GetLuminance(colCenter);
 
-        // Sobel
-        float dx = (h00 + 2 * h01 + h02) - (h20 + 2 * h21 + h22);
-        float dy = (h00 + 2 * h10 + h20) - (h02 + 2 * h12 + h22);
+        float dx = (3.0 * h00 + 10.0 * h01 + 3.0 * h02) - (3.0 * h20 + 10.0 * h21 + 3.0 * h22);
+        float dy = (3.0 * h00 + 10.0 * h10 + 3.0 * h20) - (3.0 * h02 + 10.0 * h12 + 3.0 * h22);
         float2 slope = float2(dx, dy) * BumpIntensity;
 
         float holeDepth = (1.0 - height) * BumpDepth * BumpDirection.z;
 
-        //TBN
         float3 up = abs(normal.y) < 0.99 ? float3(0, 1, 0) : float3(1, 0, 0);
         float3 T = normalize(cross(up, normal));
         float3 B = cross(normal, T);
-
         float3 bumpedNormal = normal + (T * slope.x * BumpDirection.x + B * slope.y * BumpDirection.y + normal * holeDepth);
 
         return normalize(bumpedNormal);
+    }
+
+    float3 ApplyGeometryCorrection(float2 texcoord, float3 normal)
+    {
+        if (GeoCorrectionIntensity == 0.0)
+            return normal;
+
+        float2 px = ReShade::PixelSize;
+
+        float lumCenter = GetLuminance(tex2D(ReShade::BackBuffer, texcoord).rgb);
+        float lumRight = GetLuminance(tex2D(ReShade::BackBuffer, texcoord + float2(px.x, 0)).rgb);
+        float lumDown = GetLuminance(tex2D(ReShade::BackBuffer, texcoord + float2(0, px.y)).rgb);
+
+        float dx = lumRight - lumCenter;
+        float dy = lumDown - lumCenter;
+
+        float3 bumpNormal = normalize(float3(dx, dy, 1.0));
+
+        return normalize(normal + bumpNormal * GeoCorrectionIntensity);
     }
     
     float3 UVToWorld(float2 texcoord)
@@ -446,6 +474,7 @@ namespace SSRT165
         }
 
         normal = ApplyBumpMapping(texcoord, normal);
+        normal = ApplyGeometryCorrection(texcoord, normal);
 
         return normal;
     }
@@ -596,14 +625,16 @@ namespace SSRT165
         }
         else
         {
-            //fallback
-            float adaptiveDist = pd.Depth * 1.2 + 0.01;
+        // fallback
+            float adaptiveDist = pd.Depth * 1.2 + 0.003;
             float3 fbWorld = pd.SelfPos + rayDir * adaptiveDist;
             float2 uvFb = saturate(WorldToUV(fbWorld));
             float3 fbColor = GetColor(uvFb).rgb;
             float angleWeight = pow(saturate(dot(pd.ViewDir, rayDir)), 2.0);
             float depthFactor = saturate(1.0 - pd.Depth / MaxTraceDistance);
             float weight = specularRayWeight * angleWeight * depthFactor;
+            float vertical_fade = 1.0 - uv.y;
+            weight *= vertical_fade;
             output.specular.rgb = fbColor * weight;
         }
         output.specular.rgb *= Exposure;
@@ -613,7 +644,7 @@ namespace SSRT165
 
         if (EnableACES)
             output.specular.rgb = Apply_ACES(output.specular.rgb);
-        
+    
         float luminance = GetLuminance(output.specular.rgb);
         output.specular.rgb = lerp(luminance.xxx, output.specular.rgb, Saturation);
         output.specular.rgb = (output.specular.rgb - 0.5) * Contrast + 0.5;
@@ -735,37 +766,37 @@ namespace SSRT165
         }
         return originalColor;
     }
-}
 
 technique SSRT
 {
     pass GenerateNormals
     {
         VertexShader = PostProcessVS;
-        PixelShader = SSRT165::PS_GenerateNormals;
-        RenderTarget = SSRT165::normalTex;
+        PixelShader = PS_GenerateNormals;
+        RenderTarget = normalTex;
     }
     pass TraceReflections
     {
         VertexShader = PostProcessVS;
-        PixelShader = SSRT165::PS_TraceReflections;
-        RenderTarget = SSRT165::SSR;
+        PixelShader = PS_TraceReflections;
+        RenderTarget = SSR;
     }
     pass TemporalFilter
     {
         VertexShader = PostProcessVS;
-        PixelShader = SSRT165::PS_ApplyTemporalFilter;
-        RenderTarget = SSRT165::TEMP;
+        PixelShader = PS_ApplyTemporalFilter;
+        RenderTarget = TEMP;
     }
     pass UpdateHistory
     {
         VertexShader = PostProcessVS;
-        PixelShader = SSRT165::PS_UpdateHistory;
-        RenderTarget = SSRT165::HISTORY;
+        PixelShader = PS_UpdateHistory;
+        RenderTarget = HISTORY;
     }
     pass Output
     {
         VertexShader = PostProcessVS;
-        PixelShader = SSRT165::PS_Output;
+        PixelShader = PS_Output;
     }
+  }
 }
