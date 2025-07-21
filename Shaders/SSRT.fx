@@ -742,7 +742,7 @@ technique SSRT < ui_tooltip = "Screen Space Ray Traced Reflections"; >
     pass Output
     {
         VertexShader = PostProcessVS;
-        PixelShader = SSRTnan::PS_Output;
+        PixelShader = PS_Output;
     }
   }
 }
