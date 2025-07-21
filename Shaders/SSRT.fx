@@ -4,7 +4,7 @@
 
     SSRT - Screen Space Ray Traced Reflections
 
-    Version: 1.6.92
+    Version: 1.6.93
     Author: Barbatos Bachiko & Gemini
     Original SSRT by jebbyk: https://github.com/jebbyk/SSRT-for-reshade/
 
@@ -14,8 +14,8 @@
     History:
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
 
-    Version 1.6.92
-    + Readibility
+    Version 1.6.93
+    + reinforcement
 */
 
 #include "ReShade.fxh"
@@ -86,12 +86,12 @@ uniform float FadeEnd <
 
 uniform float BumpIntensity <
     ui_type = "drag";
-    ui_min = 0.0; ui_max = 0.01;
+    ui_min = 0.0; ui_max = 0.03;
     ui_step = 0.001;
     ui_category = "Surface & Normals";
     ui_label = "Bump Mapping Intensity";
     ui_tooltip = "Add texture to reflections.";
-> = 0.002;
+> = 0.010;
 
 uniform float GeoCorrectionIntensity <
     ui_type = "drag";
@@ -284,7 +284,7 @@ namespace SSRTnan
     };
 
     //-------------------|
-    // :: Functions    ::|
+    // :: Functions     ::|
     //-------------------|
 
     float3 RGBToYCoCg(float3 rgb)
@@ -362,7 +362,7 @@ namespace SSRTnan
 
         float3 view_pos;
         view_pos.x = clip_pos.x / proj_scale_x * view_z;
-        view_pos.y = -clip_pos.y / proj_scale_y * view_z; 
+        view_pos.y = -clip_pos.y / proj_scale_y * view_z;
         view_pos.z = view_z;
 
         return view_pos;
@@ -397,10 +397,9 @@ namespace SSRTnan
         if (BumpIntensity == 0.0)
             return normal;
 
-        float2 px = ReShade::PixelSize;
-        float h_c = GetLuminance(tex2Dlod(ReShade::BackBuffer, float4(texcoord, 0, 0)).rgb);
-        float h_x = GetLuminance(tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(px.x, 0), 0, 0)).rgb);
-        float h_y = GetLuminance(tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(0, px.y), 0, 0)).rgb);
+        float h_c = GetLuminance(tex2D(ReShade::BackBuffer, texcoord).rgb);
+        float h_x = GetLuminance(tex2Doffset(ReShade::BackBuffer, texcoord, int2(1, 0)).rgb);
+        float h_y = GetLuminance(tex2Doffset(ReShade::BackBuffer, texcoord, int2(0, 1)).rgb);
 
         float2 slope = float2(h_x - h_c, h_y - h_c) * BumpIntensity * 100.0;
 
@@ -417,10 +416,9 @@ namespace SSRTnan
         if (GeoCorrectionIntensity == 0.0)
             return normal;
 
-        float2 px = ReShade::PixelSize;
-        float lumCenter = GetLuminance(tex2Dlod(ReShade::BackBuffer, float4(texcoord, 0, 0)).rgb);
-        float lumRight = GetLuminance(tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(px.x, 0), 0, 0)).rgb);
-        float lumDown = GetLuminance(tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(0, px.y), 0, 0)).rgb);
+        float lumCenter = GetLuminance(tex2D(ReShade::BackBuffer, texcoord).rgb);
+        float lumRight = GetLuminance(tex2Doffset(ReShade::BackBuffer, texcoord, int2(1, 0)).rgb);
+        float lumDown = GetLuminance(tex2Doffset(ReShade::BackBuffer, texcoord, int2(0, 1)).rgb);
 
         float3 bumpNormal = normalize(float3(lumRight - lumCenter, lumDown - lumCenter, 1.0));
 
@@ -447,10 +445,10 @@ namespace SSRTnan
             float w_r = smoothstep(1, 0, distance(normal, n_r) * 1.5) * 2;
 
             float4 weightedNormal = float4(normal, 1.0)
-                                  + float4(n_t * w_t, w_t)
-                                  + float4(n_b * w_b, w_b)
-                                  + float4(n_l * w_l, w_l)
-                                  + float4(n_r * w_r, w_r);
+                                    + float4(n_t * w_t, w_t)
+                                    + float4(n_b * w_b, w_b)
+                                    + float4(n_l * w_l, w_l)
+                                    + float4(n_r * w_r, w_r);
 
             if (weightedNormal.a > 0)
             {
@@ -466,7 +464,7 @@ namespace SSRTnan
 
     float3 SampleNormalFromTexture(float2 coords)
     {
-        float3 normal = -(tex2Dlod(sNormal, float4(coords, 0, 0)).xyz - 0.5) * 2.0;
+        float3 normal = -(tex2D(sNormal, coords).xyz - 0.5) * 2.0;
         return normalize(normal);
     }
 
@@ -624,14 +622,14 @@ namespace SSRTnan
             float3 maxBox = minBox;
 
             [unroll]
-            for (int x = -1; x <= 1; x++)
+            for (int y = -1; y <= 1; y++)
             {
-                for (int y = -1; y <= 1; y++)
+                for (int x = -1; x <= 1; x++)
                 {
                     if (x == 0 && y == 0)
                         continue;
-                    float2 neighbor_uv = uv + float2(x, y) * ReShade::PixelSize;
-                    float3 neighborSpec = RGBToYCoCg(tex2D(sSSR, neighbor_uv * RenderScale).rgb);
+                    
+                    float3 neighborSpec = RGBToYCoCg(tex2Doffset(sSSR, sample_uv, int2(x, y)).rgb);
                     minBox = min(minBox, neighborSpec);
                     maxBox = max(maxBox, neighborSpec);
                 }
@@ -744,7 +742,7 @@ technique SSRT < ui_tooltip = "Screen Space Ray Traced Reflections"; >
     pass Output
     {
         VertexShader = PostProcessVS;
-        PixelShader = PS_Output;
+        PixelShader = SSRTnan::PS_Output;
     }
   }
 }
