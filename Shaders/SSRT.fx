@@ -173,7 +173,7 @@ uniform bool AssumeSRGB <
 uniform bool EnableACES <
     ui_category = "Tone Mapping";
     ui_label = "Enable ACES Tone Mapping";
-> = true;
+> = false;
 
 uniform float3 Adjustments <
     ui_category = "Tone Mapping";
