@@ -4,9 +4,10 @@
 
     SSRT
 
-    Version 1.6.9
+    Version 1.6.91
     Author: Barbatos Bachiko
     Original SSRT by jebbyk : https://github.com/jebbyk/SSRT-for-reshade/blob/main/ssrt.fx
+    Modification: Sky reflection fallback logic.
 
     License: GNU Affero General Public License v3.0 : https://github.com/jebbyk/SSRT-for-reshade/blob/main/LICENSE
     Smooth Normals use AlucardDH MIT License : https://github.com/AlucardDH/dh-reshade-shaders-mit/blob/master/LICENSE
@@ -17,7 +18,8 @@
     History:
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
     
-    Version 1.6.9
+    Version 1.6.91
+    + Fallback SSR
 */
 
 #include "ReShade.fxh"
@@ -42,7 +44,7 @@
 #define MVErrorTolerance 0.96
 
 //Ray Marching
-#define MaxTraceDistance 1.0
+#define MaxTraceDistance 2
 static const int STEPS_PER_RAY = 128;
 static const int REFINEMENT_STEPS = 5;
 
@@ -91,7 +93,7 @@ uniform float FadeEnd <
 > = 4.999;
 
 uniform float VerticalFOV <
-    ui_type = "slider";
+    ui_type = "drag";
     ui_min = 15.0; ui_max = 120.0;
     ui_step = 0.1;
     ui_category = "Advanced";
@@ -99,7 +101,7 @@ uniform float VerticalFOV <
 > = 37.0;
 
 uniform float RenderScale <
-    ui_type = "slider";
+    ui_type = "drag";
     ui_min = 0.1; ui_max = 1.0;
     ui_step = 0.01;
     ui_category = "Advanced";
@@ -277,7 +279,7 @@ namespace SSRT1661
     };
 
 //-------------------|
-// :: Functions   ::|
+// :: Functions    ::|
 //-------------------|
     
     float3 RGBToYCoCg(float3 rgb)
@@ -446,10 +448,10 @@ namespace SSRT1661
             float w_r = smoothstep(1, 0, distance(normal, n_r) * 1.5) * 2;
 
             float4 weightedNormal = float4(normal, 1.0)
-                                    + float4(n_t * w_t, w_t)
-                                    + float4(n_b * w_b, w_b)
-                                    + float4(n_l * w_l, w_l)
-                                    + float4(n_r * w_r, w_r);
+                                      + float4(n_t * w_t, w_t)
+                                      + float4(n_b * w_b, w_b)
+                                      + float4(n_l * w_l, w_l)
+                                      + float4(n_r * w_r, w_r);
 
             if (weightedNormal.a > 0)
             {
@@ -611,12 +613,19 @@ namespace SSRT1661
             float adaptiveDist = pd.Depth * 1.2 + 0.003;
             float3 fbViewPos = pd.ViewPos + rayDir * adaptiveDist;
             float2 uvFb = saturate(ViewPosToUV(fbViewPos));
-            
+            bool isSky = getDepth(uvFb) >= 1.0;
             float3 fbColor = GetColor(uvFb).rgb;
-            float depthFactor = saturate(1.0 - pd.Depth / MaxTraceDistance);
-            float vertical_fade = 1.0 - screen_uv.y;
-            
-            reflection.rgb = fbColor * depthFactor * vertical_fade;
+
+            if (isSky)
+            {
+                reflection.rgb = fbColor;
+            }
+            else
+            {
+                float depthFactor = saturate(1.0 - pd.Depth / MaxTraceDistance);
+                float vertical_fade = 1.0 - screen_uv.y;
+                reflection.rgb = fbColor * depthFactor * vertical_fade;
+            }
         }
         
         float fresnel = pow(1.0 - saturate(dot(eyeDir, pd.Normal)), 3.0);
