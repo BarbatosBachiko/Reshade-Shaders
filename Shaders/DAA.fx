@@ -12,15 +12,15 @@
     History:
     (*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
 
-    Version 1.6.1
+    Version 1.6.2
     + Optimization
 */
+
 
 // Includes
 #include "ReShade.fxh"
 
 // Utility macros
-#define getColor(coord) tex2Dlod(ReShade::BackBuffer, float4(coord, 0, 0))
 #define S_PC MagFilter=POINT;MinFilter=POINT;MipFilter=POINT;AddressU=Clamp;AddressV=Clamp;AddressW=Clamp;
 #define f float
 #define f2 float2
@@ -32,7 +32,7 @@
 #define MAX_FRAMES 64
 
 /*-------------------.
-| :: Settings ::    |
+| :: Settings ::     |
 '-------------------*/
 
 uniform int View_Mode <
@@ -48,7 +48,7 @@ uniform float DirectionalStrength <
     ui_min = 0.0; ui_max = 3.0; ui_step = 0.05;
     ui_category = "Anti-Aliasing";
 > = 2.4;
-   
+    
 uniform float EdgeThreshold <
     ui_type = "slider";
     ui_label = "Edge Threshold";
@@ -109,15 +109,15 @@ s sHIS
 
 f3 RGBToYCoCg(f3 rgb)
 {
-    float Y = .299 * rgb.x + .587 * rgb.y + .114 * rgb.z; // LM
-    float Cb = -.169 * rgb.x - .331 * rgb.y + .500 * rgb.z; // CB
-    float Cr = .500 * rgb.x - .419 * rgb.y - .081 * rgb.z; // CR
-    return float3(Y, Cb + 128. / 255., Cr + 128. / 255.);
+    float Y = dot(rgb, f3(0.299, 0.587, 0.114));
+    float Cb = dot(rgb, f3(-0.169, -0.331, 0.500));
+    float Cr = dot(rgb, f3(0.500, -0.419, -0.081));
+    return f3(Y, Cb + 128.0 / 255.0, Cr + 128.0 / 255.0);
 }
 
 f3 YCoCgToRGB(f3 ycc)
 {
-    f3 c = ycc - f3(0., 128. / 255., 128. / 255.);
+    f3 c = ycc - f3(0.0, 128.0 / 255.0, 128.0 / 255.0);
     f R = c.x + 1.400 * c.z;
     f G = c.x - 0.343 * c.y - 0.711 * c.z;
     f B = c.x + 1.765 * c.y;
@@ -126,25 +126,22 @@ f3 YCoCgToRGB(f3 ycc)
 
 f lum(f3 color)
 {
-    return (color.r + color.g + color.b) * 0.3333333;
+    return dot(color, 0.3333333);
 }
 
 f2 computeGradient(f2 t)
 {
-    const f2 offset = ReShade::PixelSize.xy;
+    f gradX = lum(tex2Doffset(ReShade::BackBuffer, t, int2(1, 0)).rgb) -
+              lum(tex2Doffset(ReShade::BackBuffer, t, int2(-1, 0)).rgb);
+    f gradY = lum(tex2Doffset(ReShade::BackBuffer, t, int2(0, 1)).rgb) -
+              lum(tex2Doffset(ReShade::BackBuffer, t, int2(0, -1)).rgb);
     
-    f2 grad;
-    grad.x = lum(getColor(t+ f2(offset.x, 0)).rgb) -
-             lum(getColor(t - f2(offset.x, 0)).rgb);
-    grad.y = lum(getColor(t + f2(0, offset.y)).rgb) -
-             lum(getColor(t - f2(0, offset.y)).rgb);
-    
-    return grad * 2.0;
+    return f2(gradX, gradY) * 2.0;
 }
 
 f4 DAA(f2 t)
 {
-    f4 original = getColor(t);
+    f4 original = tex2Dlod(ReShade::BackBuffer, f4(t, 0, 0));
     f2 gradient = computeGradient(t);
     f edgeStrength = length(gradient);
     f weight = smoothstep(EdgeThreshold, EdgeThreshold + EdgeFalloff, edgeStrength);
@@ -156,11 +153,11 @@ f4 DAA(f2 t)
         f2 offset1 = blurDir * pixelStep * 0.5;
         f2 offset2 = blurDir * pixelStep;
 
-        f4 color =    (getColor(t + offset1) +
-                       getColor(t - offset1) +
-                       getColor(t + offset2) * 0.5 +
-                       getColor(t - offset2) * 0.5);
-                       
+        f4 color = (tex2Dlod(ReShade::BackBuffer, f4(t + offset1, 0, 0)) +
+                    tex2Dlod(ReShade::BackBuffer, f4(t - offset1, 0, 0)) +
+                    tex2Dlod(ReShade::BackBuffer, f4(t + offset2, 0, 0)) * 0.5 +
+                    tex2Dlod(ReShade::BackBuffer, f4(t - offset2, 0, 0)) * 0.5);
+                    
         color /= 3.0;
         return f4(lerp(original.rgb, color.rgb, weight), weight);
     }
@@ -172,15 +169,12 @@ f4 PS_Temporal(f4 pos : SV_Position, f2 t : TEXCOORD, out f outHistoryLength : S
     f4 current = DAA(t);
     f3 currentYCoCg = RGBToYCoCg(current.rgb);
 
-    bool validHistory = all(saturate(t) == t) &&
-                        FRAME_COUNT > 1;
+    bool validHistory = all(saturate(t) == t) && FRAME_COUNT > 1;
 
     f3 historyYCoCg = currentYCoCg;
 
     if (EnableTemporalAA && validHistory)
     {
-        f2 pixelSize = ReShade::PixelSize.xy;
-
         // Neighborhood sampling for AABB clamping
         f3 minColor = currentYCoCg;
         f3 maxColor = currentYCoCg;
@@ -197,8 +191,7 @@ f4 PS_Temporal(f4 pos : SV_Position, f2 t : TEXCOORD, out f outHistoryLength : S
         [unroll]
         for (int i = 0; i < 8; ++i)
         {
-            f2 offset = t + pixelSize * offsets[i];
-            f3 sampleYCoCg = RGBToYCoCg(getColor(offset).rgb);
+            f3 sampleYCoCg = RGBToYCoCg(tex2Doffset(ReShade::BackBuffer, t, offsets[i]).rgb);
 
             minColor = min(minColor, sampleYCoCg);
             maxColor = max(maxColor, sampleYCoCg);
@@ -218,9 +211,7 @@ f4 PS_Temporal(f4 pos : SV_Position, f2 t : TEXCOORD, out f outHistoryLength : S
         minColor = meanColor - halfSize * 0.5;
         maxColor = meanColor + halfSize * 0.5;
 
-        f3 rawHistoryYCoCg = RGBToYCoCg(
-            tex2Dlod(sHIS, f4(t, 0, 0)).rgb
-        );
+        f3 rawHistoryYCoCg = RGBToYCoCg(tex2Dlod(sHIS, f4(t, 0, 0)).rgb);
 
         // Soft AABB clamping
         f3 center = (minColor + maxColor) * 0.5;
@@ -238,14 +229,13 @@ f4 PS_Temporal(f4 pos : SV_Position, f2 t : TEXCOORD, out f outHistoryLength : S
 
 f4 PS_SaveHistory(f4 pos : SV_Position, f2 t : TEXCOORD) : SV_Target
 {
-    f4 temporalResult = tex2Dlod(sTEMP, f4(t, 0, 0));
-    return temporalResult;
+    return tex2Dlod(sTEMP, f4(t, 0, 0));
 }
 
 f4 PSComposite(f4 pos : SV_Position, f2 t : TEXCOORD) : SV_Target
 {
-    f4 original = getColor(t);
-    f4 daaResult = tex2D(sTEMP, t);
+    f4 original = tex2Dlod(ReShade::BackBuffer, f4(t, 0, 0));
+    f4 daaResult = tex2Dlod(sTEMP, f4(t, 0, 0));
     
     // View modes
     switch (View_Mode)
@@ -258,7 +248,6 @@ f4 PSComposite(f4 pos : SV_Position, f2 t : TEXCOORD) : SV_Target
             
         case 3: // Gradient Direction
             f2 grad = computeGradient(t);
-            f len = length(grad);
             return f4(normalize(grad) * 0.5 + 0.5, 0.0, 1.0);
             
         default: // Output
