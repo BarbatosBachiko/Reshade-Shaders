@@ -1,15 +1,18 @@
-﻿/*--------------------.
+/*--------------------.
 | :: Description ::  |
 '--------------------/
 
     Extruded Video Image
     
-    Version: 1.0.0
+    Version: 1.0.1
     Author: Converted from Shadertoy, adapted by for reshade by Barbatos
     Original by Shane: https://www.shadertoy.com/view/3stXzB
     
-   About: Creates an extruded, voxel-like 3D effect from the screen buffer
-   using raymarching.
+    About: Creates an extruded, voxel-like 3D effect from the screen buffer
+    using raymarching.
+    
+    Changelog:
+    1.0.1: little fix
 */
 
 #include "ReShade.fxh"
@@ -241,12 +244,21 @@ float4 blocks(float3 q3)
             float4 h4;
             int sub = 0;
             
-            for (int j = 0; j < 4; j++)
-            {
-                h4[j] = hm(idi + ps4[j] / 4.0);
-                if (abs(h4[j] - h) > SubdivisionThreshold)
-                    sub = 1;
-            }
+            h4[0] = hm(idi + ps4[0] / 4.0);
+            if (abs(h4[0] - h) > SubdivisionThreshold)
+                sub = 1;
+
+            h4[1] = hm(idi + ps4[1] / 4.0);
+            if (abs(h4[1] - h) > SubdivisionThreshold)
+                sub = 1;
+
+            h4[2] = hm(idi + ps4[2] / 4.0);
+            if (abs(h4[2] - h) > SubdivisionThreshold)
+                sub = 1;
+
+            h4[3] = hm(idi + ps4[3] / 4.0);
+            if (abs(h4[3] - h) > SubdivisionThreshold)
+                sub = 1;
             
             h = floor(h * 15.999) / 15.0 * ExtrusionScale;
             h4 = floor(h4 * 15.999) / 15.0 * ExtrusionScale;
@@ -255,17 +267,42 @@ float4 blocks(float3 q3)
             {
                 float4 d4, di4;
                 
-                for (int j = 0; j < 4; j++)
+                // Iteration 0
+                d4[0] = sBoxS(p - ps4[0] / 4.0, l / 4.0 - 0.05 * scale, 0.005);
+                di4[0] = opExtrusion(d4[0], (q3.z + h4[0]), h4[0]);
+                if (di4[0] < d)
                 {
-                    d4[j] = sBoxS(p - ps4[j] / 4.0, l / 4.0 - 0.05 * scale, 0.005);
-                    di4[j] = opExtrusion(d4[j], (q3.z + h4[j]), h4[j]);
-                    
-                    if (di4[j] < d)
-                    {
-                        d = di4[j];
-                        id = idi + ps4[j] / 4.0;
-                    }
+                    d = di4[0];
+                    id = idi + ps4[0] / 4.0;
                 }
+
+                // Iteration 1
+                d4[1] = sBoxS(p - ps4[1] / 4.0, l / 4.0 - 0.05 * scale, 0.005);
+                di4[1] = opExtrusion(d4[1], (q3.z + h4[1]), h4[1]);
+                if (di4[1] < d)
+                {
+                    d = di4[1];
+                    id = idi + ps4[1] / 4.0;
+                }
+
+                // Iteration 2
+                d4[2] = sBoxS(p - ps4[2] / 4.0, l / 4.0 - 0.05 * scale, 0.005);
+                di4[2] = opExtrusion(d4[2], (q3.z + h4[2]), h4[2]);
+                if (di4[2] < d)
+                {
+                    d = di4[2];
+                    id = idi + ps4[2] / 4.0;
+                }
+
+                // Iteration 3
+                d4[3] = sBoxS(p - ps4[3] / 4.0, l / 4.0 - 0.05 * scale, 0.005);
+                di4[3] = opExtrusion(d4[3], (q3.z + h4[3]), h4[3]);
+                if (di4[3] < d)
+                {
+                    d = di4[3];
+                    id = idi + ps4[3] / 4.0;
+                }
+                // -- End of unrolled loop --
             }
             else
             {
@@ -448,7 +485,7 @@ float4 PS_ExtrudedVideo(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Tar
                 float3 rndCol = 0.5 + 0.45 * cos(6.2831 * lerp(0.0, 0.3, rnd2) + float3(0, 1, 2) / 1.1);
                 rndCol = lerp(rndCol, rndCol.xzy, screenUV.y * 0.75 + 0.5);
                 rndCol = lerp(float3(1, 1, 1), rndCol * SparkleIntensity * 10.0,
-                             rnd * smoothstep(1.0 - (1.0 / 15.0 + 0.001), 1.0, 1.0 - texCol.x));
+                                rnd * smoothstep(1.0 - (1.0 / 15.0 + 0.001), 1.0, 1.0 - texCol.x));
                 
                 texCol *= rndCol;
             }
