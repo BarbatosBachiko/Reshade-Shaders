@@ -4,19 +4,20 @@
 
     Barbatos SSR - Screen Space Reflections
 
-    Version: 0.1
+    Version: 0.1.1
     Author: Barbatos Bachiko
     Original SSRT by jebbyk: https://github.com/jebbyk/SSRT-for-reshade/
 
     License: GNU Affero General Public License v3.0
     (https://github.com/jebbyk/SSRT-for-reshade/blob/main/LICENSE)
 
-    History: 0.1
+    History:
+    0.1.1 - add denoising and fix normal map
 */
 
 #include "ReShade.fxh"
 #include "Blending.fxh"
-
+#define fmod(x, y) (frac((x)*rcp(y)) * (y))
 #ifndef USE_MARTY_LAUNCHPAD_MOTION
 #define USE_MARTY_LAUNCHPAD_MOTION 0
 #endif
@@ -60,7 +61,16 @@ uniform float NormalBias <
     ui_category = "Reflection Settings";
     ui_label = "Normal Bias";
     ui_tooltip = "Prevents self-reflection artifacts by comparing the hit surface normal with the origin surface normal.";
-> = 0.2;
+> = 0.0;
+
+uniform float Roughness <
+    ui_type = "drag";
+    ui_min = 0.0; ui_max = 1.0;
+    ui_step = 0.01;
+    ui_category = "Reflection Settings";
+    ui_label = "Roughness";
+    ui_tooltip = "Controls the blurriness of reflections based on surface roughness. Higher values lead to blurrier reflections.";
+> = 0.0;  
 
 uniform float FadeStart <
     ui_type = "drag";
@@ -118,6 +128,37 @@ uniform float DepthMultiplier <
     ui_label = "Depth Multiplier";
 > = 1.0;
 
+uniform bool EnableDenoising <
+    ui_category = "Denoising";
+    ui_label = "Enable Denoising";
+    ui_tooltip = "Enables the bilateral upsampling filter to reduce noise and upscale reflections.";
+> = false;
+
+uniform int DenoiseIterations <
+    ui_type = "slider";
+    ui_min = 1; ui_max = 5;
+    ui_category = "Denoising";
+    ui_label = "Denoise Iterations (Kernel Size)";
+    ui_tooltip = "Number of denoising passes.";
+> = 2;
+
+uniform float DenoiseStrength <
+    ui_type = "drag";
+    ui_min = 0.0; ui_max = 1.0;
+    ui_step = 0.01;
+    ui_category = "Denoising";
+    ui_label = "Denoise Strength";
+> = 1.0;
+
+uniform float DenoiseEdgeThreshold <
+    ui_type = "drag";
+    ui_min = 0.001; ui_max = 0.2;
+    ui_step = 0.001;
+    ui_category = "Denoising";
+    ui_label = "Denoise Edge Threshold";
+    ui_tooltip = "Prevents blurring across edges. Lower values are more sensitive to edges.";
+> = 0.02;
+
 uniform bool EnableTemporal <
     ui_category = "Temporal Filtering";
     ui_label = "Enable Temporal Accumulation";
@@ -154,7 +195,7 @@ uniform bool AssumeSRGB <
     ui_tooltip = "Assumes the input color is in sRGB space and linearizes it. Keep disabled unless you know the game outputs non-linear color.";
 > = false;
 
-uniform float RenderScale <
+uniform float fSSRRenderScale <
     ui_type = "drag";
     ui_min = 0.1; ui_max = 1.0;
     ui_step = 0.01;
@@ -186,7 +227,7 @@ uniform float JitterScale <
     ui_step = 0.1;
     ui_category = "Performance & Quality";
     ui_label = "Jitter Scale";
-> = 1.0;
+> = 0.1;
 
 uniform float VerticalFOV <
     ui_type = "drag";
@@ -194,12 +235,11 @@ uniform float VerticalFOV <
     ui_step = 0.1;
     ui_category = "Advanced";
     ui_label = "Vertical FOV";
-    ui_tooltip = "Set this to your game's vertical Field of View for accurate projection calculations.";
 > = 37.0;
 
 uniform int ViewMode <
     ui_type = "combo";
-    ui_items = "None\0Motion Vectors\0Final Reflection\0Normals\0Depth\0Raw Reflection\0";
+    ui_items = "None\0Motion Vectors\0Final Reflection\0Normals\0Depth\0Raw Reflection\0Denoised Reflection\0";
     ui_category = "Debug";
     ui_label = "Debug View Mode";
 > = 0;
@@ -216,13 +256,13 @@ uniform int FRAME_COUNT < source = "framecount"; >;
         sampler sMotionVectorsTex { Texture = MotionVectorsTex; };
     }
     float2 SampleMotionVectors(float2 texcoord) {
-        return tex2D(Deferred::sMotionVectorsTex, texcoord).rg;
+        return tex2Dlod(Deferred::sMotionVectorsTex, float4(texcoord, 0, 0)).rg;
     }
 #elif USE_VORT_MOTION
     texture2D MotVectTexVort { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
     sampler2D sMotVectTexVort { Texture = MotVectTexVort; MagFilter=POINT;MinFilter=POINT;MipFilter=POINT;AddressU=Clamp;AddressV=Clamp; };
     float2 SampleMotionVectors(float2 texcoord) {
-        return tex2D(sMotVectTexVort, texcoord).rg;
+        return tex2Dlod(sMotVectTexVort, float4(texcoord, 0, 0)).rg;
     }
 #else
 texture texMotionVectors
@@ -242,7 +282,7 @@ sampler sTexMotionVectorsSampler
 };
 float2 SampleMotionVectors(float2 texcoord)
 {
-    return tex2D(sTexMotionVectorsSampler, texcoord).rg;
+    return tex2Dlod(sTexMotionVectorsSampler, float4(texcoord, 0, 0)).rg;
 }
 #endif
 
@@ -257,6 +297,17 @@ namespace SSRTNEW
     sampler sReflection
     {
         Texture = Reflection;
+    };
+
+    texture DenoiseTex
+    {
+        Width = BUFFER_WIDTH;
+        Height = BUFFER_HEIGHT;
+        Format = RGBA8;
+    };
+    sampler sDenoiseTex
+    {
+        Texture = DenoiseTex;
     };
 
     texture Temp
@@ -337,6 +388,45 @@ namespace SSRTNEW
     //-------------------|
     // :: Functions     ::|
     //-------------------|
+    
+#define DX9_MODE (RESHADE_API_D3D9)
+
+    float IGN(float2 n)
+    {
+        float f = 0.06711056 * n.x + 0.00583715 * n.y;
+        return frac(52.9829189 * frac(f));
+    }
+    
+    //Licence GNU 2 from https://github.com/AlucardDH/dh-reshade-shaders/blob/master/Shaders/dh_uber_rt.fx
+    bool isScaledProcessed(float2 coords)
+    {
+        return coords.x >= 0 && coords.y >= 0 && coords.x <= fSSRRenderScale && coords.y <= fSSRRenderScale;
+    }
+
+    float2 upCoordsSSR(float2 coords)
+    {
+        float2 result = coords / fSSRRenderScale;
+#if !DX9_MODE
+        int random = int(IGN(coords * 1000.0) * 255.0);
+        int steps = ceil(1.0 / fSSRRenderScale);
+        int count = steps * steps;
+        int index = random % count;
+        int2 delta = int2(index / steps, index % steps) - steps / 2;
+        result += delta * ReShade::PixelSize;
+#endif
+        return result;
+    }
+    //End
+    
+    float3 IGN3dts(float2 texcoord, float HL)
+    {
+        float3 OutColor;
+        float2 seed = texcoord * BUFFER_SCREEN_SIZE + fmod((float) FRAME_COUNT, HL) * 5.588238;
+        OutColor.r = IGN(seed);
+        OutColor.g = IGN(seed + 91.534651 + 189.6854);
+        OutColor.b = IGN(seed + 167.28222 + 281.9874);
+        return OutColor;
+    }
 
     float3 RGBToYCoCg(float3 rgb)
     {
@@ -440,7 +530,7 @@ namespace SSRTNEW
         u2 = GVPFUV(texcoord + float2(0, p.y * 2.0));
         d2 = GVPFUV(texcoord - float2(0, p.y * 2.0));
         l2 = GVPFUV(texcoord + float2(p.x * 2.0, 0));
-        r2 = GVPFUV(texcoord - float2(p.x * 2.0, 0));
+        r2 = GVPFUV(texcoord + float2(p.x * 2.0, 0));
 
         u2 = u + (u - u2);
         d2 = d + (d - d2);
@@ -468,9 +558,9 @@ namespace SSRTNEW
     {
         float2 p = ReShade::PixelSize;
     
-        float3 sX = tex2D(ReShade::BackBuffer, texcoord + float2(p.x, 0)).rgb;
-        float3 sY = tex2D(ReShade::BackBuffer, texcoord + float2(0, p.y)).rgb;
-        float3 sC = tex2D(ReShade::BackBuffer, texcoord).rgb;
+        float3 sX = tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(p.x, 0), 0, 0)).rgb;
+        float3 sY = tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(0, p.y), 0, 0)).rgb;
+        float3 sC = tex2Dlod(ReShade::BackBuffer, float4(texcoord, 0, 0)).rgb;
     
         float LC = rcp(max(lum(sX + sY + sC), 0.001)) * height;
         LC = min(LC, 4.0);
@@ -505,7 +595,7 @@ namespace SSRTNEW
         if (GeoCorrectionIntensity == 0.0)
             return normal;
 
-        float lumCenter = GetLuminance(tex2D(ReShade::BackBuffer, texcoord).rgb);
+        float lumCenter = GetLuminance(tex2Dlod(ReShade::BackBuffer, float4(texcoord, 0, 0)).rgb);
         float lumRight = GetLuminance(tex2Doffset(ReShade::BackBuffer, texcoord, int2(1, 0)).rgb);
         float lumDown = GetLuminance(tex2Doffset(ReShade::BackBuffer, texcoord, int2(0, 1)).rgb);
 
@@ -516,10 +606,19 @@ namespace SSRTNEW
 
     float3 SampleNormal(float2 coords)
     {
-        float3 normal = (tex2D(sNormal, coords).xyz - 0.5) * 2.0;
+        float3 normal = (tex2Dlod(sNormal, float4(coords, 0, 0)).xyz - 0.5) * 2.0;
         return normalize(normal);
     }
 
+    float3 JitterRay(float2 uv, float amount, float scale)
+    {
+        float noiseX = frac(sin(dot(uv + FRAME_COUNT * 0.0001, float2(12.9898, 78.233))) * 43758.5453);
+        float noiseY = frac(sin(dot(uv + FRAME_COUNT * 0.0001 + 0.1, float2(12.9898, 78.233))) * 43758.5453);
+        float noiseZ = frac(sin(dot(uv + FRAME_COUNT * 0.0001 + 0.2, float2(12.9898, 78.233))) * 43758.5453);
+        float3 noise = float3(noiseX, noiseY, noiseZ) * 2.0 - 1.0; 
+        return noise * amount * scale; 
+    }
+    
     HitResult TraceRay(Ray r)
     {
         HitResult result;
@@ -528,6 +627,7 @@ namespace SSRTNEW
         float stepSize = MIN_STEP_SIZE;
         float totalDist = 0.0;
         float3 prevPos = r.origin;
+        float depthBias = NormalBias * 0.005;
 
         [loop]
         for (int i = 0; i < STEPS_PER_RAY; ++i)
@@ -542,14 +642,14 @@ namespace SSRTNEW
             float sceneDepth = GetDepth(uvCurr);
             float thickness = abs(currPos.z - sceneDepth);
 
-            if (currPos.z < sceneDepth || thickness > ThicknessThreshold)
+            if (currPos.z < sceneDepth - depthBias || thickness > ThicknessThreshold)
             {
                 prevPos = currPos;
                 float distToDepth = abs(currPos.z - sceneDepth);
                 stepSize = clamp(distToDepth * STEP_SCALE, MIN_STEP_SIZE, MAX_STEP_SIZE);
                 continue;
             }
-
+            
             float3 lo = prevPos, hi = currPos;
             [unroll]
             for (int ref_step = 0; ref_step < REFINEMENT_STEPS; ++ref_step)
@@ -596,7 +696,7 @@ namespace SSRTNEW
     {
         if (SmoothMode == 0)
             discard;
-        float4 color = tex2D(sNormTex_Pass1, uv);
+        float4 color = tex2Dlod(sNormTex_Pass1, float4(uv, 0, 0));
         float4 s, s1;
         float sc;
         
@@ -608,7 +708,7 @@ namespace SSRTNEW
         
         for (int x = -SNSamples; x <= SNSamples; x++)
         {
-            s = tex2D(sNormTex_Pass1, float2(uv.xy + float2(x * p.x, 0)));
+            s = tex2Dlod(sNormTex_Pass1, float4(uv.xy + float2(x * p.x, 0), 0, 0));
             float diff = dot(0.333, abs(s.rgb - color.rgb)) + abs(s.a - color.a) * (FAR_PLANE * Smooth_Threshold);
             diff = 1 - saturate(diff * T);
             s1 += s * diff;
@@ -621,7 +721,7 @@ namespace SSRTNEW
     {
         if (SmoothMode == 0)
             discard;
-        float4 color = tex2D(sNormTex_Pass2, uv);
+        float4 color = tex2Dlod(sNormTex_Pass2, float4(uv, 0, 0));
         float4 s, s1;
         float sc;
 
@@ -633,7 +733,7 @@ namespace SSRTNEW
         
         for (int x = -SNSamples; x <= SNSamples; x++)
         {
-            s = tex2D(sNormTex_Pass2, float2(uv + float2(0, x * p.y)));
+            s = tex2Dlod(sNormTex_Pass2, float4(uv + float2(0, x * p.y), 0, 0));
             float diff = dot(0.333, abs(s.rgb - color.rgb)) + abs(s.a - color.a) * (FAR_PLANE * Smooth_Threshold);
             diff = 1 - saturate(diff * T * 2);
             s1 += s * diff;
@@ -645,24 +745,16 @@ namespace SSRTNEW
         s1.rgb = GeometryCorrection(uv, s1.rgb);
         outNormal = float4(s1.rgb * 0.5 + 0.5, s1.a);
     }
-
-    float3 JitterRay(float2 uv, float3 rayDir, float amount, float scale)
-    {
-        float noise = frac(sin(dot(uv + FRAME_COUNT * 0.0001, float2(12.9898, 78.233))) * 43758.5453);
-        noise = noise * 2.0 - 1.0; // Remap to [-1, 1]
-        float3 jitterAxis = cross(rayDir, float3(0, 1, 0)); // Perpendicular vector
-        return jitterAxis * (noise * amount * scale * ReShade::PixelSize.x);
-    }
     
     void PS_TraceReflections(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outReflection : SV_Target)
     {
-        if (any(uv > RenderScale))
+        if (!isScaledProcessed(uv))
         {
             outReflection = 0;
             return;
         }
 
-        float2 screen_uv = uv / RenderScale;
+        float2 screen_uv = upCoordsSSR(uv);
         float depth = GetDepth(screen_uv);
         float3 viewPos = UVToViewPos(screen_uv, depth);
         float3 viewDir = -normalize(viewPos);
@@ -672,12 +764,18 @@ namespace SSRTNEW
         
         Ray r;
         r.origin = viewPos;
-        r.direction = normalize(reflect(eyeDir, normal));
+
+        float3 noise = JitterRay(uv, JitterAmount, JitterScale);
+        float3 raydirG = normalize(reflect(eyeDir, normal));
+        float3 raydirR = normalize(noise);
+
+        float roughnessFactor = pow(Roughness, 2.0);
+        r.direction = normalize(lerp(raydirG, raydirR, roughnessFactor));
 
         if (JitterAmount > 0.0)
         {
-            float3 jitter = JitterRay(uv, r.direction, JitterAmount, JitterScale);
-            r.origin += jitter;
+            float3 originJitter = JitterRay(uv, JitterAmount, JitterScale);
+            r.origin += originJitter * ReShade::PixelSize.x;
         }
         
         HitResult hit = TraceRay(r);
@@ -722,9 +820,68 @@ namespace SSRTNEW
         outReflection = float4(reflectionColor, depth);
     }
 
+    void PS_Denoise(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outDenoised : SV_Target)
+    {
+        if (!EnableDenoising)
+        {
+            outDenoised = tex2Dlod(sReflection, float4(uv * fSSRRenderScale, 0, 0));
+            outDenoised.a = GetDepth(uv);
+            return;
+        }
+
+        float3 centerNormal = SampleNormal(uv);
+        float centerDepth = GetDepth(uv);
+
+        float totalWeight = 0.0;
+        float3 totalColor = 0.0;
+        
+        const int radius = DenoiseIterations;
+
+        for (int y = -radius; y <= radius; y++)
+        {
+            for (int x = -radius; x <= radius; x++)
+            {
+                float2 offset = float2(x, y) * ReShade::PixelSize;
+                float2 sample_uv_full = uv + offset;
+                float2 sample_uv_sparse = sample_uv_full * fSSRRenderScale;
+
+                if (sample_uv_sparse.x > fSSRRenderScale || sample_uv_sparse.y > fSSRRenderScale || any(sample_uv_sparse < 0))
+                    continue;
+
+                float4 sampleData = tex2Dlod(sReflection, float4(sample_uv_sparse, 0, 0));
+                float3 sampleColor = sampleData.rgb;
+                
+                if (dot(sampleColor, sampleColor) < 0.001)
+                    continue;
+
+                float sampleDepth = GetDepth(sample_uv_full);
+                float3 sampleNormal = SampleNormal(sample_uv_full); 
+
+                float depthWeight = saturate(1.0 - abs(centerDepth - sampleDepth) / (DenoiseEdgeThreshold * centerDepth + 0.001));
+                float normalWeight = pow(saturate(dot(centerNormal, sampleNormal)), 32.0);
+                float spaceWeight = 1.0 - saturate(length(offset * 100));
+
+                float weight = depthWeight * normalWeight * spaceWeight * DenoiseStrength;
+
+                totalColor += sampleColor * weight;
+                totalWeight += weight;
+            }
+        }
+
+        if (totalWeight > 0.0)
+        {
+            outDenoised = float4(totalColor / totalWeight, centerDepth);
+        }
+        else
+        {
+            outDenoised = tex2Dlod(sReflection, float4(uv * fSSRRenderScale, 0, 0));
+            outDenoised.a = centerDepth;
+        }
+    }
+
     void PS_Accumulate(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outBlended : SV_Target)
     {
-        float3 currentSpec = tex2D(sReflection, uv * RenderScale).rgb;
+        float3 currentSpec = tex2Dlod(sDenoiseTex, float4(uv, 0, 0)).rgb;
 
         if (!EnableTemporal)
         {
@@ -739,14 +896,14 @@ namespace SSRTNEW
         float historyDepth = GetDepth(reprojected_uv);
 
         bool validHistory = all(saturate(reprojected_uv) == reprojected_uv) &&
-                                  FRAME_COUNT > 1 &&
-                                  abs(historyDepth - currentDepth) < 0.01;
+                                      FRAME_COUNT > 1 &&
+                                      abs(historyDepth - currentDepth) < 0.01;
 
         float3 blendedSpec = currentSpec;
         if (validHistory)
         {
-            float3 historySpec = tex2D(sHistory, reprojected_uv).rgb;
-            
+            float3 historySpec = tex2Dlod(sHistory, float4(reprojected_uv, 0, 0)).rgb;
+
             float3 minBox = RGBToYCoCg(currentSpec), maxBox = minBox;
             [unroll]
             for (int y = -1; y <= 1; y++)
@@ -756,7 +913,7 @@ namespace SSRTNEW
                     if (x == 0 && y == 0)
                         continue;
                     float2 neighbor_uv = uv + float2(x, y) * ReShade::PixelSize;
-                    float3 neighborSpec = RGBToYCoCg(tex2D(sReflection, neighbor_uv * RenderScale).rgb);
+                    float3 neighborSpec = RGBToYCoCg(tex2Dlod(sDenoiseTex, float4(neighbor_uv, 0, 0)).rgb);
                     minBox = min(minBox, neighborSpec);
                     maxBox = max(maxBox, neighborSpec);
                 }
@@ -772,7 +929,7 @@ namespace SSRTNEW
 
     void PS_UpdateHistory(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outHistory : SV_Target)
     {
-        outHistory = tex2D(sTemp, uv);
+        outHistory = tex2Dlod(sTemp, float4(uv, 0, 0));
     }
 
     void PS_Output(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outColor : SV_Target)
@@ -789,7 +946,7 @@ namespace SSRTNEW
                     outColor = float4(HSVToRGB(hsv), 1.0);
                     return;
                 case 2: // Final Reflection
-                    outColor = float4(tex2D(sTemp, uv).rgb, 1.0);
+                    outColor = float4(tex2Dlod(sTemp, float4(uv, 0, 0)).rgb, 1.0);
                     return;
                 case 3: // Normals
                     outColor = float4(SampleNormal(uv) * 0.5 + 0.5, 1.0);
@@ -798,13 +955,16 @@ namespace SSRTNEW
                     outColor = GetDepth(uv).xxxx;
                     return;
                 case 5: // Raw Reflection
-                    outColor = float4(tex2D(sReflection, uv * RenderScale).rgb, 1.0);
+                    outColor = float4(tex2Dlod(sReflection, float4(uv * fSSRRenderScale, 0, 0)).rgb, 1.0);
+                    return;
+                case 6: // Denoised Reflection
+                    outColor = float4(tex2Dlod(sDenoiseTex, float4(uv, 0, 0)).rgb, 1.0);
                     return;
             }
         }
 
-        float3 originalColor = tex2D(ReShade::BackBuffer, uv).rgb;
-        float3 specularGI = tex2D(sTemp, uv).rgb;
+        float3 originalColor = tex2Dlod(ReShade::BackBuffer, float4(uv, 0, 0)).rgb;
+        float3 specularGI = tex2Dlod(sTemp, float4(uv, 0, 0)).rgb;
 
         specularGI *= Adjustments.y; // Exposure
         if (AssumeSRGB)
@@ -820,7 +980,7 @@ namespace SSRTNEW
 
         float3 finalColor;
 
-        if (BlendMode == 0) 
+        if (BlendMode == 0)
         {
             float giLuminance = GetLuminance(saturate(specularGI));
             finalColor = lerp(originalColor.rgb, specularGI, giLuminance);
@@ -868,6 +1028,12 @@ namespace SSRTNEW
             PixelShader = PS_TraceReflections;
             RenderTarget = Reflection;
             ClearRenderTargets = true;
+        }
+        pass Denoise
+        {
+            VertexShader = PostProcessVS;
+            PixelShader = PS_Denoise;
+            RenderTarget = DenoiseTex;
         }
         pass Accumulate
         {
