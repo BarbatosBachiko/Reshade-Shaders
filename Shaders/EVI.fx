@@ -43,7 +43,7 @@ uniform bool EnableSubdivision <
     ui_category = "Extrusion Settings";
     ui_label = "Enable Subdivision";
     ui_tooltip = "Subdivides blocks for higher detail where needed.";
-> = true;
+> = false;
 
 uniform float SubdivisionThreshold <
     ui_type = "drag";
@@ -534,3 +534,4 @@ technique ExtrudedVideoImage < ui_tooltip = "Creates an extruded, voxel-like 3D 
         PixelShader = PS_ExtrudedVideo;
     }
 }
+
