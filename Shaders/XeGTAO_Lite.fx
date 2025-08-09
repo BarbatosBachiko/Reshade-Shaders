@@ -7,7 +7,7 @@
 // XeGTAO is based on GTAO/GTSO "Jimenez et al. / Practical Real-Time Strategies for Accurate Indirect Occlusion",
 // https://www.activision.com/cdn/research/Practical_Real_Time_Strategies_for_Accurate_Indirect_Occlusion_NEW%20VERSION_COLOR.pdf
 //
-// Implementation: Filip Strugar (filip.strugar@intel.com), Steve Mccalla <stephen.mccalla@intel.com>                  (\_/)
+// Implementation: Filip Strugar (filip.strugar@intel.com), Steve Mccalla <stephen.mccalla@intel.com>                 (\_/)
 // Version:        (see XeGTAO.h)                                                                                    (='.'=)
 // Details:        https://github.com/GameTechDev/XeGTAO                                                             (")_(")
 //
@@ -98,14 +98,6 @@ uniform float FalloffRange <
     ui_type = "drag";
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
 > = 0.6;
-
-uniform float RenderScale <
-    ui_category = "GTAO Quality";
-    ui_label = "Render Scale";
-    ui_tooltip = "Renders AO at a lower resolution to improve performance. 1.0 is full resolution.";
-    ui_type = "drag";
-    ui_min = 0.5; ui_max = 1.0; ui_step = 0.01;
-> = 1.0;
 
 uniform bool EnableTemporal <
     ui_category = "Temporal";
@@ -329,28 +321,21 @@ namespace XeGTAO_LITE
 
     float4 PS_Normals(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
-        if (any(uv > RenderScale))
-            discard;
-        float3 normal = computeNormal(uv / RenderScale);
+        float3 normal = computeNormal(uv);
         return float4(normal * 0.5 + 0.5, 1.0);
     }
 
     float PS_ViewDepth(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
-        if (any(uv > RenderScale))
-            discard;
-        return getDepth(uv / RenderScale) * RESHADE_DEPTH_LINEARIZATION_FAR_PLANE;
+        return getDepth(uv) * RESHADE_DEPTH_LINEARIZATION_FAR_PLANE;
     }
 
     float4 PS_GTAO_Main(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
-        if (any(uv > RenderScale))
-            discard;
-
         const int sliceCount = 2;
         const int stepsPerSlice = 3;
 
-        float2 screen_uv = uv / RenderScale;
+        float2 screen_uv = uv;
         
         float viewspaceZ_raw = tex2Dlod(sViewDepthTex, float4(uv, 0, 0)).r;
         float3 pixCenterPos = GetViewPos(screen_uv, viewspaceZ_raw / RESHADE_DEPTH_LINEARIZATION_FAR_PLANE);
@@ -377,7 +362,7 @@ namespace XeGTAO_LITE
         const half noiseSample = localNoise.y;
 
         const float fov_rad = FOV * (PI / 180.0);
-        const float pixelViewspaceSize = 2.0 * viewspaceZ * tan(fov_rad * 0.5) / (BUFFER_HEIGHT * RenderScale);
+        const float pixelViewspaceSize = 2.0 * viewspaceZ * tan(fov_rad * 0.5) / BUFFER_HEIGHT;
         half screenspaceRadius = effectRadius / (half) pixelViewspaceSize;
         const half minS = 1.3 / screenspaceRadius;
 
@@ -415,15 +400,15 @@ namespace XeGTAO_LITE
                 s = pow(s, 2.0);
                 s += minS;
                 
-                half2 sampleOffset = s * omega * ReShade::PixelSize * RenderScale;
+                half2 sampleOffset = s * omega * ReShade::PixelSize;
 
                 float2 sampleCoord0 = uv + sampleOffset;
                 float SZ0_raw = tex2Dlod(sViewDepthTex, float4(sampleCoord0, 0, 0)).r;
-                float3 samplePos0 = GetViewPos(sampleCoord0 / RenderScale, SZ0_raw / RESHADE_DEPTH_LINEARIZATION_FAR_PLANE);
+                float3 samplePos0 = GetViewPos(sampleCoord0, SZ0_raw / RESHADE_DEPTH_LINEARIZATION_FAR_PLANE);
 
                 float2 sampleCoord1 = uv - sampleOffset;
                 float SZ1_raw = tex2Dlod(sViewDepthTex, float4(sampleCoord1, 0, 0)).r;
-                float3 samplePos1 = GetViewPos(sampleCoord1 / RenderScale, SZ1_raw / RESHADE_DEPTH_LINEARIZATION_FAR_PLANE);
+                float3 samplePos1 = GetViewPos(sampleCoord1, SZ1_raw / RESHADE_DEPTH_LINEARIZATION_FAR_PLANE);
 
                 float3 sampleDelta0 = (samplePos0 - pixCenterPos);
                 float3 sampleDelta1 = (samplePos1 - pixCenterPos);
@@ -561,54 +546,53 @@ namespace XeGTAO_LITE
         }
         else if (ViewMode == 2) // Normals
         {
-            return float4(tex2D(sNormal, uv * RenderScale).rgb, 1.0);
+            return float4(tex2D(sNormal, uv).rgb, 1.0);
         }
         else if (ViewMode == 3) // View-Space Depth
         {
-            float depth = tex2D(sViewDepthTex, uv * RenderScale).r / (RESHADE_DEPTH_LINEARIZATION_FAR_PLANE * DepthMultiplier);
+            float depth = tex2D(sViewDepthTex, uv).r / (RESHADE_DEPTH_LINEARIZATION_FAR_PLANE * DepthMultiplier);
             return float4(saturate(depth.rrr), 1.0);
         }
 
         return originalColor;
     }
 
-
-technique XeGTAO_Lite < ui_tooltip = "A performance-focused version of XeGTAO"; >
-{
-    pass NormalPass
+    technique XeGTAO_Lite < ui_tooltip = "A performance-focused version of XeGTAO"; >
     {
-        VertexShader = PostProcessVS;
-        PixelShader = PS_Normals;
-        RenderTarget = normalTex;
-    }
-    pass ViewDepthPass
-    {
-        VertexShader = PostProcessVS;
-        PixelShader = PS_ViewDepth;
-        RenderTarget = ViewDepthTex;
-    }
-    pass GTAOMainPass
-    {
-        VertexShader = PostProcessVS;
-        PixelShader = PS_GTAO_Main;
-        RenderTarget = AOTermTex;
-    }
-    pass TemporalFilterPass
-    {
-        VertexShader = PostProcessVS;
-        PixelShader = PS_TemporalFilter;
-        RenderTarget = TempTex;
-    }
-    pass HistoryUpdatePass
-    {
-        VertexShader = PostProcessVS;
-        PixelShader = PS_UpdateHistory;
-        RenderTarget = HistoryTex;
-    }
-    pass OutputPass
-    {
-        VertexShader = PostProcessVS;
-        PixelShader = PS_Output;
+        pass NormalPass
+        {
+            VertexShader = PostProcessVS;
+            PixelShader = PS_Normals;
+            RenderTarget = normalTex;
+        }
+        pass ViewDepthPass
+        {
+            VertexShader = PostProcessVS;
+            PixelShader = PS_ViewDepth;
+            RenderTarget = ViewDepthTex;
+        }
+        pass GTAOMainPass
+        {
+            VertexShader = PostProcessVS;
+            PixelShader = PS_GTAO_Main;
+            RenderTarget = AOTermTex;
+        }
+        pass TemporalFilterPass
+        {
+            VertexShader = PostProcessVS;
+            PixelShader = PS_TemporalFilter;
+            RenderTarget = TempTex;
+        }
+        pass HistoryUpdatePass
+        {
+            VertexShader = PostProcessVS;
+            PixelShader = PS_UpdateHistory;
+            RenderTarget = HistoryTex;
+        }
+        pass OutputPass
+        {
+            VertexShader = PostProcessVS;
+            PixelShader = PS_Output;
         }
     }
 }
