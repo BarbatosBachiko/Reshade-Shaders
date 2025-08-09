@@ -74,7 +74,7 @@ uniform bool EnableTemporalAA <
     ui_category = "Temporal";
     ui_type = "checkbox";
     ui_label = "Enable Temporal AA";
-> = true;
+> = false;
 
 uniform int AccumFrames <
     ui_type = "slider";
@@ -332,3 +332,4 @@ technique DAA
         PixelShader = PSComposite;
     }
 }
+
