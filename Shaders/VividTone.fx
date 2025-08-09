@@ -136,7 +136,7 @@ float CalculateSceneLuminance()
         for (int y = 0; y < 8; y++)
         {
             float2 uv = float2((x + 0.5) / 8.0, (y + 0.5) / 8.0);
-            float3 color = GetColor(uv);
+            float3 color = GetColor(uv).rgb;
             float lum = GetLuminance(color);
             
             totalLum += log(max(lum, 0.0001));
@@ -244,7 +244,7 @@ float4 StoreLuminancePass(float4 pos : SV_Position, float2 uv : TexCoord) : SV_T
 
 float4 Final(float4 pos : SV_Position, float2 uv : TexCoord) : SV_Target
 {
-    float3 color = GetColor(uv);
+    float3 color = GetColor(uv).rgb;
     
     color = pow(abs(color), HDRPower);
     
@@ -279,4 +279,5 @@ technique VividTone
         PixelShader = Final;
     }
   }
+
 }
