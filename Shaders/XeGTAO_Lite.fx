@@ -681,7 +681,7 @@ namespace XeGTAO_LITE
         return originalColor;
     }
 
-    technique XeGTAO_Lite < ui_tooltip = "A performance-focused version of XeGTAO with an integrated A-Trous denoiser."; >
+    technique XeGTAO_Lite < ui_tooltip = "A performance-focused version of XeGTAO."; >
     {
         pass NormalPass
         {
