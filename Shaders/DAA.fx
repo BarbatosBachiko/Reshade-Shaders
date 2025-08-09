@@ -10,15 +10,22 @@
     that smooths edges by applying directional blurring based on local gradient detection.
 
     History:
-    (*) Feature (+) Improvement	(x) Bugfix (-) Information (!) Compatibility
+    (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
 
-    Version 1.6.2
-    + Optimization
+    Version 1.6.3
+    + Motion Vector Support
 */
 
 
 // Includes
 #include "ReShade.fxh"
+
+#ifndef USE_MARTY_LAUNCHPAD_MOTION
+#define USE_MARTY_LAUNCHPAD_MOTION 0
+#endif
+#ifndef USE_VORT_MOTION
+#define USE_VORT_MOTION 0
+#endif
 
 // Utility macros
 #define S_PC MagFilter=POINT;MinFilter=POINT;MipFilter=POINT;AddressU=Clamp;AddressV=Clamp;AddressW=Clamp;
@@ -66,21 +73,58 @@ uniform float EdgeFalloff <
 uniform bool EnableTemporalAA <
     ui_category = "Temporal";
     ui_type = "checkbox";
-    ui_label = "Temporal";
-> = false;
+    ui_label = "Enable Temporal AA";
+> = true;
 
 uniform int AccumFrames <
     ui_type = "slider";
-    ui_label = "AccumFrames";
+    ui_label = "Accumulation Frames";
     ui_min = 1; ui_max = 32; ui_step = 1;
     ui_category = "Temporal";
-> = 1;
+> = 8;
 
 uniform int FRAME_COUNT < source = "framecount"; >;
 
 /*---------------.
 | :: Textures :: |
 '---------------*/
+
+// Motion Vector texture selection
+#if USE_MARTY_LAUNCHPAD_MOTION
+    namespace Deferred {
+        texture MotionVectorsTex { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
+        sampler sMotionVectorsTex { Texture = MotionVectorsTex; };
+    }
+    float2 SampleMotionVectors(float2 texcoord) {
+        return tex2Dlod(Deferred::sMotionVectorsTex, float4(texcoord, 0, 0)).rg;
+    }
+#elif USE_VORT_MOTION
+    texture2D MotVectTexVort { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
+    sampler2D sMotVectTexVort { Texture = MotVectTexVort; MagFilter=POINT;MinFilter=POINT;MipFilter=POINT;AddressU=Clamp;AddressV=Clamp; };
+    float2 SampleMotionVectors(float2 texcoord) {
+        return tex2Dlod(sMotVectTexVort, float4(texcoord, 0, 0)).rg;
+    }
+#else
+texture texMotionVectors
+{
+    Width = BUFFER_WIDTH;
+    Height = BUFFER_HEIGHT;
+    Format = RG16F;
+};
+sampler sTexMotionVectorsSampler
+{
+    Texture = texMotionVectors;
+    MagFilter = POINT;
+    MinFilter = POINT;
+    MipFilter = POINT;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+float2 SampleMotionVectors(float2 texcoord)
+{
+    return tex2Dlod(sTexMotionVectorsSampler, float4(texcoord, 0, 0)).rg;
+}
+#endif
 
 t2 TEMP
 {
@@ -164,18 +208,24 @@ f4 DAA(f2 t)
     return f4(original.rgb, 0.0);
 }
 
-f4 PS_Temporal(f4 pos : SV_Position, f2 t : TEXCOORD, out f outHistoryLength : SV_Target1) : SV_Target
+f4 PS_Temporal(f4 pos : SV_Position, f2 t : TEXCOORD) : SV_Target
 {
     f4 current = DAA(t);
     f3 currentYCoCg = RGBToYCoCg(current.rgb);
 
-    bool validHistory = all(saturate(t) == t) && FRAME_COUNT > 1;
-
-    f3 historyYCoCg = currentYCoCg;
-
-    if (EnableTemporalAA && validHistory)
+    if (!EnableTemporalAA)
     {
-        // Neighborhood sampling for AABB clamping
+        return current;
+    }
+
+    float2 motion = SampleMotionVectors(t);
+    float2 reprojected_uv = t + motion;
+
+    bool validHistory = all(saturate(reprojected_uv) == reprojected_uv) && FRAME_COUNT > 1;
+
+    if (validHistory)
+    {
+        // Neighborhood sampling for variance clamping
         f3 minColor = currentYCoCg;
         f3 maxColor = currentYCoCg;
         f3 meanColor = currentYCoCg;
@@ -192,7 +242,6 @@ f4 PS_Temporal(f4 pos : SV_Position, f2 t : TEXCOORD, out f outHistoryLength : S
         for (int i = 0; i < 8; ++i)
         {
             f3 sampleYCoCg = RGBToYCoCg(tex2Doffset(ReShade::BackBuffer, t, offsets[i]).rgb);
-
             minColor = min(minColor, sampleYCoCg);
             maxColor = max(maxColor, sampleYCoCg);
             meanColor += sampleYCoCg;
@@ -206,24 +255,25 @@ f4 PS_Temporal(f4 pos : SV_Position, f2 t : TEXCOORD, out f outHistoryLength : S
         f3 variance = abs(m2Color - meanColor * meanColor);
         f3 stdDev = sqrt(variance);
 
+        // Create expanded clamp box based on variance
         f3 expansion = lerp(0.5, 1.5, saturate(length(stdDev)));
         f3 halfSize = (maxColor - minColor) * expansion;
-        minColor = meanColor - halfSize * 0.5;
-        maxColor = meanColor + halfSize * 0.5;
+        f3 clampMin = meanColor - halfSize * 0.5;
+        f3 clampMax = meanColor + halfSize * 0.5;
 
-        f3 rawHistoryYCoCg = RGBToYCoCg(tex2Dlod(sHIS, f4(t, 0, 0)).rgb);
+        // Fetch history
+        f3 rawHistoryYCoCg = RGBToYCoCg(tex2Dlod(sHIS, f4(reprojected_uv, 0, 0)).rgb);
 
         // Soft AABB clamping
-        f3 center = (minColor + maxColor) * 0.5;
-        f3 extents = (maxColor - minColor) * 0.5;
-        historyYCoCg = center + clamp(rawHistoryYCoCg - center, -extents, extents);
+        f3 center = (clampMin + clampMax) * 0.5;
+        f3 extents = (clampMax - clampMin) * 0.5;
+        f3 historyYCoCg = center + clamp(rawHistoryYCoCg - center, -extents, extents);
 
         // Blend
         f alpha = 1.0 / min(FRAME_COUNT, (f) AccumFrames);
         currentYCoCg = lerp(historyYCoCg, currentYCoCg, alpha);
     }
 
-    outHistoryLength = validHistory ? min(FRAME_COUNT, MAX_FRAMES) : 0;
     return f4(YCoCgToRGB(currentYCoCg), current.a);
 }
 
@@ -261,7 +311,7 @@ f4 PSComposite(f4 pos : SV_Position, f2 t : TEXCOORD) : SV_Target
 
 technique DAA
 <
-    ui_tooltip = "Directional SpatioTemporal Anti-Aliasing";
+    ui_tooltip = "Directional SpatioTemporal Anti-Aliasing.";
 >
 {
     pass Temporal
