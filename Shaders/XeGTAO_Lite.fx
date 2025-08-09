@@ -537,7 +537,7 @@ namespace XeGTAO_LITE
         return originalColor;
     }
 
-    technique XeGTAO_Lite_NeoTemporal < ui_tooltip = "A performance-focused version of XeGTAO"; >
+    technique XeGTAO_Lite < ui_tooltip = "A performance-focused version of XeGTAO"; >
     {
         pass NormalPass
         {
