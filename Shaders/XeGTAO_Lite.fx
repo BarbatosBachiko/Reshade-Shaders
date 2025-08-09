@@ -132,7 +132,7 @@ uniform float c_phi <
     ui_min = 0.01; ui_max = 5.0; ui_step = 0.01;
     ui_label = "AO Sigma";
     ui_tooltip = "Controls the sensitivity to AO value differences.";
-> = 1.0;
+> = 0.1;
 
 uniform float n_phi <
     ui_category = "Denoiser";
