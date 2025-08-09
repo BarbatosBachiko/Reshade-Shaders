@@ -4,7 +4,7 @@
 
     Extruded Video Image
     
-    Version: 1.0.1
+    Version: 1.1.0
     Author: Converted from Shadertoy, adapted by for reshade by Barbatos
     Original by Shane: https://www.shadertoy.com/view/3stXzB
     
@@ -12,6 +12,7 @@
     using raymarching.
     
     Changelog:
+    1.1.0: Added Dynamic Material System (Plastic, Metal, Glass).
     1.0.1: little fix
 */
 
@@ -53,6 +54,13 @@ uniform float SubdivisionThreshold <
     ui_label = "Subdivision Threshold";
     ui_tooltip = "Height difference threshold for subdivision.";
 > = 0.067;
+
+uniform int MaterialType <
+    ui_type = "combo";
+    ui_items = "Plastic\0Metal\0Glass\0";
+    ui_category = "Material";
+    ui_label = "Surface Material";
+> = 0;
 
 uniform bool EnableSparkles <
     ui_category = "Visual Effects";
@@ -514,11 +522,25 @@ float4 PS_ExtrudedVideo(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Tar
         // Combine lighting terms
         col = texCol * (diff + ao * 0.3 + LightColor * diff * fre * 16.0 + float3(1, 0.5, 0.2) * spec * 2.0);
         col *= ao * sh * atten * LightIntensity;
+
+        if (MaterialType == 1)
+        { // Metal
+            spec *= 2.0;
+            fre = pow(fre, 5.0);
+            col = texCol * (diff + ao * 0.3 + LightColor * diff * fre * 16.0 + float3(1, 0.8, 0.5) * spec * 4.0);
+            col *= ao * sh * atten * LightIntensity;
+        }
+        else if (MaterialType == 2)
+        { // Glass
+            float3 refracted_rd = refract(rd, sn, 0.9);
+            float t_refract = trace(sp + refracted_rd * 0.01, refracted_rd);
+            float3 refract_col = tex2Dlod(ReShade::BackBuffer, float4(uv + refracted_rd.xy * 0.1, 0, 0)).rgb;
+            col = lerp(col, refract_col, 0.7);
+        }
     }
     
     // Gamma correction
     col = sqrt(max(col, 0.0));
-    
     return float4(col, 1.0);
 }
 
@@ -534,4 +556,3 @@ technique ExtrudedVideoImage < ui_tooltip = "Creates an extruded, voxel-like 3D 
         PixelShader = PS_ExtrudedVideo;
     }
 }
-
