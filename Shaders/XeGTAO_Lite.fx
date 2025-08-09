@@ -55,6 +55,7 @@
 #define GetColor(c) tex2Dlod(ReShade::BackBuffer, float4((c).xy, 0, 0))
 #define PI 3.1415926535
 #define PI_HALF 1.57079632679
+#define MAX_Frames 64
 
 /*------------------.
 | :: UI Controls :: |
@@ -155,17 +156,20 @@ uniform float frametime < source = "frametime"; >;
 | :: Textures :: |
 '----------------*/
 
-// Motion Vector texture setup, adapted from NeoSSAO
 #if USE_MARTY_LAUNCHPAD_MOTION
-namespace Deferred {
-    texture MotionVectorsTex { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
-    sampler sMotionVectorsTex { Texture = MotionVectorsTex; };
-}
-float2 sampleMotion(float2 texcoord) { return tex2D(Deferred::sMotionVectorsTex, texcoord).rg; }
+    namespace Deferred {
+        texture MotionVectorsTex { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
+        sampler sMotionVectorsTex { Texture = MotionVectorsTex; };
+    }
+    float2 SampleMotionVectors(float2 texcoord) {
+        return tex2Dlod(Deferred::sMotionVectorsTex, float4(texcoord, 0, 0)).rg;
+    }
 #elif USE_VORT_MOTION
-texture2D MotVectTexVort { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
-sampler2D sMotVectTexVort { Texture = MotVectTexVort; S_PC };
-float2 sampleMotion(float2 texcoord) { return tex2D(sMotVectTexVort, texcoord).rg; }
+    texture2D MotVectTexVort { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
+    sampler2D sMotVectTexVort { Texture = MotVectTexVort; MagFilter=POINT;MinFilter=POINT;MipFilter=POINT;AddressU=Clamp;AddressV=Clamp; };
+    float2 SampleMotionVectors(float2 texcoord) {
+        return tex2Dlod(sMotVectTexVort, float4(texcoord, 0, 0)).rg;
+    }
 #else
 texture texMotionVectors
 {
@@ -177,9 +181,9 @@ sampler sTexMotionVectorsSampler
 {
     Texture = texMotionVectors;S_PC
 };
-float2 sampleMotion(float2 texcoord)
+float2 SampleMotionVectors(float2 texcoord)
 {
-    return tex2D(sTexMotionVectorsSampler, texcoord).rg;
+    return tex2Dlod(sTexMotionVectorsSampler, float4(texcoord, 0, 0)).rg;
 }
 #endif
 
@@ -244,6 +248,25 @@ namespace XeGTAO_LITE
 | :: Functions :: |
 '----------------*/
 
+    float3 RGBToYCoCg(float3 rgb)
+    {
+        float Y = dot(rgb, float3(0.25, 0.5, 0.25));
+        float Co = dot(rgb, float3(0.5, 0, -0.5));
+        float Cg = dot(rgb, float3(-0.25, 0.5, -0.25));
+        return float3(Y, Co, Cg);
+    }
+
+    float3 YCoCgToRGB(float3 ycocg)
+    {
+        float Y = ycocg.x;
+        float Co = ycocg.y;
+        float Cg = ycocg.z;
+        float r = Y + Co - Cg;
+        float g = Y + Cg;
+        float b = Y - Co - Cg;
+        return float3(r, g, b);
+    }
+
     float3 rand3d(float3 p)
     {
         return frac(sin(dot(p, float3(12.9898, 78.233, 151.7182))) * float3(43758.5453, 21783.13224, 9821.42631));
@@ -280,39 +303,11 @@ namespace XeGTAO_LITE
 
     float3 computeNormal(float2 texcoord)
     {
-        float2 p = ReShade::PixelSize;
+        const float2 p = ReShade::PixelSize;
         float3 center_pos = GetViewPos(texcoord, getDepth(texcoord));
         float3 ddx = GetViewPos(texcoord + float2(p.x, 0), getDepth(texcoord + float2(p.x, 0))) - center_pos;
         float3 ddy = GetViewPos(texcoord + float2(0, p.y), getDepth(texcoord + float2(0, p.y))) - center_pos;
         return normalize(cross(ddx, ddy));
-    }
-
-    uint EncodeVisibility(half visibility)
-    {
-        return (uint(saturate(visibility) * 255.0 + 0.5) << 24);
-    }
-
-    void DecodeVisibility(const uint packedValue, out half visibility)
-    {
-        visibility = half(packedValue >> 24) / 255.0;
-    }
-
-    uint ReconstructUintFromPacked(float4 packedFloat)
-    {
-        return (uint(round(packedFloat.w * 255.0)) << 24);
-    }
-    
-    float4 ReconstructFloat4FromPacked(uint val)
-    {
-        return float4(0.0, 0.0, 0.0, (val >> 24) / 255.0);
-    }
-
-    float2 GetMotionVector(float2 texcoord)
-    {
-        float2 MV = sampleMotion(texcoord);
-        if (abs(MV.x) < ReShade::PixelSize.x && abs(MV.y) < ReShade::PixelSize.y)
-            MV = 0;
-        return MV;
     }
 
 /*--------------------.
@@ -343,7 +338,7 @@ namespace XeGTAO_LITE
 
         if (getDepth(screen_uv) >= DepthThreshold)
         {
-            return ReconstructFloat4FromPacked(EncodeVisibility(1.0));
+            return float4(1.0, 1.0, 1.0, 1.0);
         }
 
         half3 viewspaceNormal = tex2Dlod(sNormal, float4(uv, 0, 0)).xyz * 2.0 - 1.0;
@@ -445,32 +440,28 @@ namespace XeGTAO_LITE
         visibility = pow(saturate(visibility), (half) FinalValuePower);
         visibility = max(0.03, visibility);
 
-        return ReconstructFloat4FromPacked(EncodeVisibility(visibility));
+        return float4(visibility.xxx, 1.0);
     }
 
-    float4 PS_TemporalFilter(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
+    float4 PS_ApplyTemporalFilter(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
-        float4 currentPacked = tex2D(sAOTermTex, uv);
-        uint currentEncoded = ReconstructUintFromPacked(currentPacked);
-        half currentVisibility;
-        DecodeVisibility(currentEncoded, currentVisibility);
-
+        float3 currentSpec = tex2D(sAOTermTex, uv).rgb;
         float currentDepth = getDepth(uv);
 
-        float2 motion = GetMotionVector(uv);
+        float2 motion = SampleMotionVectors(uv);
         float2 reprojectedUV = uv + motion;
 
         float historyDepth = getDepth(reprojectedUV);
         bool validHistory = all(saturate(reprojectedUV) == reprojectedUV) &&
-                            FRAME_COUNT > 1 &&
-                            abs(historyDepth - currentDepth) < 0.01;
+                              FRAME_COUNT > 1 &&
+                              abs(historyDepth - currentDepth) < 0.01;
 
-        half blendedVisibility = currentVisibility;
+        float3 blendedSpec = currentSpec;
 
         if (EnableTemporal && validHistory)
         {
-            half minBox = currentVisibility;
-            half maxBox = currentVisibility;
+            float3 minBox = RGBToYCoCg(currentSpec);
+            float3 maxBox = minBox;
 
             [unroll]
             for (int x = -1; x <= 1; x++)
@@ -479,31 +470,28 @@ namespace XeGTAO_LITE
                 {
                     if (x == 0 && y == 0)
                         continue;
-                    float4 neighborPacked = tex2Dlod(sAOTermTex, float4(uv + float2(x, y) * ReShade::PixelSize, 0, 0));
-                    uint neighborEncoded = ReconstructUintFromPacked(neighborPacked);
-                    half neighborVisibility;
-                    DecodeVisibility(neighborEncoded, neighborVisibility);
-                    minBox = min(minBox, neighborVisibility);
-                    maxBox = max(maxBox, neighborVisibility);
+                    float3 neighborSpec = RGBToYCoCg(tex2Dlod(sAOTermTex, float4(uv + float2(x, y) * ReShade::PixelSize, 0, 0)).rgb);
+                    minBox = min(minBox, neighborSpec);
+                    maxBox = max(maxBox, neighborSpec);
                 }
             }
-            
-            float4 historyPacked = tex2Dlod(sHistoryTex, float4(reprojectedUV, 0, 0));
-            uint historyEncoded = ReconstructUintFromPacked(historyPacked);
-            half historyVisibility;
-            DecodeVisibility(historyEncoded, historyVisibility);
-
-            half clampedHistory = clamp(historyVisibility, minBox, maxBox);
-            half alpha = 1.0 / min(FRAME_COUNT, AccumFrames);
-            blendedVisibility = lerp(clampedHistory, currentVisibility, alpha);
+        
+            float3 historySpec = RGBToYCoCg(tex2Dlod(sHistoryTex, float4(reprojectedUV, 0, 0)).rgb);
+            float3 clampedHistorySpec = clamp(historySpec, minBox, maxBox);
+            float alpha = 1.0 / min(FRAME_COUNT, AccumFrames);
+            blendedSpec = YCoCgToRGB(lerp(clampedHistorySpec, RGBToYCoCg(currentSpec), alpha));
         }
 
-        return ReconstructFloat4FromPacked(EncodeVisibility(blendedVisibility));
+        float historyLengthPacked = validHistory ? min(FRAME_COUNT, MAX_Frames) : 0;
+        return float4(blendedSpec, historyLengthPacked);
     }
 
     float4 PS_UpdateHistory(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
-        return tex2D(sTempTex, uv);
+        float occlusion = EnableTemporal
+            ? tex2Dlod(sTempTex, float4(uv, 0, 0)).r 
+            : tex2Dlod(sAOTermTex, float4(uv, 0, 0)).r;
+        return float4(occlusion.xxx, 1.0);
     }
 
     float4 PS_Output(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
@@ -515,14 +503,9 @@ namespace XeGTAO_LITE
             if (getDepth(uv) >= DepthThreshold)
                 return originalColor;
 
-            float4 packedAO = EnableTemporal
-                ? tex2D(sTempTex, uv)
-                : tex2D(sAOTermTex, uv);
-            
-            uint encodedValue = ReconstructUintFromPacked(packedAO);
-            
-            half visibility;
-            DecodeVisibility(encodedValue, visibility);
+            float visibility = EnableTemporal
+                ? tex2D(sTempTex, uv).r
+                : tex2D(sAOTermTex, uv).r;
             
             float occlusion = 1.0 - visibility;
             occlusion = saturate(occlusion * Intensity);
@@ -535,13 +518,10 @@ namespace XeGTAO_LITE
         }
         else if (ViewMode == 1) // AO Only
         {
-            float4 packedAO = EnableTemporal
-                ? tex2D(sTempTex, uv)
-                : tex2D(sAOTermTex, uv);
+            float visibility = EnableTemporal
+                ? tex2D(sTempTex, uv).r
+                : tex2D(sAOTermTex, uv).r;
 
-            uint encodedValue = ReconstructUintFromPacked(packedAO);
-            half visibility;
-            DecodeVisibility(encodedValue, visibility);
             return float4(visibility.xxx, 1.0);
         }
         else if (ViewMode == 2) // Normals
@@ -557,7 +537,7 @@ namespace XeGTAO_LITE
         return originalColor;
     }
 
-    technique XeGTAO_Lite < ui_tooltip = "A performance-focused version of XeGTAO"; >
+    technique XeGTAO_Lite_NeoTemporal < ui_tooltip = "A performance-focused version of XeGTAO"; >
     {
         pass NormalPass
         {
@@ -580,7 +560,7 @@ namespace XeGTAO_LITE
         pass TemporalFilterPass
         {
             VertexShader = PostProcessVS;
-            PixelShader = PS_TemporalFilter;
+            PixelShader = PS_ApplyTemporalFilter;
             RenderTarget = TempTex;
         }
         pass HistoryUpdatePass
