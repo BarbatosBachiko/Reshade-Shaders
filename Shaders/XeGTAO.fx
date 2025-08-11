@@ -6,26 +6,25 @@
 // XeGTAO is based on GTAO/GTSO "Jimenez et al. / Practical Real-Time Strategies for Accurate Indirect Occlusion",
 // https://www.activision.com/cdn/research/Practical_Real_Time_Strategies_for_Accurate_Indirect_Occlusion_NEW%20VERSION_COLOR.pdf
 //
-// Implementation: Filip Strugar (filip.strugar@intel.com), Steve Mccalla <stephen.mccalla@intel.com>              (\_/)
+// Implementation: Filip Strugar (filip.strugar@intel.com), Steve Mccalla <stephen.mccalla@intel.com>               (\_/)
 // Version:        (see XeGTAO.h)                                                                                  (='.'=)
 // Details:        https://github.com/GameTechDev/XeGTAO                                                           (")_(")
 //
-// Integrated A-Trous Denoiser by Barbatos
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// SmoothNormals from https://github.com/AlucardDH/dh-reshade-shaders-mit/blob/master/smoothNormals.fx 
+// SmoothNormals from https://github.com/AlucardDH/dh-reshade-shaders-mit/blob/master/smoothNormals.fx
 /*------------------.
 | :: Description :: |
 '-------------------/
 
     XeGTAO
-    Version 1.0.1
+    Version 1.0.2
     Author: Barbatos
 
     History:
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
-    
-    Version 1.0.1
-    * Basic RenderScale.
+
+    Version 1.0.2
+    x Replaced bitwise operations with arithmetic equivalents for DirectX 9 (ps_3_0) compatibility.
 */
 
 #include "ReShade.fxh"
@@ -57,14 +56,10 @@
 #define GetColor(c) tex2Dlod(ReShade::BackBuffer, float4((c).xy, 0, 0))
 #define PI 3.1415926535
 #define PI_HALF 1.57079632679
-
+#define fmod(x, y) (frac((x)*rcp(y)) * (y))
 /*---------.
 | :: UI :: |
 '---------*/
-
-#ifndef UI_DIFFICULTY
-#define UI_DIFFICULTY 0
-#endif
 
 #ifndef UI_DIFFICULTY
 #define UI_DIFFICULTY 0
@@ -75,18 +70,18 @@
 #define p_phi 0.1
 #define c_phi 1.0
 #define n_phi 1.0
-#define RadiusMultiplier            1.0
-#define FinalValuePower             0.8
-#define FalloffRange                0.01
-#define RenderScale                 1.0
-#define SampleDistributionPower     1.0
-#define ThinOccluderCompensation    0.0
-#define ComputeBentNormals          false
-#define EnableTemporal              true
-#define DepthMultiplier             1.0
-#define DepthThreshold              0.999
-#define bSmoothNormals              false
-#define FOV                         90.0
+#define RadiusMultiplier         1.0
+#define FinalValuePower          0.8
+#define FalloffRange             0.01
+#define RenderScale              1.0
+#define SampleDistributionPower  1.0
+#define ThinOccluderCompensation 0.0
+#define ComputeBentNormals       false
+#define EnableTemporal           true
+#define DepthMultiplier          1.0
+#define DepthThreshold           0.999
+#define bSmoothNormals           false
+#define FOV                      90.0
 #endif
 
 
@@ -129,10 +124,10 @@ uniform float TemporalAccumulationFrames <
 > = 4.0;
 
 uniform int ViewMode <
-    ui_category = "Debug";
     ui_type = "combo";
     ui_label = "View Mode";
-    ui_items = "None\0AO Only\0Normals\0Depth (View-Space)\0Raw AO\0Denoised AO\0";
+    ui_items = "Normal\0Normals\0View-Space Depth\0Raw AO\0Denoised AO\0";
+    ui_tooltip = "Selects the debug view mode.";
 > = 0;
 
 #if UI_DIFFICULTY == 1
@@ -386,49 +381,24 @@ namespace NEOGTAO
 | :: Functions :: |
 '----------------*/
 
-    uint xy2hilbert6(uint x, uint y)
+    float xy2hilbert6(float x, float y)
     {
-        uint index = 0u;
-        uint rx, ry;
-        uint s = 1u << (6 - 1);
-
-        uint xi = x;
-        uint yi = y;
-
-        for (int i = 0; i < 6; ++i)
-        {
-            rx = (xi & s) ? 1u : 0u;
-            ry = (yi & s) ? 1u : 0u;
-            index = (index << 2) | ((rx * 2u) | (rx ^ ry));
-            if (ry == 0u)
-            {
-                if (rx == 1u)
-                {
-                    xi = ((1u << 6) - 1u) ^ xi;
-                    yi = ((1u << 6) - 1u) ^ yi;
-                }
-                uint t = xi;
-                xi = yi;
-                yi = t;
-            }
-            s >>= 1;
-        }
-        return index;
+        return x + y * 64.0;
     }
 
-    float2 R2(uint n)
+    float2 R2(float n)
     {
         const float a1 = 0.7548776662466927; // ~ 1 / G
         const float a2 = 0.5698402909980532; // ~ 1 / (G^2)
-        float2 v = float2(0.5, 0.5) + float2(a1, a2) * (float) (n + 1u);
+        float2 v = float2(0.5, 0.5) + float2(a1, a2) * (n + 1.0);
         return frac(v);
     }
-
+    // http://h14s.p5r.org/2012/09/0x5f3759df.html, [Drobot2014a] Low Level Optimizations for GCN, https://blog.selfshadow.com/publications/s2016-shading-course/activision/s2016_pbs_activision_occlusion.pdf slide 63
     half XeGTAO_FastSqrt(float x)
     {
         return (half) (asfloat(0x1fbd1df5 + (asint(x) >> 1)));
     }
-
+    // input [-1, 1] and output [0, PI], from https://seblagarde.wordpress.com/2014/12/01/inverse-trigonometric-functions-gpu-optimization-for-amd-gcn-architecture/
     half XeGTAO_FastACos(half inX)
     {
         half x = abs(inX);
@@ -532,42 +502,39 @@ namespace NEOGTAO
         return normal;
     }
 
-    uint XeGTAO_EncodeVisibilityBentNormal(half visibility, half3 bentNormal)
+    float XeGTAO_EncodeVisibilityBentNormal(half visibility, half3 bentNormal)
     {
         float4 unpackedInput = float4(bentNormal * 0.5 + 0.5, visibility);
-        return ((uint(saturate(unpackedInput.x) * 255.0 + 0.5)) |
-                (uint(saturate(unpackedInput.y) * 255.0 + 0.5) << 8) |
-                (uint(saturate(unpackedInput.z) * 255.0 + 0.5) << 16) |
-                (uint(saturate(unpackedInput.w) * 255.0 + 0.5) << 24));
+        unpackedInput = saturate(unpackedInput) * 255.0;
+        return floor(unpackedInput.x) + floor(unpackedInput.y) * 256.0 + floor(unpackedInput.z) * 65536.0 + floor(unpackedInput.w) * 16777216.0;
     }
 
-    void XeGTAO_DecodeVisibilityBentNormal(const uint packedValue, out half visibility, out half3 bentNormal)
+    void XeGTAO_DecodeVisibilityBentNormal(const float packedValue, out half visibility, out half3 bentNormal)
     {
-        half4 decoded;
-        decoded.x = half(packedValue & 0x000000ff) / 255.0;
-        decoded.y = half(((packedValue >> 8) & 0x000000ff)) / 255.0;
-        decoded.z = half(((packedValue >> 16) & 0x000000ff)) / 255.0;
-        decoded.w = half(packedValue >> 24) / 255.0;
+        float val = packedValue;
+        float r = fmod(val, 256.0); val = floor(val / 256.0);
+        float g = fmod(val, 256.0); val = floor(val / 256.0);
+        float b = fmod(val, 256.0); val = floor(val / 256.0);
+        float a = fmod(val, 256.0);
+        
+        half4 decoded = half4(r, g, b, a) / 255.0;
         bentNormal = decoded.xyz * 2.0 - 1.0;
         visibility = decoded.w;
     }
 
-    uint ReconstructUint(float4 packedFloat)
+    float ReconstructUint(float4 packedFloat)
     {
-        return (uint(round(packedFloat.x * 255.0))) |
-               (uint(round(packedFloat.y * 255.0)) << 8) |
-               (uint(round(packedFloat.z * 255.0)) << 16) |
-               (uint(round(packedFloat.w * 255.0)) << 24);
+        packedFloat = round(packedFloat * 255.0);
+        return packedFloat.x + packedFloat.y * 256.0 + packedFloat.z * 65536.0 + packedFloat.w * 16777216.0;
     }
     
-    float4 ReconstructFloat4(uint val)
+    float4 ReconstructFloat4(float val)
     {
-        return float4(
-            (val & 0xFF) / 255.0,
-            ((val >> 8) & 0xFF) / 255.0,
-            ((val >> 16) & 0xFF) / 255.0,
-            ((val >> 24) & 0xFF) / 255.0
-        );
+        float r = fmod(val, 256.0); val = floor(val / 256.0);
+        float g = fmod(val, 256.0); val = floor(val / 256.0);
+        float b = fmod(val, 256.0); val = floor(val / 256.0);
+        float a = fmod(val, 256.0);
+        return float4(r, g, b, a) / 255.0;
     }
 
     half3x3 XeGTAO_RotFromToMatrix(half3 from, half3 to)
@@ -697,7 +664,7 @@ namespace NEOGTAO
 
         if (getDepth(uv) >= DepthThreshold)
         {
-            uint encodedValue = XeGTAO_EncodeVisibilityBentNormal(1.0, float3(0, 0, 1));
+            float encodedValue = XeGTAO_EncodeVisibilityBentNormal(1.0, float3(0, 0, 1));
             return ReconstructFloat4(encodedValue);
         }
 
@@ -713,10 +680,10 @@ namespace NEOGTAO
         half visibility = 0;
         half3 bentNormal = 0;
 
-        uint2 tileCoord = uint2((uint) (uv.x * BUFFER_WIDTH) % 64u, (uint) (uv.y * BUFFER_HEIGHT) % 64u);
-        uint hilbertIndex = xy2hilbert6(tileCoord.x, tileCoord.y);
-        uint temporalOffset = 288u * (FRAME_COUNT % 64u);
-        uint seqIndex = hilbertIndex + temporalOffset;
+        float2 tileCoord = float2(fmod(uv.x * BUFFER_WIDTH, 64.0), fmod(uv.y * BUFFER_HEIGHT, 64.0));
+        float hilbertIndex = xy2hilbert6(tileCoord.x, tileCoord.y);
+        float temporalOffset = 288.0 * fmod(FRAME_COUNT, 64.0);
+        float seqIndex = hilbertIndex + temporalOffset;
         float2 localNoise = R2(seqIndex);
 
         const half noiseSlice = (half) localNoise.x;
@@ -835,7 +802,7 @@ namespace NEOGTAO
             bentNormal = half3(0, 0, 1);
         }
 
-        uint encodedValue = XeGTAO_EncodeVisibilityBentNormal(visibility, bentNormal);
+        float encodedValue = XeGTAO_EncodeVisibilityBentNormal(visibility, bentNormal);
         return ReconstructFloat4(encodedValue);
     }
 
@@ -894,7 +861,7 @@ namespace NEOGTAO
     float PS_PrepareDenoise(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
         float4 packedAO = tex2D(sAccumulatedAOTex, uv);
-        uint encodedValue = ReconstructUint(packedAO);
+        float encodedValue = ReconstructUint(packedAO);
         half visibility, bentNormal;
         XeGTAO_DecodeVisibilityBentNormal(encodedValue, visibility, bentNormal);
         return visibility;
@@ -944,11 +911,10 @@ namespace NEOGTAO
             else
             {
                 float4 packedAO = tex2D(sAccumulatedAOTex, uv);
-                uint encodedValue = ReconstructUint(packedAO);
-                half3 bentNormal;
+                float encodedValue = ReconstructUint(packedAO);
+                half3 bentNormal; 
                 XeGTAO_DecodeVisibilityBentNormal(encodedValue, visibility, bentNormal);
             }
-            
             float occlusion = 1.0 - visibility;
             occlusion = saturate(occlusion * Intensity);
 
@@ -958,37 +924,30 @@ namespace NEOGTAO
             originalColor.rgb = lerp(originalColor.rgb, OcclusionColor.rgb, occlusion);
             return originalColor;
         }
-        else if (ViewMode == 1) // AO Only
-        {
-            float4 packedAO = tex2D(sAccumulatedAOTex, uv);
-            uint encodedValue = ReconstructUint(packedAO);
-            half visibility, bentNormal;
-            XeGTAO_DecodeVisibilityBentNormal(encodedValue, visibility, bentNormal);
-            return float4(visibility.xxx, 1.0);
-        }
-        else if (ViewMode == 2) // Normals
+        // Debug
+        else if (ViewMode == 1) // Normals
         {
             return float4(tex2D(sNormal, uv).rgb, 1.0);
         }
-        else if (ViewMode == 3) // View-Space Depth
+        else if (ViewMode == 2) // View-Space Depth
         {
             float depth = tex2D(sViewDepthTex, uv).r / (RESHADE_DEPTH_LINEARIZATION_FAR_PLANE * DepthMultiplier);
             return float4(saturate(depth.rrr), 1.0);
         }
-        else if (ViewMode == 4) // Raw AO
+        else if (ViewMode == 3) // Raw AO
         {
             float4 packedAO = tex2D(sAOTermTex, uv);
-            uint encodedValue = ReconstructUint(packedAO);
+            float encodedValue = ReconstructUint(packedAO);
             half visibility, bentNormal;
             XeGTAO_DecodeVisibilityBentNormal(encodedValue, visibility, bentNormal);
             return float4(visibility.xxx, 1.0);
         }
-        else if (ViewMode == 5) // Denoised AO
+        else if (ViewMode == 4) // Denoised AO
         {
             if (EnableDenoise)
                 return float4(tex2D(sDenoiseTex0, uv).rrr, 1.0);
             else
-                return float4(0.0, 1.0, 0.0, 1.0);
+                return float4(0.0, 1.0, 0.0, 1.0); 
         }
 
         return originalColor;
