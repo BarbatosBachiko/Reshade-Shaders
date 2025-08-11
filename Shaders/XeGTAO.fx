@@ -18,14 +18,14 @@
 '-------------------/
 
     XeGTAO
-    Version 1.0
+    Version 1.0.1
     Author: Barbatos
 
     History:
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
     
-    Version 1.0
-    * Added A-Trous Denoiser
+    Version 1.0.1
+    * Basic RenderScale.
 */
 
 #include "ReShade.fxh"
@@ -37,6 +37,12 @@
 #ifndef USE_VORT_MOTION
 #define USE_VORT_MOTION 0
 #endif
+
+#ifndef RENDER_SCALE
+#define RENDER_SCALE 1.0
+#endif
+#define RES_WIDTH  (BUFFER_WIDTH  * RENDER_SCALE)
+#define RES_HEIGHT (BUFFER_HEIGHT * RENDER_SCALE)
 
 #define half min16float
 #define half2 min16float2
@@ -287,8 +293,8 @@ namespace NEOGTAO
 {
     texture normalTex
     {
-        Width = BUFFER_WIDTH;
-        Height = BUFFER_HEIGHT;
+        Width = RES_WIDTH;
+        Height = RES_HEIGHT;
         Format = RGBA16F;
     };
     sampler sNormal
@@ -298,8 +304,8 @@ namespace NEOGTAO
 
     texture ViewDepthTex
     {
-        Width = BUFFER_WIDTH;
-        Height = BUFFER_HEIGHT;
+        Width = RES_WIDTH;
+        Height = RES_HEIGHT;
         Format = R32F;
     };
     sampler sViewDepthTex
@@ -309,8 +315,8 @@ namespace NEOGTAO
 
     texture AOTermTex
     {
-        Width = BUFFER_WIDTH;
-        Height = BUFFER_HEIGHT;
+        Width = RES_WIDTH;
+        Height = RES_HEIGHT;
         Format = RGBA8;
     };
     sampler sAOTermTex
@@ -320,8 +326,8 @@ namespace NEOGTAO
 
     texture AccumulatedAOTex
     {
-        Width = BUFFER_WIDTH;
-        Height = BUFFER_HEIGHT;
+        Width = RES_WIDTH;
+        Height = RES_HEIGHT;
         Format = RGBA8;
     };
     sampler sAccumulatedAOTex
@@ -331,8 +337,8 @@ namespace NEOGTAO
 
     texture HistoryTex
     {
-        Width = BUFFER_WIDTH;
-        Height = BUFFER_HEIGHT;
+        Width = RES_WIDTH;
+        Height = RES_HEIGHT;
         Format = RGBA8;
         MipLevels = 1;
     };
@@ -344,8 +350,8 @@ namespace NEOGTAO
     // Denoiser Textures
     texture DenoiseInputTex
     {
-        Width = BUFFER_WIDTH;
-        Height = BUFFER_HEIGHT;
+        Width = RES_WIDTH;
+        Height = RES_HEIGHT;
         Format = R16F;
     };
     sampler sDenoiseInputTex
@@ -355,8 +361,8 @@ namespace NEOGTAO
 
     texture DenoiseTex0
     {
-        Width = BUFFER_WIDTH;
-        Height = BUFFER_HEIGHT;
+        Width = RES_WIDTH;
+        Height = RES_HEIGHT;
         Format = R16F;
     };
     sampler sDenoiseTex0
@@ -366,8 +372,8 @@ namespace NEOGTAO
 
     texture DenoiseTex1
     {
-        Width = BUFFER_WIDTH;
-        Height = BUFFER_HEIGHT;
+        Width = RES_WIDTH;
+        Height = RES_HEIGHT;
         Format = R16F;
     };
     sampler sDenoiseTex1
@@ -982,7 +988,7 @@ namespace NEOGTAO
             if (EnableDenoise)
                 return float4(tex2D(sDenoiseTex0, uv).rrr, 1.0);
             else
-                return float4(0.0, 1.0, 0.0, 1.0); 
+                return float4(0.0, 1.0, 0.0, 1.0);
         }
 
         return originalColor;
