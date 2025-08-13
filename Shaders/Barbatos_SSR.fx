@@ -1,18 +1,36 @@
 /*-------------------|
 | :: Description ::  |
 '--------------------|
+    FSR 1.0 code is derived from the FidelityFX SDK, provided under the MIT license.
+    Copyright (C) 2024 Advanced Micro Devices, Inc.
 
-    Barbatos SSR - Screen Space Reflections
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files(the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and /or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions :
 
-    Version: 0.1.1
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+    Barbatos SSR
+
+    Version: 0.2.0
     Author: Barbatos Bachiko
     Original SSRT by jebbyk: https://github.com/jebbyk/SSRT-for-reshade/
 
     License: GNU Affero General Public License v3.0
     (https://github.com/jebbyk/SSRT-for-reshade/blob/main/LICENSE)
 
-    History:
-    0.1.1 - add denoising and fix normal map
 */
 
 #include "ReShade.fxh"
@@ -44,6 +62,75 @@ static const int REFINEMENT_STEPS = 5;
 //----------|
 // :: UI :: |
 //----------|
+
+#ifndef UI_DIFFICULTY
+#define UI_DIFFICULTY 0
+#endif
+
+#if UI_DIFFICULTY == 0  // Simple Mode
+
+#define NormalBias 0.0
+#define FadeStart 0.0
+#define SmoothMode 2
+#define Smooth_Threshold 0.5
+#define BumpIntensity 0.4
+#define GeoCorrectionIntensity -0.01
+#define DepthMultiplier 1.0
+#define EnableTemporal true
+#define AccumFramesSG 4.0
+#define Adjustments float3(1.5, 1.0, 1.1)
+#define EnableACES false
+#define AssumeSRGB false
+#define ThicknessThreshold 0.010
+#define JitterAmount 0.01
+#define JitterScale 0.1
+#define VerticalFOV 37.0
+#define bEnableDenoise false
+#define c_phi 1.0
+#define n_phi 1.0
+#define p_phi 1.0
+
+uniform float SPIntensity <
+    ui_type = "drag";
+    ui_min = 0.0; ui_max = 3.0; ui_step = 0.01;
+    ui_category = "Reflection Settings";
+    ui_label = "Intensity";
+> = 1.1;
+
+uniform float Roughness <
+    ui_type = "drag";
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+    ui_category = "Reflection Settings";
+    ui_label = "Roughness";
+> = 0.0;  
+
+uniform float FadeEnd <
+    ui_type = "drag";
+    ui_min = 0.0; ui_max = 5.0; ui_step = 0.010;
+    ui_category = "Reflection Settings";
+    ui_label = "Fade Distance";
+> = 4.999;
+
+uniform float RenderScale <
+    ui_type = "drag";
+    ui_min = 0.1; ui_max = 1.0; ui_step = 0.01;
+    ui_category = "Performance & Quality";
+    ui_label = "Render Scale";
+    ui_tooltip = "Renders reflections at a lower resolution for performance, then upscales using FSR 1.0.";
+> = 1.0;
+
+BLENDING_COMBO(BlendMode, "Blend Mode", "How the final reflections are blended with the original image.", "Blending & Output", false, 0, 6)
+
+uniform int ViewMode <
+    ui_type = "combo";
+    ui_items = "None\0Motion Vectors\0Final Reflection (Upscaled)\0Normals\0Depth\0Raw Low-Res Reflection\0Denoised Low-Res Reflection\0";
+    ui_category = "Debug";
+    ui_label = "Debug View Mode";
+> = 0;
+
+#endif // UI_DIFFICULTY == 0
+
+#if UI_DIFFICULTY == 1 // Advanced Mode
 
 uniform float SPIntensity <
     ui_type = "drag";
@@ -128,36 +215,37 @@ uniform float DepthMultiplier <
     ui_label = "Depth Multiplier";
 > = 1.0;
 
-uniform bool EnableDenoising <
-    ui_category = "Denoising";
-    ui_label = "Enable Denoising";
-    ui_tooltip = "Enables the bilateral upsampling filter to reduce noise and upscale reflections.";
+// --- Denoiser UI ---
+uniform bool bEnableDenoise <
+    ui_category = "Denoiser";
+    ui_type = "checkbox";
+    ui_label = "Enable A-Trous Reflection Denoiser";
+    ui_tooltip = "Enables a spatial filter to denoise reflections before upscaling. This runs on the low-resolution reflections.";
 > = false;
 
-uniform int DenoiseIterations <
+uniform float c_phi <
+    ui_category = "Denoiser";
     ui_type = "slider";
-    ui_min = 1; ui_max = 5;
-    ui_category = "Denoising";
-    ui_label = "Denoise Iterations (Kernel Size)";
-    ui_tooltip = "Number of denoising passes.";
-> = 2;
-
-uniform float DenoiseStrength <
-    ui_type = "drag";
-    ui_min = 0.0; ui_max = 1.0;
-    ui_step = 0.01;
-    ui_category = "Denoising";
-    ui_label = "Denoise Strength";
+    ui_min = 0.01; ui_max = 5.0; ui_step = 0.01;
+    ui_label = "Color Sigma";
+    ui_tooltip = "Controls the influence of color similarity in the denoiser. Lower values consider only very similar colors.";
 > = 1.0;
 
-uniform float DenoiseEdgeThreshold <
-    ui_type = "drag";
-    ui_min = 0.001; ui_max = 0.2;
-    ui_step = 0.001;
-    ui_category = "Denoising";
-    ui_label = "Denoise Edge Threshold";
-    ui_tooltip = "Prevents blurring across edges. Lower values are more sensitive to edges.";
-> = 0.02;
+uniform float n_phi <
+    ui_category = "Denoiser";
+    ui_type = "slider";
+    ui_min = 0.01; ui_max = 5.0; ui_step = 0.01;
+    ui_label = "Normals Sigma";
+    ui_tooltip = "Controls the influence of normal similarity. Lower values restrict filtering to surfaces with similar orientation.";
+> = 1.0;
+
+uniform float p_phi <
+    ui_category = "Denoiser";
+    ui_type = "slider";
+    ui_min = 0.01; ui_max = 10.0; ui_step = 0.01;
+    ui_label = "Position (Depth) Sigma";
+    ui_tooltip = "Controls the influence of world-space position similarity. Lower values restrict filtering to nearby pixels.";
+> = 1.0;
 
 uniform bool EnableTemporal <
     ui_category = "Temporal Filtering";
@@ -195,14 +283,13 @@ uniform bool AssumeSRGB <
     ui_tooltip = "Assumes the input color is in sRGB space and linearizes it. Keep disabled unless you know the game outputs non-linear color.";
 > = false;
 
-uniform float fSSRRenderScale <
+uniform float RenderScale <
     ui_type = "drag";
-    ui_min = 0.1; ui_max = 1.0;
-    ui_step = 0.01;
+    ui_min = 0.1; ui_max = 1.0; ui_step = 0.001;
     ui_category = "Performance & Quality";
     ui_label = "Render Scale";
-    ui_tooltip = "Renders reflections at a lower resolution to improve performance. 0.5 means half resolution.";
-> = 0.8;
+    ui_tooltip = "Renders reflections at a lower resolution for performance. 1.0 is full resolution.";
+> = 1.0;
 
 uniform float ThicknessThreshold <
     ui_type = "drag";
@@ -239,10 +326,12 @@ uniform float VerticalFOV <
 
 uniform int ViewMode <
     ui_type = "combo";
-    ui_items = "None\0Motion Vectors\0Final Reflection\0Normals\0Depth\0Raw Reflection\0Denoised Reflection\0";
+    ui_items = "None\0Motion Vectors\0Final Reflection (Upscaled)\0Normals\0Depth\0Raw Low-Res Reflection\0Denoised Low-Res Reflection\0";
     ui_category = "Debug";
     ui_label = "Debug View Mode";
 > = 0;
+
+#endif // UI_DIFFICULTY == 1
 
 uniform int FRAME_COUNT < source = "framecount"; >;
 
@@ -286,8 +375,9 @@ float2 SampleMotionVectors(float2 texcoord)
 }
 #endif
 
-namespace SSRTNEW
+namespace SSRT_FSR
 {
+    // Main SSR textures
     texture Reflection
     {
         Width = BUFFER_WIDTH;
@@ -299,17 +389,6 @@ namespace SSRTNEW
         Texture = Reflection;
     };
 
-    texture DenoiseTex
-    {
-        Width = BUFFER_WIDTH;
-        Height = BUFFER_HEIGHT;
-        Format = RGBA8;
-    };
-    sampler sDenoiseTex
-    {
-        Texture = DenoiseTex;
-    };
-
     texture Temp
     {
         Width = BUFFER_WIDTH;
@@ -319,6 +398,9 @@ namespace SSRTNEW
     sampler sTemp
     {
         Texture = Temp;
+        MagFilter = POINT;
+        MinFilter = POINT;
+        MipFilter = POINT;
     };
 
     texture History
@@ -332,6 +414,7 @@ namespace SSRTNEW
         Texture = History;
     };
     
+    // G-Buffer textures
     texture TNormal
     {
         Width = BUFFER_WIDTH;
@@ -368,6 +451,40 @@ namespace SSRTNEW
         Texture = NormTex_Pass2;
     };
 
+    // Denoiser textures
+    texture DenoiseTex0
+    {
+        Width = BUFFER_WIDTH;
+        Height = BUFFER_HEIGHT;
+        Format = RGBA8;
+    };
+    sampler sDenoiseTex0
+    {
+        Texture = DenoiseTex0;
+    };
+
+    texture DenoiseTex1
+    {
+        Width = BUFFER_WIDTH;
+        Height = BUFFER_HEIGHT;
+        Format = RGBA8;
+    };
+    sampler sDenoiseTex1
+    {
+        Texture = DenoiseTex1;
+    };
+
+    texture UpscaledReflection
+    {
+        Width = BUFFER_WIDTH;
+        Height = BUFFER_HEIGHT;
+        Format = RGBA8;
+    };
+    sampler sUpscaledReflection
+    {
+        Texture = UpscaledReflection;
+    };
+
     //-----------------|
     // :: Structs     ::|
     //-----------------|
@@ -384,6 +501,16 @@ namespace SSRTNEW
         float3 viewPos;
         float2 uv;
     };
+    
+    // FSR 1.0 Data 
+    struct RectificationBox
+    {
+        float3 boxCenter;
+        float3 boxVec;
+        float3 aabbMin;
+        float3 aabbMax;
+        float fBoxCenterWeight;
+    };
 
     //-------------------|
     // :: Functions     ::|
@@ -396,27 +523,6 @@ namespace SSRTNEW
         float f = 0.06711056 * n.x + 0.00583715 * n.y;
         return frac(52.9829189 * frac(f));
     }
-    
-    //Licence GNU 2 from https://github.com/AlucardDH/dh-reshade-shaders/blob/master/Shaders/dh_uber_rt.fx
-    bool isScaledProcessed(float2 coords)
-    {
-        return coords.x >= 0 && coords.y >= 0 && coords.x <= fSSRRenderScale && coords.y <= fSSRRenderScale;
-    }
-
-    float2 upCoordsSSR(float2 coords)
-    {
-        float2 result = coords / fSSRRenderScale;
-#if !DX9_MODE
-        int random = int(IGN(coords * 1000.0) * 255.0);
-        int steps = ceil(1.0 / fSSRRenderScale);
-        int count = steps * steps;
-        int index = random % count;
-        int2 delta = int2(index / steps, index % steps) - steps / 2;
-        result += delta * ReShade::PixelSize;
-#endif
-        return result;
-    }
-    //End
     
     float3 IGN3dts(float2 texcoord, float HL)
     {
@@ -487,9 +593,11 @@ namespace SSRTNEW
     
     float3 UVToViewPos(float2 uv, float view_z)
     {
-        float2 clip_pos = uv * 2.0 - 1.0;
-        float proj_scale_y = 1.0 / tan(radians(VerticalFOV * 0.5));
+        float fov_rad = VerticalFOV * (PI / 180.0);
+        float proj_scale_y = 1.0 / tan(fov_rad * 0.5);
         float proj_scale_x = proj_scale_y / ReShade::AspectRatio;
+
+        float2 clip_pos = uv * 2.0 - 1.0;
 
         float3 view_pos;
         view_pos.x = clip_pos.x / proj_scale_x * view_z;
@@ -501,7 +609,8 @@ namespace SSRTNEW
 
     float2 ViewPosToUV(float3 view_pos)
     {
-        float proj_scale_y = 1.0 / tan(radians(VerticalFOV * 0.5));
+        float fov_rad = VerticalFOV * (PI / 180.0);
+        float proj_scale_y = 1.0 / tan(fov_rad * 0.5);
         float proj_scale_x = proj_scale_y / ReShade::AspectRatio;
 
         float2 clip_pos;
@@ -615,8 +724,8 @@ namespace SSRTNEW
         float noiseX = frac(sin(dot(uv + FRAME_COUNT * 0.0001, float2(12.9898, 78.233))) * 43758.5453);
         float noiseY = frac(sin(dot(uv + FRAME_COUNT * 0.0001 + 0.1, float2(12.9898, 78.233))) * 43758.5453);
         float noiseZ = frac(sin(dot(uv + FRAME_COUNT * 0.0001 + 0.2, float2(12.9898, 78.233))) * 43758.5453);
-        float3 noise = float3(noiseX, noiseY, noiseZ) * 2.0 - 1.0; 
-        return noise * amount * scale; 
+        float3 noise = float3(noiseX, noiseY, noiseZ) * 2.0 - 1.0;
+        return noise * amount * scale;
     }
     
     HitResult TraceRay(Ray r)
@@ -667,6 +776,34 @@ namespace SSRTNEW
             return result;
         }
         return result;
+    }
+
+    // --- FSR 1.0 ---
+    void RectificationBoxAddSample(inout RectificationBox box, bool bInitialSample, float3 fSample, float fWeight)
+    {
+        if (bInitialSample)
+        {
+            box.boxCenter = fSample * fWeight;
+            box.boxVec = fSample * fSample * fWeight;
+            box.aabbMin = fSample;
+            box.aabbMax = fSample;
+            box.fBoxCenterWeight = fWeight;
+        }
+        else
+        {
+            box.boxCenter += fSample * fWeight;
+            box.boxVec += fSample * fSample * fWeight;
+            box.aabbMin = min(box.aabbMin, fSample);
+            box.aabbMax = max(box.aabbMax, fSample);
+            box.fBoxCenterWeight += fWeight;
+        }
+    }
+
+    void RectificationBoxComputeVarianceBoxData(inout RectificationBox box)
+    {
+        const float fBoxCenterWeightRcp = rcp(max(1e-6, box.fBoxCenterWeight));
+        box.boxCenter *= fBoxCenterWeightRcp;
+        box.boxVec = max(0.0, box.boxVec * fBoxCenterWeightRcp - (box.boxCenter * box.boxCenter));
     }
 
     //--------------------|
@@ -748,24 +885,24 @@ namespace SSRTNEW
     
     void PS_TraceReflections(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outReflection : SV_Target)
     {
-        if (!isScaledProcessed(uv))
+
+        float2 scaled_uv = uv;
+        if (RenderScale < 1.0)
         {
-            outReflection = 0;
-            return;
+            scaled_uv = (floor(uv * BUFFER_SCREEN_SIZE * RenderScale) + 0.5) * rcp(BUFFER_SCREEN_SIZE * RenderScale);
         }
 
-        float2 screen_uv = upCoordsSSR(uv);
-        float depth = GetDepth(screen_uv);
-        float3 viewPos = UVToViewPos(screen_uv, depth);
+        float depth = GetDepth(scaled_uv);
+        float3 viewPos = UVToViewPos(scaled_uv, depth);
         float3 viewDir = -normalize(viewPos);
-        float3 normal = SampleNormal(screen_uv);
+        float3 normal = SampleNormal(scaled_uv);
 
         float3 eyeDir = -viewDir;
         
         Ray r;
         r.origin = viewPos;
 
-        float3 noise = JitterRay(uv, JitterAmount, JitterScale);
+        float3 noise = JitterRay(scaled_uv, JitterAmount, JitterScale);
         float3 raydirG = normalize(reflect(eyeDir, normal));
         float3 raydirR = normalize(noise);
 
@@ -774,7 +911,7 @@ namespace SSRTNEW
 
         if (JitterAmount > 0.0)
         {
-            float3 originJitter = JitterRay(uv, JitterAmount, JitterScale);
+            float3 originJitter = JitterRay(scaled_uv, JitterAmount, JitterScale);
             r.origin += originJitter * ReShade::PixelSize.x;
         }
         
@@ -805,7 +942,7 @@ namespace SSRTNEW
             else
             {
                 float depthFactor = saturate(1.0 - depth / MAX_TRACE_DISTANCE);
-                float vertical_fade = 1.0 - screen_uv.y;
+                float vertical_fade = 1.0 - scaled_uv.y;
                 reflectionColor = fbColor * depthFactor * vertical_fade;
             }
         }
@@ -820,68 +957,15 @@ namespace SSRTNEW
         outReflection = float4(reflectionColor, depth);
     }
 
-    void PS_Denoise(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outDenoised : SV_Target)
-    {
-        if (!EnableDenoising)
-        {
-            outDenoised = tex2Dlod(sReflection, float4(uv * fSSRRenderScale, 0, 0));
-            outDenoised.a = GetDepth(uv);
-            return;
-        }
-
-        float3 centerNormal = SampleNormal(uv);
-        float centerDepth = GetDepth(uv);
-
-        float totalWeight = 0.0;
-        float3 totalColor = 0.0;
-        
-        const int radius = DenoiseIterations;
-
-        for (int y = -radius; y <= radius; y++)
-        {
-            for (int x = -radius; x <= radius; x++)
-            {
-                float2 offset = float2(x, y) * ReShade::PixelSize;
-                float2 sample_uv_full = uv + offset;
-                float2 sample_uv_sparse = sample_uv_full * fSSRRenderScale;
-
-                if (sample_uv_sparse.x > fSSRRenderScale || sample_uv_sparse.y > fSSRRenderScale || any(sample_uv_sparse < 0))
-                    continue;
-
-                float4 sampleData = tex2Dlod(sReflection, float4(sample_uv_sparse, 0, 0));
-                float3 sampleColor = sampleData.rgb;
-                
-                if (dot(sampleColor, sampleColor) < 0.001)
-                    continue;
-
-                float sampleDepth = GetDepth(sample_uv_full);
-                float3 sampleNormal = SampleNormal(sample_uv_full); 
-
-                float depthWeight = saturate(1.0 - abs(centerDepth - sampleDepth) / (DenoiseEdgeThreshold * centerDepth + 0.001));
-                float normalWeight = pow(saturate(dot(centerNormal, sampleNormal)), 32.0);
-                float spaceWeight = 1.0 - saturate(length(offset * 100));
-
-                float weight = depthWeight * normalWeight * spaceWeight * DenoiseStrength;
-
-                totalColor += sampleColor * weight;
-                totalWeight += weight;
-            }
-        }
-
-        if (totalWeight > 0.0)
-        {
-            outDenoised = float4(totalColor / totalWeight, centerDepth);
-        }
-        else
-        {
-            outDenoised = tex2Dlod(sReflection, float4(uv * fSSRRenderScale, 0, 0));
-            outDenoised.a = centerDepth;
-        }
-    }
-
     void PS_Accumulate(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outBlended : SV_Target)
     {
-        float3 currentSpec = tex2Dlod(sDenoiseTex, float4(uv, 0, 0)).rgb;
+        float2 scaled_uv = uv;
+        if (RenderScale < 1.0)
+        {
+            scaled_uv = (floor(uv * BUFFER_SCREEN_SIZE * RenderScale) + 0.5) * rcp(BUFFER_SCREEN_SIZE * RenderScale);
+        }
+
+        float3 currentSpec = tex2Dlod(sReflection, float4(scaled_uv, 0, 0)).rgb;
 
         if (!EnableTemporal)
         {
@@ -889,15 +973,15 @@ namespace SSRTNEW
             return;
         }
 
-        float2 motion = SampleMotionVectors(uv);
-        float2 reprojected_uv = uv + motion;
+        float2 motion = SampleMotionVectors(scaled_uv);
+        float2 reprojected_uv = scaled_uv + motion;
 
-        float currentDepth = GetDepth(uv);
+        float currentDepth = GetDepth(scaled_uv);
         float historyDepth = GetDepth(reprojected_uv);
 
         bool validHistory = all(saturate(reprojected_uv) == reprojected_uv) &&
-                                      FRAME_COUNT > 1 &&
-                                      abs(historyDepth - currentDepth) < 0.01;
+                                          FRAME_COUNT > 1 &&
+                                          abs(historyDepth - currentDepth) < 0.01;
 
         float3 blendedSpec = currentSpec;
         if (validHistory)
@@ -912,8 +996,9 @@ namespace SSRTNEW
                 {
                     if (x == 0 && y == 0)
                         continue;
-                    float2 neighbor_uv = uv + float2(x, y) * ReShade::PixelSize;
-                    float3 neighborSpec = RGBToYCoCg(tex2Dlod(sDenoiseTex, float4(neighbor_uv, 0, 0)).rgb);
+                    
+                    float2 neighbor_uv = scaled_uv + float2(x, y) * rcp(BUFFER_SCREEN_SIZE * RenderScale);
+                    float3 neighborSpec = RGBToYCoCg(tex2Dlod(sReflection, float4(neighbor_uv, 0, 0)).rgb);
                     minBox = min(minBox, neighborSpec);
                     maxBox = max(maxBox, neighborSpec);
                 }
@@ -932,6 +1017,159 @@ namespace SSRTNEW
         outHistory = tex2Dlod(sTemp, float4(uv, 0, 0));
     }
 
+    float4 PS_DenoisePass(float4 vpos : SV_Position, float2 texcoord : TEXCOORD, int level, sampler input_sampler)
+    {
+        float2 scaled_uv = texcoord;
+        if (RenderScale < 1.0)
+        {
+            scaled_uv = (floor(texcoord * BUFFER_SCREEN_SIZE * RenderScale) + 0.5) * rcp(BUFFER_SCREEN_SIZE * RenderScale);
+        }
+
+        float4 center_color = tex2Dlod(input_sampler, float4(scaled_uv, 0.0, 0.0));
+        
+        float center_depth = GetDepth(scaled_uv);
+        
+        if (center_depth / FAR_PLANE >= 0.999)
+            return center_color;
+
+        float3 center_normal = SampleNormal(scaled_uv);
+        float3 center_pos = UVToViewPos(scaled_uv, center_depth);
+
+        float4 sum = 0.0;
+        float cum_w = 0.0;
+        
+        const float2 step_size = rcp(BUFFER_SCREEN_SIZE * RenderScale) * exp2(level);
+
+        static const float2 atrous_offsets[9] =
+        {
+            float2(-1, -1), float2(0, -1), float2(1, -1),
+            float2(-1, 0), float2(0, 0), float2(1, 0),
+            float2(-1, 1), float2(0, 1), float2(1, 1)
+        };
+
+        [loop]
+        for (int i = 0; i < 9; i++)
+        {
+            const float2 uv = scaled_uv + atrous_offsets[i] * step_size;
+
+            const float4 sample_color = tex2Dlod(input_sampler, float4(uv, 0.0, 0.0));
+            const float sample_depth = GetDepth(uv);
+
+            if (sample_depth / FAR_PLANE >= 0.999)
+                continue;
+
+            const float3 sample_normal = SampleNormal(uv);
+            const float3 sample_pos = UVToViewPos(uv, sample_depth);
+            
+            float diff_c = distance(center_color.rgb, sample_color.rgb);
+            float w_c = exp(-(diff_c * diff_c) / c_phi);
+            
+            float diff_n = dot(center_normal, sample_normal);
+            float w_n = pow(saturate(diff_n), n_phi);
+            
+            float diff_p = distance(center_pos, sample_pos);
+            float w_p = exp(-(diff_p * diff_p) / p_phi);
+
+            const float weight = w_c * w_n * w_p;
+
+            sum += sample_color * weight;
+            cum_w += weight;
+        }
+
+        return cum_w > 1e-6 ? (sum / cum_w) : center_color;
+    }
+
+    float4 PS_DenoisePass0(float4 vpos : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
+    {
+        if (!bEnableDenoise || RenderScale >= 1.0)
+            return tex2D(sTemp, texcoord);
+        return PS_DenoisePass(vpos, texcoord, 0, sTemp);
+    }
+
+    float4 PS_DenoisePass1(float4 vpos : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
+    {
+        if (!bEnableDenoise || RenderScale >= 1.0)
+            return tex2D(sDenoiseTex0, texcoord);
+        return PS_DenoisePass(vpos, texcoord, 1, sDenoiseTex0);
+    }
+
+    float4 PS_DenoisePass2(float4 vpos : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
+    {
+        if (!bEnableDenoise || RenderScale >= 1.0)
+            return tex2D(sDenoiseTex1, texcoord);
+        return PS_DenoisePass(vpos, texcoord, 2, sDenoiseTex1);
+    }
+
+    void PS_Upscale_FSR(float4 vpos : SV_Position, float2 uv : TEXCOORD, out float4 outColor : SV_Target)
+    {
+        if (RenderScale >= 1.0)
+        {
+            outColor = tex2Dlod(sTemp, float4(uv, 0, 0));
+            return;
+        }
+
+        const float2 fDownscaleFactor = float2(RenderScale, RenderScale);
+        const float2 fRenderSize = BUFFER_SCREEN_SIZE * fDownscaleFactor;
+
+        const float2 fDstOutputPos = uv * BUFFER_SCREEN_SIZE + 0.5f;
+        const float2 fSrcOutputPos = fDstOutputPos * fDownscaleFactor;
+        const int2 iSrcInputPos = int2(floor(fSrcOutputPos));
+        
+        const float2 fSrcUnjitteredPos = (float2(iSrcInputPos) + 0.5f);
+        const float2 fBaseSampleOffset = fSrcUnjitteredPos - fSrcOutputPos;
+
+        int2 offsetTL;
+        offsetTL.x = (fSrcUnjitteredPos.x > fSrcOutputPos.x) ? -2 : -1;
+        offsetTL.y = (fSrcUnjitteredPos.y > fSrcOutputPos.y) ? -2 : -1;
+
+        const bool bFlipCol = fSrcUnjitteredPos.x > fSrcOutputPos.x;
+        const bool bFlipRow = fSrcUnjitteredPos.y > fSrcOutputPos.y;
+
+        RectificationBox clippingBox;
+        float3 fSamples[9];
+        int iSampleIndex = 0;
+
+        for (int row = 0; row < 3; row++)
+        {
+            for (int col = 0; col < 3; col++)
+            {
+                const int2 sampleColRow = int2(bFlipCol ? (2 - col) : col, bFlipRow ? (2 - row) : row);
+                const int2 iSrcSamplePos = iSrcInputPos + offsetTL + sampleColRow;
+                
+                const float2 sample_uv = (iSrcSamplePos + 0.5) * rcp(fRenderSize);
+                
+                float3 s = tex2Dlod(sTemp, float4(sample_uv, 0, 0)).rgb;
+                fSamples[iSampleIndex] = RGBToYCoCg(s);
+                iSampleIndex++;
+            }
+        }
+
+        iSampleIndex = 0;
+        for (int row = 0; row < 3; row++)
+        {
+            for (int col = 0; col < 3; col++)
+            {
+                const int2 sampleColRow = int2(bFlipCol ? (2 - col) : col, bFlipRow ? (2 - row) : row);
+                const float2 fOffset = (float2) offsetTL + (float2) sampleColRow;
+                const float2 fSrcSampleOffset = fBaseSampleOffset + fOffset;
+
+                const float fRectificationCurveBias = -2.3f;
+                const float fSrcSampleOffsetSq = dot(fSrcSampleOffset, fSrcSampleOffset);
+                const float fBoxSampleWeight = exp(fRectificationCurveBias * fSrcSampleOffsetSq);
+
+                const bool bInitialSample = (row == 0) && (col == 0);
+                RectificationBoxAddSample(clippingBox, bInitialSample, fSamples[iSampleIndex], fBoxSampleWeight);
+                iSampleIndex++;
+            }
+        }
+        
+        RectificationBoxComputeVarianceBoxData(clippingBox);
+
+        float3 finalColorYCoCg = clippingBox.boxCenter;
+        outColor.rgb = YCoCgToRGB(finalColorYCoCg);
+        outColor.a = 1.0;
+    }
+
     void PS_Output(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outColor : SV_Target)
     {
         if (ViewMode != 0)
@@ -945,8 +1183,8 @@ namespace SSRTNEW
                     float3 hsv = float3((angle / PI2) + 0.5, 1.0, saturate(velocity));
                     outColor = float4(HSVToRGB(hsv), 1.0);
                     return;
-                case 2: // Final Reflection
-                    outColor = float4(tex2Dlod(sTemp, float4(uv, 0, 0)).rgb, 1.0);
+                case 2: // Final Reflection (Upscaled)
+                    outColor = float4(tex2Dlod(sUpscaledReflection, float4(uv, 0, 0)).rgb, 1.0);
                     return;
                 case 3: // Normals
                     outColor = float4(SampleNormal(uv) * 0.5 + 0.5, 1.0);
@@ -954,17 +1192,17 @@ namespace SSRTNEW
                 case 4: // Depth
                     outColor = GetDepth(uv).xxxx;
                     return;
-                case 5: // Raw Reflection
-                    outColor = float4(tex2Dlod(sReflection, float4(uv * fSSRRenderScale, 0, 0)).rgb, 1.0);
+                case 5: // Raw Low-Res Reflection
+                    outColor = float4(tex2Dlod(sReflection, float4(uv, 0, 0)).rgb, 1.0);
                     return;
-                case 6: // Denoised Reflection
-                    outColor = float4(tex2Dlod(sDenoiseTex, float4(uv, 0, 0)).rgb, 1.0);
+                case 6: // Denoised Low-Res Reflection
+                    outColor = float4(tex2Dlod(sTemp, float4(uv, 0, 0)).rgb, 1.0);
                     return;
             }
         }
 
         float3 originalColor = tex2Dlod(ReShade::BackBuffer, float4(uv, 0, 0)).rgb;
-        float3 specularGI = tex2Dlod(sTemp, float4(uv, 0, 0)).rgb;
+        float3 specularGI = tex2Dlod(sUpscaledReflection, float4(uv, 0, 0)).rgb;
 
         specularGI *= Adjustments.y; // Exposure
         if (AssumeSRGB)
@@ -994,7 +1232,7 @@ namespace SSRTNEW
     }
 
 //-------------------|
-// :: Technique     ::|
+// :: Technique    ::|
 //-------------------|
     technique Barbatos_SSR
     {
@@ -1029,12 +1267,6 @@ namespace SSRTNEW
             RenderTarget = Reflection;
             ClearRenderTargets = true;
         }
-        pass Denoise
-        {
-            VertexShader = PostProcessVS;
-            PixelShader = PS_Denoise;
-            RenderTarget = DenoiseTex;
-        }
         pass Accumulate
         {
             VertexShader = PostProcessVS;
@@ -1046,6 +1278,30 @@ namespace SSRTNEW
             VertexShader = PostProcessVS;
             PixelShader = PS_UpdateHistory;
             RenderTarget = History;
+        }
+        pass DenoisePass0
+        {
+            VertexShader = PostProcessVS;
+            PixelShader = PS_DenoisePass0;
+            RenderTarget = DenoiseTex0;
+        }
+        pass DenoisePass1
+        {
+            VertexShader = PostProcessVS;
+            PixelShader = PS_DenoisePass1;
+            RenderTarget = DenoiseTex1;
+        }
+        pass DenoisePass2
+        {
+            VertexShader = PostProcessVS;
+            PixelShader = PS_DenoisePass2;
+            RenderTarget = Temp;
+        }
+        pass Upscale_FSR
+        {
+            VertexShader = PostProcessVS;
+            PixelShader = PS_Upscale_FSR;
+            RenderTarget = UpscaledReflection;
         }
         pass Output
         {
