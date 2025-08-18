@@ -24,7 +24,7 @@ THE SOFTWARE.
 
     Barbatos SSR
 
-    Version: 0.2.0
+    Version: 0.2.1 
     Author: Barbatos Bachiko
     Original SSRT by jebbyk: https://github.com/jebbyk/SSRT-for-reshade/
 
@@ -73,11 +73,9 @@ static const int REFINEMENT_STEPS = 5;
 #define FadeStart 0.0
 #define SmoothMode 2
 #define Smooth_Threshold 0.5
-#define BumpIntensity 0.4
 #define GeoCorrectionIntensity -0.01
 #define DepthMultiplier 1.0
 #define EnableTemporal true
-#define AccumFramesSG 4.0
 #define Adjustments float3(1.5, 1.0, 1.1)
 #define EnableACES false
 #define AssumeSRGB false
@@ -85,7 +83,7 @@ static const int REFINEMENT_STEPS = 5;
 #define JitterAmount 0.01
 #define JitterScale 0.1
 #define VerticalFOV 37.0
-#define bEnableDenoise false
+#define Roughness 0.0
 #define c_phi 1.0
 #define n_phi 1.0
 #define p_phi 1.0
@@ -97,13 +95,6 @@ uniform float SPIntensity <
     ui_label = "Intensity";
 > = 1.1;
 
-uniform float Roughness <
-    ui_type = "drag";
-    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
-    ui_category = "Reflection Settings";
-    ui_label = "Roughness";
-> = 0.0;  
-
 uniform float FadeEnd <
     ui_type = "drag";
     ui_min = 0.0; ui_max = 5.0; ui_step = 0.010;
@@ -111,13 +102,36 @@ uniform float FadeEnd <
     ui_label = "Fade Distance";
 > = 4.999;
 
+uniform float BumpIntensity <
+    ui_label = "Bump Mapping Intensity";
+    ui_type = "drag";
+    ui_category = "Surface & Normals";
+    ui_min = 0.0; ui_max = 1.0;
+> = 0.4;
+
 uniform float RenderScale <
     ui_type = "drag";
     ui_min = 0.1; ui_max = 1.0; ui_step = 0.01;
     ui_category = "Performance & Quality";
     ui_label = "Render Scale";
     ui_tooltip = "Renders reflections at a lower resolution for performance, then upscales using FSR 1.0.";
-> = 1.0;
+> = 0.8;
+
+
+uniform bool bEnableDenoise <
+    ui_category = "Denoiser";
+    ui_type = "checkbox";
+    ui_label = "Enable A-Trous Denoiser";
+> = false;
+
+uniform float AccumFramesSG <
+    ui_type = "slider";
+    ui_min = 1.0; ui_max = 32.0;
+    ui_step = 1.0;
+    ui_category = "Temporal Filtering";
+    ui_label = "Temporal Accumulation Frames";
+    ui_tooltip = "Number of frames to accumulate. Higher values are smoother but may cause more ghosting on moving objects.";
+> = 4.0;
 
 BLENDING_COMBO(BlendMode, "Blend Mode", "How the final reflections are blended with the original image.", "Blending & Output", false, 0, 6)
 
@@ -216,32 +230,31 @@ uniform float DepthMultiplier <
 > = 1.0;
 
 // --- Denoiser UI ---
-uniform bool bEnableDenoise <
+uniform bool bEnableDenoise  <
     ui_category = "Denoiser";
     ui_type = "checkbox";
-    ui_label = "Enable A-Trous Reflection Denoiser";
-    ui_tooltip = "Enables a spatial filter to denoise reflections before upscaling. This runs on the low-resolution reflections.";
+    ui_label = "Enable A-Trous Denoiser";
 > = false;
 
 uniform float c_phi <
     ui_category = "Denoiser";
-    ui_type = "slider";
+    ui_type = "drag";
     ui_min = 0.01; ui_max = 5.0; ui_step = 0.01;
     ui_label = "Color Sigma";
     ui_tooltip = "Controls the influence of color similarity in the denoiser. Lower values consider only very similar colors.";
-> = 1.0;
+> = 0.01;
 
 uniform float n_phi <
     ui_category = "Denoiser";
-    ui_type = "slider";
+    ui_type = "drag";
     ui_min = 0.01; ui_max = 5.0; ui_step = 0.01;
     ui_label = "Normals Sigma";
     ui_tooltip = "Controls the influence of normal similarity. Lower values restrict filtering to surfaces with similar orientation.";
-> = 1.0;
+> = 5.0;
 
 uniform float p_phi <
     ui_category = "Denoiser";
-    ui_type = "slider";
+    ui_type = "drag";
     ui_min = 0.01; ui_max = 10.0; ui_step = 0.01;
     ui_label = "Position (Depth) Sigma";
     ui_tooltip = "Controls the influence of world-space position similarity. Lower values restrict filtering to nearby pixels.";
@@ -289,7 +302,7 @@ uniform float RenderScale <
     ui_category = "Performance & Quality";
     ui_label = "Render Scale";
     ui_tooltip = "Renders reflections at a lower resolution for performance. 1.0 is full resolution.";
-> = 1.0;
+> = 0.8;
 
 uniform float ThicknessThreshold <
     ui_type = "drag";
@@ -885,12 +898,13 @@ namespace SSRT_FSR
     
     void PS_TraceReflections(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outReflection : SV_Target)
     {
-
-        float2 scaled_uv = uv;
-        if (RenderScale < 1.0)
+        if (any(uv > RenderScale))
         {
-            scaled_uv = (floor(uv * BUFFER_SCREEN_SIZE * RenderScale) + 0.5) * rcp(BUFFER_SCREEN_SIZE * RenderScale);
+            outReflection = 0;
+            return;
         }
+
+        float2 scaled_uv = uv / RenderScale;
 
         float depth = GetDepth(scaled_uv);
         float3 viewPos = UVToViewPos(scaled_uv, depth);
@@ -959,34 +973,38 @@ namespace SSRT_FSR
 
     void PS_Accumulate(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outBlended : SV_Target)
     {
-        float2 scaled_uv = uv;
-        if (RenderScale < 1.0)
+        if (any(uv > RenderScale))
         {
-            scaled_uv = (floor(uv * BUFFER_SCREEN_SIZE * RenderScale) + 0.5) * rcp(BUFFER_SCREEN_SIZE * RenderScale);
+            outBlended = 0;
+            return;
         }
 
-        float3 currentSpec = tex2Dlod(sReflection, float4(scaled_uv, 0, 0)).rgb;
+        float3 currentSpec = tex2Dlod(sReflection, float4(uv, 0, 0)).rgb;
 
         if (!EnableTemporal)
         {
             outBlended = float4(currentSpec, 1.0);
             return;
         }
+        
+        float2 full_res_uv = uv / RenderScale;
+        
+        float2 motion = SampleMotionVectors(full_res_uv);
+        float2 reprojected_uv_full = full_res_uv + motion;
 
-        float2 motion = SampleMotionVectors(scaled_uv);
-        float2 reprojected_uv = scaled_uv + motion;
+        float currentDepth = GetDepth(full_res_uv);
+        float historyDepth = GetDepth(reprojected_uv_full);
 
-        float currentDepth = GetDepth(scaled_uv);
-        float historyDepth = GetDepth(reprojected_uv);
+        float2 reprojected_uv_low = reprojected_uv_full * RenderScale;
 
-        bool validHistory = all(saturate(reprojected_uv) == reprojected_uv) &&
-                                          FRAME_COUNT > 1 &&
-                                          abs(historyDepth - currentDepth) < 0.01;
+        bool validHistory = all(saturate(reprojected_uv_low) == reprojected_uv_low) &&
+                            FRAME_COUNT > 1 &&
+                            abs(historyDepth - currentDepth) < 0.01;
 
         float3 blendedSpec = currentSpec;
         if (validHistory)
         {
-            float3 historySpec = tex2Dlod(sHistory, float4(reprojected_uv, 0, 0)).rgb;
+            float3 historySpec = tex2Dlod(sHistory, float4(reprojected_uv_low, 0, 0)).rgb;
 
             float3 minBox = RGBToYCoCg(currentSpec), maxBox = minBox;
             [unroll]
@@ -997,7 +1015,7 @@ namespace SSRT_FSR
                     if (x == 0 && y == 0)
                         continue;
                     
-                    float2 neighbor_uv = scaled_uv + float2(x, y) * rcp(BUFFER_SCREEN_SIZE * RenderScale);
+                    float2 neighbor_uv = uv + float2(x, y) * ReShade::PixelSize;
                     float3 neighborSpec = RGBToYCoCg(tex2Dlod(sReflection, float4(neighbor_uv, 0, 0)).rgb);
                     minBox = min(minBox, neighborSpec);
                     maxBox = max(maxBox, neighborSpec);
@@ -1017,28 +1035,28 @@ namespace SSRT_FSR
         outHistory = tex2Dlod(sTemp, float4(uv, 0, 0));
     }
 
-    float4 PS_DenoisePass(float4 vpos : SV_Position, float2 texcoord : TEXCOORD, int level, sampler input_sampler)
+    float4 PS_DenoisePass(float4 vpos : SV_Position, float2 uv : TEXCOORD, int level, sampler input_sampler)
     {
-        float2 scaled_uv = texcoord;
-        if (RenderScale < 1.0)
+        if (any(uv > RenderScale))
         {
-            scaled_uv = (floor(texcoord * BUFFER_SCREEN_SIZE * RenderScale) + 0.5) * rcp(BUFFER_SCREEN_SIZE * RenderScale);
+            return tex2Dlod(input_sampler, float4(uv, 0.0, 0.0));
         }
 
-        float4 center_color = tex2Dlod(input_sampler, float4(scaled_uv, 0.0, 0.0));
+        float4 center_color = tex2Dlod(input_sampler, float4(uv, 0.0, 0.0));
         
-        float center_depth = GetDepth(scaled_uv);
+        float2 full_res_uv = uv / RenderScale;
+        float center_depth = GetDepth(full_res_uv);
         
         if (center_depth / FAR_PLANE >= 0.999)
             return center_color;
 
-        float3 center_normal = SampleNormal(scaled_uv);
-        float3 center_pos = UVToViewPos(scaled_uv, center_depth);
+        float3 center_normal = SampleNormal(full_res_uv);
+        float3 center_pos = UVToViewPos(full_res_uv, center_depth);
 
         float4 sum = 0.0;
         float cum_w = 0.0;
         
-        const float2 step_size = rcp(BUFFER_SCREEN_SIZE * RenderScale) * exp2(level);
+        const float2 step_size = ReShade::PixelSize * exp2(level);
 
         static const float2 atrous_offsets[9] =
         {
@@ -1050,16 +1068,21 @@ namespace SSRT_FSR
         [loop]
         for (int i = 0; i < 9; i++)
         {
-            const float2 uv = scaled_uv + atrous_offsets[i] * step_size;
+            const float2 neighbor_uv_low = uv + atrous_offsets[i] * step_size;
 
-            const float4 sample_color = tex2Dlod(input_sampler, float4(uv, 0.0, 0.0));
-            const float sample_depth = GetDepth(uv);
+            if (any(neighbor_uv_low < 0.0) || any(neighbor_uv_low > RenderScale))
+                continue;
+
+            const float4 sample_color = tex2Dlod(input_sampler, float4(neighbor_uv_low, 0.0, 0.0));
+            
+            const float2 neighbor_uv_full = neighbor_uv_low / RenderScale;
+            const float sample_depth = GetDepth(neighbor_uv_full);
 
             if (sample_depth / FAR_PLANE >= 0.999)
                 continue;
 
-            const float3 sample_normal = SampleNormal(uv);
-            const float3 sample_pos = UVToViewPos(uv, sample_depth);
+            const float3 sample_normal = SampleNormal(neighbor_uv_full);
+            const float3 sample_pos = UVToViewPos(neighbor_uv_full, sample_depth);
             
             float diff_c = distance(center_color.rgb, sample_color.rgb);
             float w_c = exp(-(diff_c * diff_c) / c_phi);
@@ -1136,7 +1159,7 @@ namespace SSRT_FSR
                 const int2 sampleColRow = int2(bFlipCol ? (2 - col) : col, bFlipRow ? (2 - row) : row);
                 const int2 iSrcSamplePos = iSrcInputPos + offsetTL + sampleColRow;
                 
-                const float2 sample_uv = (iSrcSamplePos + 0.5) * rcp(fRenderSize);
+                const float2 sample_uv = ((iSrcSamplePos + 0.5) * rcp(fRenderSize)) * RenderScale;
                 
                 float3 s = tex2Dlod(sTemp, float4(sample_uv, 0, 0)).rgb;
                 fSamples[iSampleIndex] = RGBToYCoCg(s);
@@ -1232,7 +1255,7 @@ namespace SSRT_FSR
     }
 
 //-------------------|
-// :: Technique    ::|
+// :: Technique     ::|
 //-------------------|
     technique Barbatos_SSR
     {
