@@ -1136,7 +1136,7 @@ namespace NEOGTAO
         return originalColor;
     }
 
-    technique XeGTAO_FRS < ui_tooltip = "XeGTAO with FSR 1.0 Upscaling for improved performance."; >
+    technique XeGTAO
     {
         pass NormalPass
         {
