@@ -1,3 +1,25 @@
+/*
+    FSR code is derived from the FidelityFX SDK, provided under the MIT license.
+    Copyright (C) 2024 Advanced Micro Devices, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files(the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and /or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions :
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Copyright (C) 2016-2021, Intel Corporation
 //
@@ -12,19 +34,20 @@
 //
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // SmoothNormals from https://github.com/AlucardDH/dh-reshade-shaders-mit/blob/master/smoothNormals.fx
+// SmoothNormals from https://github.com/AlucardDH/dh-reshade-shaders-mit/blob/master/smoothNormals.fx
 /*------------------.
 | :: Description :: |
 '-------------------/
 
     XeGTAO
-    Version 1.0.2
+    Version 1.1
     Author: Barbatos
 
     History:
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
 
-    Version 1.0.2
-    x Replaced bitwise operations with arithmetic equivalents for DirectX 9 (ps_3_0) compatibility.
+    Version 1.1
+    * Res scale
 */
 
 #include "ReShade.fxh"
@@ -36,12 +59,6 @@
 #ifndef USE_VORT_MOTION
 #define USE_VORT_MOTION 0
 #endif
-
-#ifndef RENDER_SCALE
-#define RENDER_SCALE 1.0
-#endif
-#define RES_WIDTH  (BUFFER_WIDTH  * RENDER_SCALE)
-#define RES_HEIGHT (BUFFER_HEIGHT * RENDER_SCALE)
 
 #define half min16float
 #define half2 min16float2
@@ -73,7 +90,6 @@
 #define RadiusMultiplier         1.0
 #define FinalValuePower          0.8
 #define FalloffRange             0.01
-#define RenderScale              1.0
 #define SampleDistributionPower  1.0
 #define ThinOccluderCompensation 0.0
 #define ComputeBentNormals       false
@@ -90,6 +106,14 @@ uniform float Intensity <
     ui_type = "drag";
     ui_label = "AO Intensity";
     ui_min = 0.0; ui_max = 2.0; ui_step = 0.01;
+> = 1.0;
+
+uniform float RenderScale <
+    ui_category = "General";
+    ui_label = "Render Scale";
+    ui_tooltip = "Renders the effect at a lower resolution for performance, then upscales using FSR 1.0.";
+    ui_type = "drag";
+    ui_min = 0.5; ui_max = 1.0; ui_step = 0.01;
 > = 1.0;
 
 uniform int QualityLevel <
@@ -126,7 +150,7 @@ uniform float TemporalAccumulationFrames <
 uniform int ViewMode <
     ui_type = "combo";
     ui_label = "View Mode";
-    ui_items = "Normal\0Normals\0View-Space Depth\0Raw AO\0Denoised AO\0";
+    ui_items = "Normal\0Normals\0View-Space Depth\0Raw AO\0Denoised AO\0Upscaled AO\0";
     ui_tooltip = "Selects the debug view mode.";
 > = 0;
 
@@ -288,8 +312,8 @@ namespace NEOGTAO
 {
     texture normalTex
     {
-        Width = RES_WIDTH;
-        Height = RES_HEIGHT;
+        Width = BUFFER_WIDTH;
+        Height = BUFFER_HEIGHT;
         Format = RGBA16F;
     };
     sampler sNormal
@@ -299,8 +323,8 @@ namespace NEOGTAO
 
     texture ViewDepthTex
     {
-        Width = RES_WIDTH;
-        Height = RES_HEIGHT;
+        Width = BUFFER_WIDTH;
+        Height = BUFFER_HEIGHT;
         Format = R32F;
     };
     sampler sViewDepthTex
@@ -310,8 +334,8 @@ namespace NEOGTAO
 
     texture AOTermTex
     {
-        Width = RES_WIDTH;
-        Height = RES_HEIGHT;
+        Width = BUFFER_WIDTH;
+        Height = BUFFER_HEIGHT;
         Format = RGBA8;
     };
     sampler sAOTermTex
@@ -321,8 +345,8 @@ namespace NEOGTAO
 
     texture AccumulatedAOTex
     {
-        Width = RES_WIDTH;
-        Height = RES_HEIGHT;
+        Width = BUFFER_WIDTH;
+        Height = BUFFER_HEIGHT;
         Format = RGBA8;
     };
     sampler sAccumulatedAOTex
@@ -332,8 +356,8 @@ namespace NEOGTAO
 
     texture HistoryTex
     {
-        Width = RES_WIDTH;
-        Height = RES_HEIGHT;
+        Width = BUFFER_WIDTH;
+        Height = BUFFER_HEIGHT;
         Format = RGBA8;
         MipLevels = 1;
     };
@@ -345,8 +369,8 @@ namespace NEOGTAO
     // Denoiser Textures
     texture DenoiseInputTex
     {
-        Width = RES_WIDTH;
-        Height = RES_HEIGHT;
+        Width = BUFFER_WIDTH;
+        Height = BUFFER_HEIGHT;
         Format = R16F;
     };
     sampler sDenoiseInputTex
@@ -356,8 +380,8 @@ namespace NEOGTAO
 
     texture DenoiseTex0
     {
-        Width = RES_WIDTH;
-        Height = RES_HEIGHT;
+        Width = BUFFER_WIDTH;
+        Height = BUFFER_HEIGHT;
         Format = R16F;
     };
     sampler sDenoiseTex0
@@ -367,8 +391,8 @@ namespace NEOGTAO
 
     texture DenoiseTex1
     {
-        Width = RES_WIDTH;
-        Height = RES_HEIGHT;
+        Width = BUFFER_WIDTH;
+        Height = BUFFER_HEIGHT;
         Format = R16F;
     };
     sampler sDenoiseTex1
@@ -376,10 +400,60 @@ namespace NEOGTAO
         Texture = DenoiseTex1;S_LC
     };
 
+    // Upscaling Texture
+    texture UpscaledAOTex
+    {
+        Width = BUFFER_WIDTH;
+        Height = BUFFER_HEIGHT;
+        Format = R16F;
+    };
+    sampler sUpscaledAOTex
+    {
+        Texture = UpscaledAOTex;S_LC
+    };
+
 
 /*----------------.
 | :: Functions :: |
 '----------------*/
+
+    // FSR 1.0 Data Structures (adapted for a single float channel)
+    struct RectificationBox
+    {
+        float boxCenter;
+        float boxVec;
+        float aabbMin;
+        float aabbMax;
+        float fBoxCenterWeight;
+    };
+
+    void RectificationBoxAddSample(inout RectificationBox box, bool bInitialSample, float fSample, float fWeight)
+    {
+        if (bInitialSample)
+        {
+            box.boxCenter = fSample * fWeight;
+            box.boxVec = fSample * fSample * fWeight;
+            box.aabbMin = fSample;
+            box.aabbMax = fSample;
+            box.fBoxCenterWeight = fWeight;
+        }
+        else
+        {
+            box.boxCenter += fSample * fWeight;
+            box.boxVec += fSample * fSample * fWeight;
+            box.aabbMin = min(box.aabbMin, fSample);
+            box.aabbMax = max(box.aabbMax, fSample);
+            box.fBoxCenterWeight += fWeight;
+        }
+    }
+
+    void RectificationBoxComputeVarianceBoxData(inout RectificationBox box)
+    {
+        const float fBoxCenterWeightRcp = rcp(max(1e-6, box.fBoxCenterWeight));
+        box.boxCenter *= fBoxCenterWeightRcp;
+        box.boxVec = max(0.0, box.boxVec * fBoxCenterWeightRcp - (box.boxCenter * box.boxCenter));
+    }
+
 
     float xy2hilbert6(float x, float y)
     {
@@ -512,9 +586,12 @@ namespace NEOGTAO
     void XeGTAO_DecodeVisibilityBentNormal(const float packedValue, out half visibility, out half3 bentNormal)
     {
         float val = packedValue;
-        float r = fmod(val, 256.0); val = floor(val / 256.0);
-        float g = fmod(val, 256.0); val = floor(val / 256.0);
-        float b = fmod(val, 256.0); val = floor(val / 256.0);
+        float r = fmod(val, 256.0);
+        val = floor(val / 256.0);
+        float g = fmod(val, 256.0);
+        val = floor(val / 256.0);
+        float b = fmod(val, 256.0);
+        val = floor(val / 256.0);
         float a = fmod(val, 256.0);
         
         half4 decoded = half4(r, g, b, a) / 255.0;
@@ -530,9 +607,12 @@ namespace NEOGTAO
     
     float4 ReconstructFloat4(float val)
     {
-        float r = fmod(val, 256.0); val = floor(val / 256.0);
-        float g = fmod(val, 256.0); val = floor(val / 256.0);
-        float b = fmod(val, 256.0); val = floor(val / 256.0);
+        float r = fmod(val, 256.0);
+        val = floor(val / 256.0);
+        float g = fmod(val, 256.0);
+        val = floor(val / 256.0);
+        float b = fmod(val, 256.0);
+        val = floor(val / 256.0);
         float a = fmod(val, 256.0);
         return float4(r, g, b, a) / 255.0;
     }
@@ -574,28 +654,41 @@ namespace NEOGTAO
         float2(-1, 1), float2(0, 1), float2(1, 1)
     };
 
-    float atrous(sampler input_sampler, float2 texcoord, float level, float center_depth, float3 center_normal)
+    float atrous_refactored(sampler input_sampler, float2 texcoord, float level)
     {
         float sum = 0.0;
         float cum_w = 0.0;
         const float2 step_size = ReShade::PixelSize * exp2(level);
 
         float center_ao = tex2Dlod(input_sampler, float4(texcoord, 0.0, 0.0)).r;
-        float3 center_pos = GetViewPosFromDepth(texcoord, center_depth * DepthMultiplier);
+        
+        float2 center_full_res_uv = texcoord / RenderScale;
+        float center_depth = tex2Dlod(sViewDepthTex, float4(center_full_res_uv, 0.0, 0.0)).r;
+        
+        if (center_depth / RESHADE_DEPTH_LINEARIZATION_FAR_PLANE >= DepthThreshold)
+            return center_ao;
+
+        float3 center_normal = tex2Dlod(sNormal, float4(center_full_res_uv, 0.0, 0.0)).xyz * 2.0 - 1.0;
+        float3 center_pos = GetViewPosFromDepth(center_full_res_uv, center_depth);
 
         [loop]
         for (int i = 0; i < 9; i++)
         {
-            const float2 uv = texcoord + atrous_offsets[i] * step_size;
+            const float2 uv_low = texcoord + atrous_offsets[i] * step_size;
 
-            const float sample_ao = tex2Dlod(input_sampler, float4(uv, 0.0, 0.0)).r;
-            const float sample_depth = tex2Dlod(sViewDepthTex, float4(uv, 0.0, 0.0)).r;
+            if (any(uv_low < 0.0) || any(uv_low > RenderScale))
+                continue;
+
+            const float sample_ao = tex2Dlod(input_sampler, float4(uv_low, 0.0, 0.0)).r;
+            
+            const float2 sample_full_res_uv = uv_low / RenderScale;
+            const float sample_depth = tex2Dlod(sViewDepthTex, float4(sample_full_res_uv, 0.0, 0.0)).r;
             
             if (sample_depth / RESHADE_DEPTH_LINEARIZATION_FAR_PLANE >= DepthThreshold)
                 continue;
 
-            const float3 sample_normal = tex2Dlod(sNormal, float4(uv, 0.0, 0.0)).xyz * 2.0 - 1.0;
-            const float3 sample_pos = GetViewPosFromDepth(uv, sample_depth * DepthMultiplier);
+            const float3 sample_normal = tex2Dlod(sNormal, float4(sample_full_res_uv, 0.0, 0.0)).xyz * 2.0 - 1.0;
+            const float3 sample_pos = GetViewPosFromDepth(sample_full_res_uv, sample_depth);
             
             // AO Weight
             float diff_c = center_ao - sample_ao;
@@ -636,6 +729,12 @@ namespace NEOGTAO
 
     float4 PS_GTAO_Main(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
+        if (any(uv > RenderScale))
+        {
+            return 0;
+        }
+        float2 scaled_uv = uv / RenderScale;
+
         int sliceCount, stepsPerSlice;
         if (QualityLevel == 0)
         {
@@ -658,17 +757,17 @@ namespace NEOGTAO
             stepsPerSlice = 8;
         }
 
-        float viewspaceZ_raw = tex2Dlod(sViewDepthTex, float4(uv, 0, 0)).r;
-        float3 pixCenterPos = GetViewPos(uv, viewspaceZ_raw / RESHADE_DEPTH_LINEARIZATION_FAR_PLANE);
+        float viewspaceZ_raw = tex2Dlod(sViewDepthTex, float4(scaled_uv, 0, 0)).r;
+        float3 pixCenterPos = GetViewPos(scaled_uv, viewspaceZ_raw / RESHADE_DEPTH_LINEARIZATION_FAR_PLANE);
         float viewspaceZ = pixCenterPos.z;
 
-        if (getDepth(uv) >= DepthThreshold)
+        if (getDepth(scaled_uv) >= DepthThreshold)
         {
             float encodedValue = XeGTAO_EncodeVisibilityBentNormal(1.0, float3(0, 0, 1));
             return ReconstructFloat4(encodedValue);
         }
 
-        half3 viewspaceNormal = tex2Dlod(sNormal, float4(uv, 0, 0)).xyz * 2.0 - 1.0;
+        half3 viewspaceNormal = tex2Dlod(sNormal, float4(scaled_uv, 0, 0)).xyz * 2.0 - 1.0;
         const half3 viewVec = (half3) normalize(-pixCenterPos);
 
         const half effectRadius = (half) EffectRadius * (half) RadiusMultiplier;
@@ -690,7 +789,7 @@ namespace NEOGTAO
         const half noiseSample = (half) localNoise.y;
 
         const float fov_rad = FOV * (PI / 180.0);
-        const float pixelViewspaceSize = 2.0 * viewspaceZ * tan(fov_rad * 0.5) / BUFFER_HEIGHT;
+        const float pixelViewspaceSize = 2.0 * viewspaceZ * tan(fov_rad * 0.5) / (BUFFER_HEIGHT * RenderScale);
         half screenspaceRadius = effectRadius / (half) pixelViewspaceSize;
         screenspaceRadius = max(screenspaceRadius, 4.0);
         const half minS = 1.3 / screenspaceRadius;
@@ -729,10 +828,10 @@ namespace NEOGTAO
                 s = pow(s, (half) SampleDistributionPower);
                 s = max(s, minS);
 
-                half2 sampleOffset = s * omega * ReShade::PixelSize;
+                half2 sampleOffset = s * omega * ReShade::PixelSize / RenderScale;
 
-                float2 sampleCoord0 = uv + sampleOffset;
-                float2 sampleCoord1 = uv - sampleOffset;
+                float2 sampleCoord0 = scaled_uv + sampleOffset;
+                float2 sampleCoord1 = scaled_uv - sampleOffset;
 
                 float SZ0_raw = tex2Dlod(sViewDepthTex, float4(sampleCoord0, 0, 0)).r;
                 float3 samplePos0 = GetViewPos(sampleCoord0, SZ0_raw / RESHADE_DEPTH_LINEARIZATION_FAR_PLANE);
@@ -808,6 +907,11 @@ namespace NEOGTAO
 
     float4 PS_TemporalAccumulate(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
+        if (any(uv > RenderScale))
+        {
+            return 0;
+        }
+
         float4 currentPackedAO = tex2D(sAOTermTex, uv);
 
         if (!EnableTemporal)
@@ -815,20 +919,24 @@ namespace NEOGTAO
             return currentPackedAO;
         }
 
-        float2 motion = SampleMotionVectors(uv);
-        float2 reprojected_uv = uv - motion;
+        float2 full_res_uv = uv / RenderScale;
+        
+        float2 motion = SampleMotionVectors(full_res_uv);
+        float2 reprojected_uv_full = full_res_uv - motion;
 
-        float currentDepth = tex2D(sViewDepthTex, uv).r;
-        float historyDepth = tex2D(sViewDepthTex, reprojected_uv).r;
+        float currentDepth = tex2D(sViewDepthTex, full_res_uv).r;
+        float historyDepth = tex2D(sViewDepthTex, reprojected_uv_full).r;
 
-        bool validHistory = all(saturate(reprojected_uv) == reprojected_uv) &&
+        float2 reprojected_uv_low = reprojected_uv_full * RenderScale;
+
+        bool validHistory = all(saturate(reprojected_uv_low) == reprojected_uv_low) &&
                             FRAME_COUNT > 1 &&
                             abs(historyDepth - currentDepth) < (currentDepth * 0.02);
 
         float4 blendedAO = currentPackedAO;
         if (validHistory)
         {
-            float4 historyPackedAO = tex2D(sHistoryTex, reprojected_uv);
+            float4 historyPackedAO = tex2D(sHistoryTex, reprojected_uv_low);
             float4 minBox = currentPackedAO;
             float4 maxBox = currentPackedAO;
 
@@ -839,6 +947,7 @@ namespace NEOGTAO
                 {
                     if (x == 0 && y == 0)
                         continue;
+                    
                     float4 neighborPackedAO = tex2Doffset(sAOTermTex, uv, int2(x, y));
                     minBox = min(minBox, neighborPackedAO);
                     maxBox = max(maxBox, neighborPackedAO);
@@ -855,11 +964,21 @@ namespace NEOGTAO
 
     void PS_UpdateHistory(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outHistory : SV_Target)
     {
+        if (any(uv > RenderScale))
+        {
+            outHistory = 0;
+            return;
+        }
         outHistory = tex2D(sAccumulatedAOTex, uv);
     }
 
     float PS_PrepareDenoise(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
+        if (any(uv > RenderScale))
+        {
+            return 1.0; // Return full visibility for non-rendered areas
+        }
+
         float4 packedAO = tex2D(sAccumulatedAOTex, uv);
         float encodedValue = ReconstructUint(packedAO);
         half visibility, bentNormal;
@@ -869,14 +988,11 @@ namespace NEOGTAO
 
     float PS_DenoisePass(float4 vpos : SV_Position, float2 texcoord : TEXCOORD, int level, sampler input_sampler) : SV_Target
     {
-        float depth = tex2Dlod(sViewDepthTex, float4(texcoord, 0.0, 0.0)).r;
-        if (depth / RESHADE_DEPTH_LINEARIZATION_FAR_PLANE >= DepthThreshold)
+        if (any(texcoord > RenderScale))
         {
             return tex2Dlod(input_sampler, float4(texcoord, 0.0, 0.0)).r;
         }
-
-        float3 normal = tex2Dlod(sNormal, float4(texcoord, 0.0, 0.0)).xyz * 2.0 - 1.0;
-        return atrous(input_sampler, texcoord, level, depth, normal);
+        return atrous_refactored(input_sampler, texcoord, level);
     }
     
     float PS_DenoisePass0(float4 vpos : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
@@ -894,6 +1010,80 @@ namespace NEOGTAO
         return PS_DenoisePass(vpos, texcoord, 2, sDenoiseTex1);
     }
 
+    float PS_Upscale(float4 vpos : SV_Position, float2 uv : TEXCOORD) : SV_Target
+    {
+        if (RenderScale >= 1.0)
+        {
+            if (EnableDenoise)
+                return tex2D(sDenoiseTex0, uv).r;
+            else
+                return tex2D(sDenoiseInputTex, uv).r;
+        }
+
+        // FSR 1.0 Upscaling 
+        const float2 fDownscaleFactor = float2(RenderScale, RenderScale);
+        const float2 fRenderSize = BUFFER_SCREEN_SIZE * fDownscaleFactor;
+
+        const float2 fDstOutputPos = uv * BUFFER_SCREEN_SIZE + 0.5f;
+        const float2 fSrcOutputPos = fDstOutputPos * fDownscaleFactor;
+        const int2 iSrcInputPos = int2(floor(fSrcOutputPos));
+        
+        const float2 fSrcUnjitteredPos = (float2(iSrcInputPos) + 0.5f);
+        const float2 fBaseSampleOffset = fSrcUnjitteredPos - fSrcOutputPos;
+
+        int2 offsetTL;
+        offsetTL.x = (fSrcUnjitteredPos.x > fSrcOutputPos.x) ? -2 : -1;
+        offsetTL.y = (fSrcUnjitteredPos.y > fSrcOutputPos.y) ? -2 : -1;
+
+        const bool bFlipCol = fSrcUnjitteredPos.x > fSrcOutputPos.x;
+        const bool bFlipRow = fSrcUnjitteredPos.y > fSrcOutputPos.y;
+
+        RectificationBox clippingBox;
+        float fSamples[9];
+        int iSampleIndex = 0;
+
+        for (int row = 0; row < 3; row++)
+        {
+            for (int col = 0; col < 3; col++)
+            {
+                const int2 sampleColRow = int2(bFlipCol ? (2 - col) : col, bFlipRow ? (2 - row) : row);
+                const int2 iSrcSamplePos = iSrcInputPos + offsetTL + sampleColRow;
+                
+                const float2 sample_uv = ((iSrcSamplePos + 0.5) * rcp(fRenderSize)) * RenderScale;
+                
+                if (EnableDenoise)
+                    fSamples[iSampleIndex] = tex2Dlod(sDenoiseTex0, float4(sample_uv, 0, 0)).r;
+                else
+                    fSamples[iSampleIndex] = tex2Dlod(sDenoiseInputTex, float4(sample_uv, 0, 0)).r;
+
+                iSampleIndex++;
+            }
+        }
+
+        iSampleIndex = 0;
+        for (int row = 0; row < 3; row++)
+        {
+            for (int col = 0; col < 3; col++)
+            {
+                const int2 sampleColRow = int2(bFlipCol ? (2 - col) : col, bFlipRow ? (2 - row) : row);
+                const float2 fOffset = (float2) offsetTL + (float2) sampleColRow;
+                const float2 fSrcSampleOffset = fBaseSampleOffset + fOffset;
+
+                const float fRectificationCurveBias = -2.3f;
+                const float fSrcSampleOffsetSq = dot(fSrcSampleOffset, fSrcSampleOffset);
+                const float fBoxSampleWeight = exp(fRectificationCurveBias * fSrcSampleOffsetSq);
+
+                const bool bInitialSample = (row == 0) && (col == 0);
+                RectificationBoxAddSample(clippingBox, bInitialSample, fSamples[iSampleIndex], fBoxSampleWeight);
+                iSampleIndex++;
+            }
+        }
+        
+        RectificationBoxComputeVarianceBoxData(clippingBox);
+
+        return clippingBox.boxCenter;
+    }
+
     float4 PS_Output(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
         float4 originalColor = GetColor(uv);
@@ -903,18 +1093,7 @@ namespace NEOGTAO
             if (getDepth(uv) >= DepthThreshold)
                 return originalColor;
 
-            half visibility;
-            if (EnableDenoise)
-            {
-                visibility = tex2D(sDenoiseTex0, uv).r;
-            }
-            else
-            {
-                float4 packedAO = tex2D(sAccumulatedAOTex, uv);
-                float encodedValue = ReconstructUint(packedAO);
-                half3 bentNormal; 
-                XeGTAO_DecodeVisibilityBentNormal(encodedValue, visibility, bentNormal);
-            }
+            half visibility = tex2D(sUpscaledAOTex, uv).r;
             float occlusion = 1.0 - visibility;
             occlusion = saturate(occlusion * Intensity);
 
@@ -947,13 +1126,17 @@ namespace NEOGTAO
             if (EnableDenoise)
                 return float4(tex2D(sDenoiseTex0, uv).rrr, 1.0);
             else
-                return float4(0.0, 1.0, 0.0, 1.0); 
+                return float4(0.0, 1.0, 0.0, 1.0); // Green screen to indicate denoiser is off
+        }
+        else if (ViewMode == 5) // Upscaled AO
+        {
+            return float4(tex2D(sUpscaledAOTex, uv).rrr, 1.0);
         }
 
         return originalColor;
     }
 
-    technique XeGTAO < ui_tooltip = "XeGTAO."; >
+    technique XeGTAO_FRS < ui_tooltip = "XeGTAO with FSR 1.0 Upscaling for improved performance."; >
     {
         pass NormalPass
         {
@@ -972,18 +1155,21 @@ namespace NEOGTAO
             VertexShader = PostProcessVS;
             PixelShader = PS_GTAO_Main;
             RenderTarget = AOTermTex;
+            ClearRenderTargets = true;
         }
         pass Temporal
         {
             VertexShader = PostProcessVS;
             PixelShader = PS_TemporalAccumulate;
             RenderTarget = AccumulatedAOTex;
+            ClearRenderTargets = true;
         }
         pass UpdateHistoryPass
         {
             VertexShader = PostProcessVS;
             PixelShader = PS_UpdateHistory;
             RenderTarget = HistoryTex;
+            ClearRenderTargets = true;
         }
         
         pass PrepareDenoisePass
@@ -991,24 +1177,35 @@ namespace NEOGTAO
             VertexShader = PostProcessVS;
             PixelShader = PS_PrepareDenoise;
             RenderTarget = DenoiseInputTex;
+            ClearRenderTargets = true;
         }
         pass DenoisePass0
         {
             VertexShader = PostProcessVS;
             PixelShader = PS_DenoisePass0;
             RenderTarget = DenoiseTex0;
+            ClearRenderTargets = true;
         }
         pass DenoisePass1
         {
             VertexShader = PostProcessVS;
             PixelShader = PS_DenoisePass1;
             RenderTarget = DenoiseTex1;
+            ClearRenderTargets = true;
         }
         pass DenoisePass2
         {
             VertexShader = PostProcessVS;
             PixelShader = PS_DenoisePass2;
             RenderTarget = DenoiseTex0;
+            ClearRenderTargets = true;
+        }
+        
+        pass UpscalePass
+        {
+            VertexShader = PostProcessVS;
+            PixelShader = PS_Upscale;
+            RenderTarget = UpscaledAOTex;
         }
         
         pass OutputPass
