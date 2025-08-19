@@ -922,7 +922,7 @@ namespace XeGTAO
         float2 full_res_uv = uv / RenderScale;
         
         float2 motion = SampleMotionVectors(full_res_uv);
-        float2 reprojected_uv_full = full_res_uv - motion;
+        float2 reprojected_uv_full = full_res_uv + motion;
 
         float currentDepth = tex2D(sViewDepthTex, full_res_uv).r;
         float historyDepth = tex2D(sViewDepthTex, reprojected_uv_full).r;
