@@ -308,7 +308,7 @@ float2 SampleMotionVectors(float2 texcoord)
 #endif
 
 
-namespace NEOGTAO
+namespace XeGTAO
 {
     texture normalTex
     {
