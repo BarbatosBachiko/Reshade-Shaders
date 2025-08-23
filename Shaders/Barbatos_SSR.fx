@@ -24,18 +24,22 @@ THE SOFTWARE.
 
     Barbatos SSR
 
-    Version: 0.2.1 
+    Version: 0.2.2
     Author: Barbatos Bachiko
-    Original SSRT by jebbyk: https://github.com/jebbyk/SSRT-for-reshade/
+    License: MIT
 
-    License: GNU Affero General Public License v3.0
-    (https://github.com/jebbyk/SSRT-for-reshade/blob/main/LICENSE)
+    History:
+    (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
 
+    Version 0.2.2
+    + Ray Marching reworked
+    + Bump Mapping improved
+    + Fallback rethought.
+    - Removed Roughness and jitter
 */
 
 #include "ReShade.fxh"
 #include "Blending.fxh"
-#define fmod(x, y) (frac((x)*rcp(y)) * (y))
 #ifndef USE_MARTY_LAUNCHPAD_MOTION
 #define USE_MARTY_LAUNCHPAD_MOTION 0
 #endif
@@ -48,6 +52,7 @@ THE SOFTWARE.
 #define PI2 (2.0 * PI)
 #define FAR_PLANE RESHADE_DEPTH_LINEARIZATION_FAR_PLANE
 #define GetDepth(coords) (ReShade::GetLinearizedDepth(coords) * DepthMultiplier)
+#define fmod(x, y) (frac((x)*rcp(y)) * (y))
 
 // Ray Marching Constants
 #define MAX_TRACE_DISTANCE 2.0
@@ -79,14 +84,12 @@ static const int REFINEMENT_STEPS = 5;
 #define Adjustments float3(1.5, 1.0, 1.1)
 #define EnableACES false
 #define AssumeSRGB false
-#define ThicknessThreshold 0.010
-#define JitterAmount 0.01
-#define JitterScale 0.1
+#define ThicknessThreshold 0.10
 #define VerticalFOV 37.0
-#define Roughness 0.0
-#define c_phi 1.0
-#define n_phi 1.0
+#define c_phi 0.01
+#define n_phi 5.0
 #define p_phi 1.0
+#define BumpEdgeThreshold 0.55
 
 uniform float SPIntensity <
     ui_type = "drag";
@@ -107,7 +110,7 @@ uniform float BumpIntensity <
     ui_type = "drag";
     ui_category = "Surface & Normals";
     ui_min = 0.0; ui_max = 1.0;
-> = 0.4;
+> = 0.036;
 
 uniform float RenderScale <
     ui_type = "drag";
@@ -116,7 +119,6 @@ uniform float RenderScale <
     ui_label = "Render Scale";
     ui_tooltip = "Renders reflections at a lower resolution for performance, then upscales using FSR 1.0.";
 > = 0.8;
-
 
 uniform bool bEnableDenoise <
     ui_category = "Denoiser";
@@ -164,15 +166,6 @@ uniform float NormalBias <
     ui_tooltip = "Prevents self-reflection artifacts by comparing the hit surface normal with the origin surface normal.";
 > = 0.0;
 
-uniform float Roughness <
-    ui_type = "drag";
-    ui_min = 0.0; ui_max = 1.0;
-    ui_step = 0.01;
-    ui_category = "Reflection Settings";
-    ui_label = "Roughness";
-    ui_tooltip = "Controls the blurriness of reflections based on surface roughness. Higher values lead to blurrier reflections.";
-> = 0.0;  
-
 uniform float FadeStart <
     ui_type = "drag";
     ui_min = 0.0; ui_max = 1.0;
@@ -210,7 +203,14 @@ uniform float BumpIntensity <
     ui_type = "drag";
     ui_category = "Surface & Normals";
     ui_min = 0.0; ui_max = 1.0;
-> = 0.4;
+> = 0.036;
+
+uniform float BumpEdgeThreshold <
+    ui_label = "Bump Edge Threshold";
+    ui_type = "drag";
+    ui_category = "Surface & Normals";
+    ui_min = 0.0; ui_max = 5.0; ui_step = 0.01;
+> = 0.55;
 
 uniform float GeoCorrectionIntensity <
     ui_type = "drag";
@@ -218,7 +218,6 @@ uniform float GeoCorrectionIntensity <
     ui_step = 0.01;
     ui_category = "Surface & Normals";
     ui_label = "Geometry Correction Intensity";
-    ui_tooltip = "Uses luminance to create additional geometric detail on surfaces.";
 > = -0.01;
 
 uniform float DepthMultiplier <
@@ -306,28 +305,12 @@ uniform float RenderScale <
 
 uniform float ThicknessThreshold <
     ui_type = "drag";
-    ui_min = 0.001; ui_max = 0.01;
+    ui_min = 0.001; ui_max = 0.1;
     ui_step = 0.001;
     ui_category = "Performance & Quality";
     ui_label = "Thickness Threshold";
     ui_tooltip = "Determines how 'thick' a surface is. Helps the ray to not pass through thin objects.";
-> = 0.010;
-
-uniform float JitterAmount <
-    ui_type = "drag";
-    ui_min = 0.0; ui_max = 1.0;
-    ui_step = 0.01;
-    ui_category = "Performance & Quality";
-    ui_label = "Jitter Amount";
-> = 0.01;
-
-uniform float JitterScale <
-    ui_type = "drag";
-    ui_min = 0.1; ui_max = 2.0;
-    ui_step = 0.1;
-    ui_category = "Performance & Quality";
-    ui_label = "Jitter Scale";
-> = 0.1;
+> = 0.10;
 
 uniform float VerticalFOV <
     ui_type = "drag";
@@ -388,7 +371,7 @@ float2 SampleMotionVectors(float2 texcoord)
 }
 #endif
 
-namespace SSRT_FSR
+namespace Barbatos_SSR
 {
     // Main SSR textures
     texture Reflection
@@ -515,7 +498,7 @@ namespace SSRT_FSR
         float2 uv;
     };
     
-    // FSR 1.0 Data 
+    // FSR
     struct RectificationBox
     {
         float3 boxCenter;
@@ -529,24 +512,6 @@ namespace SSRT_FSR
     // :: Functions     ::|
     //-------------------|
     
-#define DX9_MODE (RESHADE_API_D3D9)
-
-    float IGN(float2 n)
-    {
-        float f = 0.06711056 * n.x + 0.00583715 * n.y;
-        return frac(52.9829189 * frac(f));
-    }
-    
-    float3 IGN3dts(float2 texcoord, float HL)
-    {
-        float3 OutColor;
-        float2 seed = texcoord * BUFFER_SCREEN_SIZE + fmod((float) FRAME_COUNT, HL) * 5.588238;
-        OutColor.r = IGN(seed);
-        OutColor.g = IGN(seed + 91.534651 + 189.6854);
-        OutColor.b = IGN(seed + 167.28222 + 281.9874);
-        return OutColor;
-    }
-
     float3 RGBToYCoCg(float3 rgb)
     {
         float Y = dot(rgb, float3(0.25, 0.5, 0.25));
@@ -671,38 +636,46 @@ namespace SSRT_FSR
         return normalize(cross(v, h));
     }
 
-    float lum(in float3 color)
+    float2 ComputeGradient(float2 texcoord)
     {
-        return 0.333333 * (color.r + color.g + color.b);
+        const float2 offset = ReShade::PixelSize.xy;
+
+        float3 colorTL = tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(-offset.x, -offset.y), 0, 0)).rgb;
+        float3 colorT = tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(0, -offset.y), 0, 0)).rgb;
+        float3 colorTR = tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(offset.x, -offset.y), 0, 0)).rgb;
+        float3 colorL = tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(-offset.x, 0), 0, 0)).rgb;
+        float3 colorR = tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(offset.x, 0), 0, 0)).rgb;
+        float3 colorBL = tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(-offset.x, offset.y), 0, 0)).rgb;
+        float3 colorB = tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(0, offset.y), 0, 0)).rgb;
+        float3 colorBR = tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(offset.x, offset.y), 0, 0)).rgb;
+        
+        float lumTL = GetLuminance(colorTL);
+        float lumT = GetLuminance(colorT);
+        float lumTR = GetLuminance(colorTR);
+        float lumL = GetLuminance(colorL);
+        float lumR = GetLuminance(colorR);
+        float lumBL = GetLuminance(colorBL);
+        float lumB = GetLuminance(colorB);
+        float lumBR = GetLuminance(colorBR);
+
+        float gx = (-3.0 * lumTL - 10.0 * lumL - 3.0 * lumBL) + (3.0 * lumTR + 10.0 * lumR + 3.0 * lumBR);
+        float gy = (-3.0 * lumTL - 10.0 * lumT - 3.0 * lumTR) + (3.0 * lumBL + 10.0 * lumB + 3.0 * lumBR);
+
+        float2 gradient = float2(gx, gy);
+
+        if (BumpEdgeThreshold > 0.0 && length(gradient) < BumpEdgeThreshold)
+        {
+            gradient = 0.0;
+        }
+
+        return gradient;
     }
 
-    float3 Bump(float2 texcoord, float height)
+    float3 Bump(float2 texcoord, float intensity)
     {
-        float2 p = ReShade::PixelSize;
-    
-        float3 sX = tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(p.x, 0), 0, 0)).rgb;
-        float3 sY = tex2Dlod(ReShade::BackBuffer, float4(texcoord + float2(0, p.y), 0, 0)).rgb;
-        float3 sC = tex2Dlod(ReShade::BackBuffer, float4(texcoord, 0, 0)).rgb;
-    
-        float LC = rcp(max(lum(sX + sY + sC), 0.001)) * height;
-        LC = min(LC, 4.0);
-    
-        sX *= LC;
-        sY *= LC;
-        sC *= LC;
-    
-        float dX = GetDepth(texcoord + float2(p.x, 0));
-        float dY = GetDepth(texcoord + float2(0, p.y));
-        float dC = GetDepth(texcoord);
-    
-        float3 XB = sC - sX;
-        float3 YB = sC - sY;
-    
-        float depthFactorX = saturate(1.0 - abs(dX - dC) * 1000.0);
-        float depthFactorY = saturate(1.0 - abs(dY - dC) * 1000.0);
-    
-        float3 bump = float3(lum(XB) * depthFactorX, lum(YB) * depthFactorY, 1.0);
-        return normalize(bump);
+        float2 gradient = ComputeGradient(texcoord);
+        float3 bumpNormal = float3(gradient.x * -intensity, gradient.y * -intensity, 1.0);
+        return normalize(bumpNormal);
     }
 
     float3 blend_normals(float3 n1, float3 n2)
@@ -731,16 +704,8 @@ namespace SSRT_FSR
         float3 normal = (tex2Dlod(sNormal, float4(coords, 0, 0)).xyz - 0.5) * 2.0;
         return normalize(normal);
     }
-
-    float3 JitterRay(float2 uv, float amount, float scale)
-    {
-        float noiseX = frac(sin(dot(uv + FRAME_COUNT * 0.0001, float2(12.9898, 78.233))) * 43758.5453);
-        float noiseY = frac(sin(dot(uv + FRAME_COUNT * 0.0001 + 0.1, float2(12.9898, 78.233))) * 43758.5453);
-        float noiseZ = frac(sin(dot(uv + FRAME_COUNT * 0.0001 + 0.2, float2(12.9898, 78.233))) * 43758.5453);
-        float3 noise = float3(noiseX, noiseY, noiseZ) * 2.0 - 1.0;
-        return noise * amount * scale;
-    }
     
+    // Ray Marching
     HitResult TraceRay(Ray r)
     {
         HitResult result;
@@ -791,7 +756,7 @@ namespace SSRT_FSR
         return result;
     }
 
-    // --- FSR 1.0 ---
+    // FSR
     void RectificationBoxAddSample(inout RectificationBox box, bool bInitialSample, float3 fSample, float fWeight)
     {
         if (bInitialSample)
@@ -829,7 +794,7 @@ namespace SSRT_FSR
             discard;
         outNormal.rgb = Normal(uv.xy);
         outNormal.a = GetDepth(uv.xy);
-        outNormal.rgb = blend_normals(Bump(uv, -SmoothMode), outNormal.rgb);
+        outNormal.rgb = blend_normals(Bump(uv, -BumpIntensity), outNormal.rgb);
         outNormal.rgb = GeometryCorrection(uv, outNormal.rgb);
         outNormal.rgb = outNormal.rgb * 0.5 + 0.5;
     }
@@ -907,6 +872,12 @@ namespace SSRT_FSR
         float2 scaled_uv = uv / RenderScale;
 
         float depth = GetDepth(scaled_uv);
+        if (depth >= 1.0)
+        {
+            outReflection = float4(tex2Dlod(ReShade::BackBuffer, float4(scaled_uv, 0, 0)).rgb, depth);
+            return;
+        }
+
         float3 viewPos = UVToViewPos(scaled_uv, depth);
         float3 viewDir = -normalize(viewPos);
         float3 normal = SampleNormal(scaled_uv);
@@ -915,30 +886,30 @@ namespace SSRT_FSR
         
         Ray r;
         r.origin = viewPos;
-
-        float3 noise = JitterRay(scaled_uv, JitterAmount, JitterScale);
-        float3 raydirG = normalize(reflect(eyeDir, normal));
-        float3 raydirR = normalize(noise);
-
-        float roughnessFactor = pow(Roughness, 2.0);
-        r.direction = normalize(lerp(raydirG, raydirR, roughnessFactor));
-
-        if (JitterAmount > 0.0)
-        {
-            float3 originJitter = JitterRay(scaled_uv, JitterAmount, JitterScale);
-            r.origin += originJitter * ReShade::PixelSize.x;
-        }
+        r.direction = normalize(reflect(eyeDir, normal));
         
         HitResult hit = TraceRay(r);
+        float3 surfaceFallbackColor = tex2Dlod(ReShade::BackBuffer, float4(scaled_uv, 0, 0)).rgb;
 
         float3 reflectionColor = 0;
+        float reflectionFade = 1.0;
+
         if (hit.found)
         {
             float3 hitNormal = SampleNormal(hit.uv);
             if (distance(hitNormal, normal) >= NormalBias)
             {
+                reflectionColor = tex2Dlod(ReShade::BackBuffer, float4(hit.uv, 0, 0)).rgb;
                 float distFactor = saturate(1.0 - length(hit.viewPos - viewPos) / MAX_TRACE_DISTANCE);
-                reflectionColor = tex2Dlod(ReShade::BackBuffer, float4(hit.uv, 0, 0)).rgb * distFactor;
+                float fadeRange = max(FadeEnd - FadeStart, 0.001);
+                float depthFade = saturate((FadeEnd - depth) / fadeRange);
+                depthFade *= depthFade;
+
+                reflectionFade = distFactor * depthFade;
+            }
+            else
+            {
+                reflectionColor = surfaceFallbackColor;
             }
         }
         else
@@ -946,29 +917,16 @@ namespace SSRT_FSR
             float adaptiveDist = depth * 1.2 + 0.012;
             float3 fbViewPos = viewPos + r.direction * adaptiveDist;
             float2 uvFb = saturate(ViewPosToUV(fbViewPos));
-            bool isSky = GetDepth(uvFb) >= 1.0;
-            float3 fbColor = tex2Dlod(ReShade::BackBuffer, float4(uvFb, 0, 0)).rgb;
-
-            if (isSky)
-            {
-                reflectionColor = fbColor;
-            }
-            else
-            {
-                float depthFactor = saturate(1.0 - depth / MAX_TRACE_DISTANCE);
-                float vertical_fade = 1.0 - scaled_uv.y;
-                reflectionColor = fbColor * depthFactor * vertical_fade;
-            }
+            reflectionColor = tex2Dlod(ReShade::BackBuffer, float4(uvFb, 0, 0)).rgb;
         }
 
         float fresnel = pow(1.0 - saturate(dot(eyeDir, normal)), 3.0);
+        reflectionColor *= fresnel * reflectionFade;
+        
         float angleWeight = pow(saturate(dot(-viewDir, r.direction)), 2.0);
-        float fadeRange = max(FadeEnd - FadeStart, 0.001);
-        float depthFade = saturate((FadeEnd - depth) / fadeRange);
-        depthFade *= depthFade;
-
-        reflectionColor *= fresnel * angleWeight * depthFade;
-        outReflection = float4(reflectionColor, depth);
+        float3 finalReflection = lerp(surfaceFallbackColor, reflectionColor, angleWeight);
+        
+        outReflection = float4(finalReflection, depth);
     }
 
     void PS_Accumulate(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outBlended : SV_Target)
@@ -998,8 +956,8 @@ namespace SSRT_FSR
         float2 reprojected_uv_low = reprojected_uv_full * RenderScale;
 
         bool validHistory = all(saturate(reprojected_uv_low) == reprojected_uv_low) &&
-                            FRAME_COUNT > 1 &&
-                            abs(historyDepth - currentDepth) < 0.01;
+                                          FRAME_COUNT > 1 &&
+                                          abs(historyDepth - currentDepth) < 0.01;
 
         float3 blendedSpec = currentSpec;
         if (validHistory)
@@ -1225,6 +1183,13 @@ namespace SSRT_FSR
         }
 
         float3 originalColor = tex2Dlod(ReShade::BackBuffer, float4(uv, 0, 0)).rgb;
+
+        if (GetDepth(uv) >= 1.0)
+        {
+            outColor = float4(originalColor, 1.0);
+            return;
+        }
+
         float3 specularGI = tex2Dlod(sUpscaledReflection, float4(uv, 0, 0)).rgb;
 
         specularGI *= Adjustments.y; // Exposure
@@ -1235,15 +1200,17 @@ namespace SSRT_FSR
         
         float luminance = GetLuminance(specularGI);
         specularGI = lerp(luminance.xxx, specularGI, Adjustments.x); // Saturation
-        specularGI = (specularGI - 0.5) * Adjustments.z + 0.5; // Contrast
+        float3 SSR = specularGI;
 
+        specularGI = (specularGI - 0.5) * Adjustments.z + 0.5;
+        specularGI = saturate(specularGI);
         specularGI *= SPIntensity;
 
         float3 finalColor;
 
         if (BlendMode == 0)
         {
-            float giLuminance = GetLuminance(saturate(specularGI));
+            float giLuminance = GetLuminance(saturate(SSR * SPIntensity));
             finalColor = lerp(originalColor.rgb, specularGI, giLuminance);
         }
         else
