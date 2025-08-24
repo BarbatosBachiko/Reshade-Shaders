@@ -24,18 +24,15 @@ THE SOFTWARE.
 
     Barbatos SSR
 
-    Version: 0.2.2
+    Version: 0.2.3
     Author: Barbatos Bachiko
     License: MIT
 
     History:
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
 
-    Version 0.2.2
-    + Ray Marching reworked
-    + Bump Mapping improved
-    + Fallback rethought.
-    - Removed Roughness and jitter
+    Version 0.2.3
+    x Fixed double-blending 
 */
 
 #include "ReShade.fxh"
@@ -133,13 +130,13 @@ uniform float AccumFramesSG <
     ui_category = "Temporal Filtering";
     ui_label = "Temporal Accumulation Frames";
     ui_tooltip = "Number of frames to accumulate. Higher values are smoother but may cause more ghosting on moving objects.";
-> = 4.0;
+> = 2.0;
 
 BLENDING_COMBO(BlendMode, "Blend Mode", "How the final reflections are blended with the original image.", "Blending & Output", false, 0, 6)
 
 uniform int ViewMode <
     ui_type = "combo";
-    ui_items = "None\0Motion Vectors\0Final Reflection (Upscaled)\0Normals\0Depth\0Raw Low-Res Reflection\0Denoised Low-Res Reflection\0";
+    ui_items = "None\0Motion Vectors\0Final Reflection (Upscaled)\0Normals\0Depth\0Raw Low-Res Reflection\0Denoised Low-Res Reflection\0Reflection Mask\0";
     ui_category = "Debug";
     ui_label = "Debug View Mode";
 > = 0;
@@ -272,9 +269,9 @@ uniform float AccumFramesSG <
     ui_category = "Temporal Filtering";
     ui_label = "Temporal Accumulation Frames";
     ui_tooltip = "Number of frames to accumulate. Higher values are smoother but may cause more ghosting on moving objects.";
-> = 4.0;
+> = 2.0;
 
-BLENDING_COMBO(BlendMode, "Blend Mode", "How the final reflections are blended with the original image.\n'Normal' mode uses a custom luminance-based alpha blend.", "Blending & Output", false, 0, 6)
+BLENDING_COMBO(BlendMode, "Blend Mode", "How the final reflections are blended with the original image.", "Blending & Output", false, 0, 6)
 
 uniform float3 Adjustments <
     ui_type = "drag";
@@ -322,7 +319,7 @@ uniform float VerticalFOV <
 
 uniform int ViewMode <
     ui_type = "combo";
-    ui_items = "None\0Motion Vectors\0Final Reflection (Upscaled)\0Normals\0Depth\0Raw Low-Res Reflection\0Denoised Low-Res Reflection\0";
+    ui_items = "None\0Motion Vectors\0Final Reflection (Upscaled)\0Normals\0Depth\0Raw Low-Res Reflection\0Denoised Low-Res Reflection\0Reflection Mask\0";
     ui_category = "Debug";
     ui_label = "Debug View Mode";
 > = 0;
@@ -874,14 +871,13 @@ namespace Barbatos_SSR
         float depth = GetDepth(scaled_uv);
         if (depth >= 1.0)
         {
-            outReflection = float4(tex2Dlod(ReShade::BackBuffer, float4(scaled_uv, 0, 0)).rgb, depth);
+            outReflection = 0;
             return;
         }
 
         float3 viewPos = UVToViewPos(scaled_uv, depth);
         float3 viewDir = -normalize(viewPos);
         float3 normal = SampleNormal(scaled_uv);
-
         float3 eyeDir = -viewDir;
         
         Ray r;
@@ -889,10 +885,10 @@ namespace Barbatos_SSR
         r.direction = normalize(reflect(eyeDir, normal));
         
         HitResult hit = TraceRay(r);
-        float3 surfaceFallbackColor = tex2Dlod(ReShade::BackBuffer, float4(scaled_uv, 0, 0)).rgb;
 
         float3 reflectionColor = 0;
-        float reflectionFade = 1.0;
+        float reflectionAlpha = 0.0;
+        float fresnel = pow(1.0 - saturate(dot(eyeDir, normal)), 3.0);
 
         if (hit.found)
         {
@@ -905,28 +901,22 @@ namespace Barbatos_SSR
                 float depthFade = saturate((FadeEnd - depth) / fadeRange);
                 depthFade *= depthFade;
 
-                reflectionFade = distFactor * depthFade;
-            }
-            else
-            {
-                reflectionColor = surfaceFallbackColor;
+                reflectionAlpha = distFactor * depthFade * fresnel;
             }
         }
-        else
+        else 
         {
             float adaptiveDist = depth * 1.2 + 0.012;
             float3 fbViewPos = viewPos + r.direction * adaptiveDist;
             float2 uvFb = saturate(ViewPosToUV(fbViewPos));
             reflectionColor = tex2Dlod(ReShade::BackBuffer, float4(uvFb, 0, 0)).rgb;
+            reflectionAlpha = fresnel;
         }
-
-        float fresnel = pow(1.0 - saturate(dot(eyeDir, normal)), 3.0);
-        reflectionColor *= fresnel * reflectionFade;
         
         float angleWeight = pow(saturate(dot(-viewDir, r.direction)), 2.0);
-        float3 finalReflection = lerp(surfaceFallbackColor, reflectionColor, angleWeight);
-        
-        outReflection = float4(finalReflection, depth);
+        reflectionAlpha *= angleWeight;
+
+        outReflection = float4(reflectionColor, reflectionAlpha);
     }
 
     void PS_Accumulate(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outBlended : SV_Target)
@@ -937,11 +927,11 @@ namespace Barbatos_SSR
             return;
         }
 
-        float3 currentSpec = tex2Dlod(sReflection, float4(uv, 0, 0)).rgb;
+        float4 currentSpec = tex2Dlod(sReflection, float4(uv, 0, 0));
 
         if (!EnableTemporal)
         {
-            outBlended = float4(currentSpec, 1.0);
+            outBlended = currentSpec;
             return;
         }
         
@@ -959,12 +949,12 @@ namespace Barbatos_SSR
                                           FRAME_COUNT > 1 &&
                                           abs(historyDepth - currentDepth) < 0.01;
 
-        float3 blendedSpec = currentSpec;
+        float4 blendedSpec = currentSpec;
         if (validHistory)
         {
-            float3 historySpec = tex2Dlod(sHistory, float4(reprojected_uv_low, 0, 0)).rgb;
+            float4 historySpec = tex2Dlod(sHistory, float4(reprojected_uv_low, 0, 0));
 
-            float3 minBox = RGBToYCoCg(currentSpec), maxBox = minBox;
+            float3 minBox = RGBToYCoCg(currentSpec.rgb), maxBox = minBox;
             [unroll]
             for (int y = -1; y <= 1; y++)
             {
@@ -980,12 +970,13 @@ namespace Barbatos_SSR
                 }
             }
             
-            float3 clampedHistorySpec = clamp(RGBToYCoCg(historySpec), minBox, maxBox);
+            float3 clampedHistorySpec = clamp(RGBToYCoCg(historySpec.rgb), minBox, maxBox);
             float alpha = 1.0 / min(FRAME_COUNT, AccumFramesSG);
-            blendedSpec = YCoCgToRGB(lerp(clampedHistorySpec, RGBToYCoCg(currentSpec), alpha));
+            blendedSpec.rgb = YCoCgToRGB(lerp(clampedHistorySpec, RGBToYCoCg(currentSpec.rgb), alpha));
+            blendedSpec.a = lerp(historySpec.a, currentSpec.a, alpha);
         }
         
-        outBlended = float4(blendedSpec, 1.0);
+        outBlended = blendedSpec;
     }
 
     void PS_UpdateHistory(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outHistory : SV_Target)
@@ -1108,6 +1099,7 @@ namespace Barbatos_SSR
 
         RectificationBox clippingBox;
         float3 fSamples[9];
+        float fSamplesA[9];
         int iSampleIndex = 0;
 
         for (int row = 0; row < 3; row++)
@@ -1119,13 +1111,17 @@ namespace Barbatos_SSR
                 
                 const float2 sample_uv = ((iSrcSamplePos + 0.5) * rcp(fRenderSize)) * RenderScale;
                 
-                float3 s = tex2Dlod(sTemp, float4(sample_uv, 0, 0)).rgb;
-                fSamples[iSampleIndex] = RGBToYCoCg(s);
+                float4 s = tex2Dlod(sTemp, float4(sample_uv, 0, 0));
+                fSamples[iSampleIndex] = RGBToYCoCg(s.rgb);
+                fSamplesA[iSampleIndex] = s.a;
                 iSampleIndex++;
             }
         }
 
         iSampleIndex = 0;
+        float fAccumulatedAlpha = 0.0;
+        float fAccumulatedWeight = 0.0;
+
         for (int row = 0; row < 3; row++)
         {
             for (int col = 0; col < 3; col++)
@@ -1140,6 +1136,10 @@ namespace Barbatos_SSR
 
                 const bool bInitialSample = (row == 0) && (col == 0);
                 RectificationBoxAddSample(clippingBox, bInitialSample, fSamples[iSampleIndex], fBoxSampleWeight);
+
+                fAccumulatedAlpha += fSamplesA[iSampleIndex] * fBoxSampleWeight;
+                fAccumulatedWeight += fBoxSampleWeight;
+
                 iSampleIndex++;
             }
         }
@@ -1148,7 +1148,7 @@ namespace Barbatos_SSR
 
         float3 finalColorYCoCg = clippingBox.boxCenter;
         outColor.rgb = YCoCgToRGB(finalColorYCoCg);
-        outColor.a = 1.0;
+        outColor.a = fAccumulatedAlpha / max(1e-6, fAccumulatedWeight);
     }
 
     void PS_Output(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outColor : SV_Target)
@@ -1179,6 +1179,9 @@ namespace Barbatos_SSR
                 case 6: // Denoised Low-Res Reflection
                     outColor = float4(tex2Dlod(sTemp, float4(uv, 0, 0)).rgb, 1.0);
                     return;
+                case 7: // Reflection Mask
+                    outColor = tex2Dlod(sUpscaledReflection, float4(uv, 0, 0)).aaaa;
+                    return;
             }
         }
 
@@ -1190,7 +1193,9 @@ namespace Barbatos_SSR
             return;
         }
 
-        float3 specularGI = tex2Dlod(sUpscaledReflection, float4(uv, 0, 0)).rgb;
+        float4 reflectionSample = tex2Dlod(sUpscaledReflection, float4(uv, 0, 0));
+        float3 specularGI = reflectionSample.rgb;
+        float blendFactor = reflectionSample.a;
 
         specularGI *= Adjustments.y; // Exposure
         if (AssumeSRGB)
@@ -1200,29 +1205,18 @@ namespace Barbatos_SSR
         
         float luminance = GetLuminance(specularGI);
         specularGI = lerp(luminance.xxx, specularGI, Adjustments.x); // Saturation
-        float3 SSR = specularGI;
 
-        specularGI = (specularGI - 0.5) * Adjustments.z + 0.5;
+        specularGI = (specularGI - 0.5) * Adjustments.z + 0.5; // Contrast
         specularGI = saturate(specularGI);
         specularGI *= SPIntensity;
 
-        float3 finalColor;
-
-        if (BlendMode == 0)
-        {
-            float giLuminance = GetLuminance(saturate(SSR * SPIntensity));
-            finalColor = lerp(originalColor.rgb, specularGI, giLuminance);
-        }
-        else
-        {
-            finalColor = ComHeaders::Blending::Blend(BlendMode, originalColor.rgb, specularGI, 1.0);
-        }
+        float3 finalColor = ComHeaders::Blending::Blend(BlendMode, originalColor.rgb, specularGI, blendFactor);
 
         outColor = float4(finalColor, 1.0);
     }
 
 //-------------------|
-// :: Technique     ::|
+// :: Technique    ::|
 //-------------------|
     technique Barbatos_SSR
     {
