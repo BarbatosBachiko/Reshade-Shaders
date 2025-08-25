@@ -173,7 +173,7 @@ uniform float tone_map < __UNIFORM_SLIDER_FLOAT1
 #define GeoCorrectionIntensity -0.01
 #define DepthMultiplier 1.0
 #define EnableTemporal true
-#define Adjustments float3(1.5, 1.0, 1.0)
+#define Adjustments float3(1.0, 1.0, 1.0)
 #define EnableACES false
 #define ThicknessThreshold 0.10
 #define VerticalFOV 37.0
@@ -403,7 +403,7 @@ uniform float3 Adjustments <
     ui_category = "Blending & Output";
     ui_label = "Saturation / Exposure / Contrast";
     ui_tooltip = "Adjusts the color properties of the final reflection.";
-> = float3(1.5, 1.0, 1.0);
+> = float3(1.0, 1.0, 1.0);
 
 uniform bool EnableACES <
     ui_category = "Blending & Output";
