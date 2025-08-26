@@ -175,7 +175,7 @@ uniform float tone_map < __UNIFORM_SLIDER_FLOAT1
 #define EnableTemporal true
 #define Adjustments float3(1.0, 1.0, 1.0)
 #define EnableACES false
-#define ThicknessThreshold 0.10
+#define ThicknessThreshold 0.01
 #define VerticalFOV 37.0
 #define c_phi 0.1
 #define n_phi 5.0
@@ -426,7 +426,7 @@ uniform float ThicknessThreshold <
     ui_category = "Performance & Quality";
     ui_label = "Thickness Threshold";
     ui_tooltip = "Determines how 'thick' a surface is. Helps the ray to not pass through thin objects.";
-> = 0.10;
+> = 0.01;
 
 uniform float VerticalFOV <
     ui_type = "drag";
