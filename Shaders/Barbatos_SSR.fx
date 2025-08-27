@@ -180,7 +180,7 @@ uniform float tone_map < __UNIFORM_SLIDER_FLOAT1
 #define c_phi 0.1
 #define n_phi 5.0
 #define p_phi 1.0
-#define BumpEdgeThreshold 0.55
+#define BumpEdgeThreshold 0.10
 #define fReflectFloorsIntensity 1.0
 #define fReflectWallsIntensity 0.5
 #define fReflectCeilingsIntensity 0.5
@@ -205,7 +205,7 @@ uniform float BumpIntensity <
     ui_type = "drag";
     ui_category = "Surface & Normals";
     ui_min = 0.0; ui_max = 2.0;
-> = 1.0;
+> = 0.03;
 
 uniform float RenderScale <
     ui_type = "drag";
@@ -281,31 +281,39 @@ uniform float FadeEnd <
 uniform float fReflectFloorsIntensity <
     ui_type = "drag";
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
-    ui_category = "Reflection Settings";
+    ui_category = "Orientation";
     ui_label = "Floor Reflection Intensity";
 > = 1.0;
 
 uniform float fReflectWallsIntensity <
     ui_type = "drag";
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
-    ui_category = "Reflection Settings";
+    ui_category = "Orientation";
     ui_label = "Wall Reflection Intensity";
 > = 0.5;
 
 uniform float fReflectCeilingsIntensity <
     ui_type = "drag";
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
-    ui_category = "Reflection Settings";
+    ui_category = "Orientation";
     ui_label = "Ceiling Reflection Intensity";
 > = 0.5;
 
 uniform float OrientationThreshold <
     ui_type = "drag";
     ui_min = 0.01; ui_max = 1.0; ui_step = 0.01;
-    ui_category = "Reflection Settings";
+    ui_category = "Orientation";
     ui_label = "Orientation Threshold";
     ui_tooltip = "Controls the sensitivity for detecting floors, walls, and ceilings. Lower values are stricter.";
 > = 0.85;
+
+uniform float GeoCorrectionIntensity <
+    ui_type = "drag";
+    ui_min = -0.1; ui_max = 0.01;
+    ui_step = 0.01;
+    ui_category = "Orientation";
+    ui_label = "Geometry Correction Intensity";
+> = -0.01;
 
 uniform int SmoothMode <
     ui_label = "Smooth Normals Mode";
@@ -326,22 +334,14 @@ uniform float BumpIntensity <
     ui_type = "drag";
     ui_category = "Surface & Normals";
     ui_min = 0.0; ui_max = 2.0;
-> = 1.0;
+> = 0.03;
 
 uniform float BumpEdgeThreshold <
     ui_label = "Bump Edge Threshold";
     ui_type = "drag";
     ui_category = "Surface & Normals";
     ui_min = 0.0; ui_max = 5.0; ui_step = 0.01;
-> = 0.55;
-
-uniform float GeoCorrectionIntensity <
-    ui_type = "drag";
-    ui_min = -0.1; ui_max = 1.0;
-    ui_step = 0.01;
-    ui_category = "Surface & Normals";
-    ui_label = "Geometry Correction Intensity";
-> = -0.01;
+> = 0.10;
 
 uniform float DepthMultiplier <
     ui_type = "drag";
@@ -446,165 +446,6 @@ uniform int ViewMode <
 #endif // UI_DIFFICULTY == 1
 
 uniform int FRAME_COUNT < source = "framecount"; >;
-
-//--------------------------|
-// :: Color Space & HDR ::  |
-//--------------------------|
-
-float3 undoTonemap(float3 c)
-{
-    if (GLAMAYRE_COLOR_SPACE < 2)
-    {
-        c = saturate(c);
-        c = c / (1.0 - (1.0 - rcp(tone_map)) * c);
-    }
-    return c;
-}
-
-float3 reapplyTonemap(float3 c)
-{
-    if (GLAMAYRE_COLOR_SPACE < 2)
-    {
-        c = c / ((1 - rcp(tone_map)) * c + 1.0);
-    }
-    return c;
-}
-
-float3 sRGBtoLinearAccurate(float3 r)
-{
-    return (r <= .04045) ? (r / 12.92) : pow(abs(r + .055) / 1.055, 2.4);
-}
-float3 sRGBtoLinearFastApproximation(float3 r)
-{
-    return max(r / 12.92, r * r);
-}
-float3 sRGBtoLinear(float3 r)
-{
-    if (fast_color_space_conversion == 1)
-        r = sRGBtoLinearFastApproximation(r);
-    else if (fast_color_space_conversion == 0)
-        r = sRGBtoLinearAccurate(r);
-    return r;
-}
-float3 linearToSRGBAccurate(float3 r)
-{
-    return (r <= .0031308) ? (r * 12.92) : (1.055 * pow(abs(r), 1.0 / 2.4) - .055);
-}
-float3 linearToSRGBFastApproximation(float3 r)
-{
-    return min(r * 12.92, sqrt(r));
-}
-float3 linearToSRGB(float3 r)
-{
-    if (fast_color_space_conversion == 1)
-        r = linearToSRGBFastApproximation(r);
-    else if (fast_color_space_conversion == 0)
-        r = linearToSRGBAccurate(r);
-    return r;
-}
-
-// Perceptual Quantizer (HDR10) Conversions
-float3 PQtoLinearAccurate(float3 r)
-{
-    const float m1 = 1305.0 / 8192.0;
-    const float m2 = 2523.0 / 32.0;
-    const float c1 = 107.0 / 128.0;
-    const float c2 = 2413.0 / 128.0;
-    const float c3 = 2392.0 / 128.0;
-    float3 powr = pow(max(r, 0), 1.0 / m2);
-    r = pow(max(max(powr - c1, 0) / (c2 - c3 * powr), 0), 1.0 / m1);
-    return r * 10000.0 / HDR_WHITELEVEL;
-}
-float3 PQtoLinearFastApproximation(float3 r)
-{
-    float3 square = r * r;
-    float3 quad = square * square;
-    float3 oct = quad * quad;
-    r = max(max(square / 340.0, quad / 6.0), oct);
-    return r * 10000.0 / HDR_WHITELEVEL;
-}
-float3 PQtoLinear(float3 r)
-{
-    if (fast_color_space_conversion)
-        r = PQtoLinearFastApproximation(r);
-    else
-        r = PQtoLinearAccurate(r);
-    return r;
-}
-float3 linearToPQAccurate(float3 r)
-{
-    const float m1 = 1305.0 / 8192.0;
-    const float m2 = 2523.0 / 32.0;
-    const float c1 = 107.0 / 128.0;
-    const float c2 = 2413.0 / 128.0;
-    const float c3 = 2392.0 / 128.0;
-    r = r * (HDR_WHITELEVEL / 10000.0);
-    float3 powr = pow(max(r, 0), m1);
-    r = pow(max((c1 + c2 * powr) / (1 + c3 * powr), 0), m2);
-    return r;
-}
-float3 linearToPQFastApproximation(float3 r)
-{
-    r = r * (HDR_WHITELEVEL / 10000.0);
-    float3 squareroot = sqrt(r);
-    float3 quadroot = sqrt(squareroot);
-    float3 octroot = sqrt(quadroot);
-    r = min(octroot, min(sqrt(sqrt(6.0)) * quadroot, sqrt(340.0) * squareroot));
-    return r;
-}
-float3 linearToPQ(float3 r)
-{
-    if (fast_color_space_conversion)
-        r = linearToPQFastApproximation(r);
-    else
-        r = linearToPQAccurate(r);
-    return r;
-}
-
-// Hybrid Log Gamma Conversions
-float3 linearToHLG(float3 r)
-{
-    r = r * HDR_WHITELEVEL / 1000;
-    float a = 0.17883277;
-    float b = 0.28466892;
-    float c = 0.55991073;
-    float3 s = sqrt(3 * r);
-    return (s < .5) ? s : (log(12 * r - b) * a + c);
-}
-float3 HLGtoLinear(float3 r)
-{
-    float a = 0.17883277;
-    float b = 0.28466892;
-    float c = 0.55991073;
-    r = (r < .5) ? r * r / 3.0 : ((exp((r - c) / a) + b) / 12.0);
-    return r * 1000 / HDR_WHITELEVEL;
-}
-
-// Main conversion wrapper functions
-float3 toLinearColorspace(float3 r)
-{
-    if (GLAMAYRE_COLOR_SPACE == 2)
-        r = r * (80.0 / HDR_WHITELEVEL); // scRGB
-    else if (GLAMAYRE_COLOR_SPACE == 3)
-        r = PQtoLinear(r); // HDR10 PQ
-    else if (GLAMAYRE_COLOR_SPACE == 4)
-        r = HLGtoLinear(r); // HLG
-    else
-        r = sRGBtoLinear(r); // sRGB
-    return r;
-}
-float3 toOutputColorspace(float3 r)
-{
-    if (GLAMAYRE_COLOR_SPACE == 2)
-        r = r * (HDR_WHITELEVEL / 80.0); // scRGB
-    else if (GLAMAYRE_COLOR_SPACE == 3)
-        r = linearToPQ(r); // HDR10 PQ
-    else if (GLAMAYRE_COLOR_SPACE == 4)
-        r = linearToHLG(r); // HLG
-    else
-        r = linearToSRGB(r); // sRGB
-    return r;
-}
 
 //----------------|
 // :: Textures :: |
@@ -787,6 +628,166 @@ namespace Barbatos_SSR31
         float fBoxCenterWeight;
     };
 
+    
+//--------------------------|
+// :: Color Space & HDR ::  |
+//--------------------------|
+
+    float3 undoTonemap(float3 c)
+    {
+        if (GLAMAYRE_COLOR_SPACE < 2)
+        {
+            c = saturate(c);
+            c = c / (1.0 - (1.0 - rcp(tone_map)) * c);
+        }
+        return c;
+    }
+
+    float3 reapplyTonemap(float3 c)
+    {
+        if (GLAMAYRE_COLOR_SPACE < 2)
+        {
+            c = c / ((1 - rcp(tone_map)) * c + 1.0);
+        }
+        return c;
+    }
+
+    float3 sRGBtoLinearAccurate(float3 r)
+    {
+        return (r <= .04045) ? (r / 12.92) : pow(abs(r + .055) / 1.055, 2.4);
+    }
+    float3 sRGBtoLinearFastApproximation(float3 r)
+    {
+        return max(r / 12.92, r * r);
+    }
+    float3 sRGBtoLinear(float3 r)
+    {
+        if (fast_color_space_conversion == 1)
+            r = sRGBtoLinearFastApproximation(r);
+        else if (fast_color_space_conversion == 0)
+            r = sRGBtoLinearAccurate(r);
+        return r;
+    }
+    float3 linearToSRGBAccurate(float3 r)
+    {
+        return (r <= .0031308) ? (r * 12.92) : (1.055 * pow(abs(r), 1.0 / 2.4) - .055);
+    }
+    float3 linearToSRGBFastApproximation(float3 r)
+    {
+        return min(r * 12.92, sqrt(r));
+    }
+    float3 linearToSRGB(float3 r)
+    {
+        if (fast_color_space_conversion == 1)
+            r = linearToSRGBFastApproximation(r);
+        else if (fast_color_space_conversion == 0)
+            r = linearToSRGBAccurate(r);
+        return r;
+    }
+
+// Perceptual Quantizer (HDR10) Conversions
+    float3 PQtoLinearAccurate(float3 r)
+    {
+        const float m1 = 1305.0 / 8192.0;
+        const float m2 = 2523.0 / 32.0;
+        const float c1 = 107.0 / 128.0;
+        const float c2 = 2413.0 / 128.0;
+        const float c3 = 2392.0 / 128.0;
+        float3 powr = pow(max(r, 0), 1.0 / m2);
+        r = pow(max(max(powr - c1, 0) / (c2 - c3 * powr), 0), 1.0 / m1);
+        return r * 10000.0 / HDR_WHITELEVEL;
+    }
+    float3 PQtoLinearFastApproximation(float3 r)
+    {
+        float3 square = r * r;
+        float3 quad = square * square;
+        float3 oct = quad * quad;
+        r = max(max(square / 340.0, quad / 6.0), oct);
+        return r * 10000.0 / HDR_WHITELEVEL;
+    }
+    float3 PQtoLinear(float3 r)
+    {
+        if (fast_color_space_conversion)
+            r = PQtoLinearFastApproximation(r);
+        else
+            r = PQtoLinearAccurate(r);
+        return r;
+    }
+    float3 linearToPQAccurate(float3 r)
+    {
+        const float m1 = 1305.0 / 8192.0;
+        const float m2 = 2523.0 / 32.0;
+        const float c1 = 107.0 / 128.0;
+        const float c2 = 2413.0 / 128.0;
+        const float c3 = 2392.0 / 128.0;
+        r = r * (HDR_WHITELEVEL / 10000.0);
+        float3 powr = pow(max(r, 0), m1);
+        r = pow(max((c1 + c2 * powr) / (1 + c3 * powr), 0), m2);
+        return r;
+    }
+    float3 linearToPQFastApproximation(float3 r)
+    {
+        r = r * (HDR_WHITELEVEL / 10000.0);
+        float3 squareroot = sqrt(r);
+        float3 quadroot = sqrt(squareroot);
+        float3 octroot = sqrt(quadroot);
+        r = min(octroot, min(sqrt(sqrt(6.0)) * quadroot, sqrt(340.0) * squareroot));
+        return r;
+    }
+    float3 linearToPQ(float3 r)
+    {
+        if (fast_color_space_conversion)
+            r = linearToPQFastApproximation(r);
+        else
+            r = linearToPQAccurate(r);
+        return r;
+    }
+
+// Hybrid Log Gamma Conversions
+    float3 linearToHLG(float3 r)
+    {
+        r = r * HDR_WHITELEVEL / 1000;
+        float a = 0.17883277;
+        float b = 0.28466892;
+        float c = 0.55991073;
+        float3 s = sqrt(3 * r);
+        return (s < .5) ? s : (log(12 * r - b) * a + c);
+    }
+    float3 HLGtoLinear(float3 r)
+    {
+        float a = 0.17883277;
+        float b = 0.28466892;
+        float c = 0.55991073;
+        r = (r < .5) ? r * r / 3.0 : ((exp((r - c) / a) + b) / 12.0);
+        return r * 1000 / HDR_WHITELEVEL;
+    }
+
+// Main conversion wrapper functions
+    float3 toLinearColorspace(float3 r)
+    {
+        if (GLAMAYRE_COLOR_SPACE == 2)
+            r = r * (80.0 / HDR_WHITELEVEL); // scRGB
+        else if (GLAMAYRE_COLOR_SPACE == 3)
+            r = PQtoLinear(r); // HDR10 PQ
+        else if (GLAMAYRE_COLOR_SPACE == 4)
+            r = HLGtoLinear(r); // HLG
+        else
+            r = sRGBtoLinear(r); // sRGB
+        return r;
+    }
+    float3 toOutputColorspace(float3 r)
+    {
+        if (GLAMAYRE_COLOR_SPACE == 2)
+            r = r * (HDR_WHITELEVEL / 80.0); // scRGB
+        else if (GLAMAYRE_COLOR_SPACE == 3)
+            r = linearToPQ(r); // HDR10 PQ
+        else if (GLAMAYRE_COLOR_SPACE == 4)
+            r = linearToHLG(r); // HLG
+        else
+            r = linearToSRGB(r); // sRGB
+        return r;
+    }
+    
 //---------------|
 // :: Utility :: |
 //---------------|
