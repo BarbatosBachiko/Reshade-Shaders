@@ -10,7 +10,7 @@ https://github.com/Blinue/Magpie/blob/dev/src/Effects/SGSR.hlsl
 
     Barbatos SSR, but focused for testing
 
-    Version: 0.0.1
+    Version: 0.0.2
     Author: Barbatos
     License: MIT
 */
@@ -35,6 +35,7 @@ static const int STEPS_PER_RAY_WALLS = 32;
 #define fReflectFloorsIntensity 1
 #define fReflectWallsIntensity 0
 #define fReflectCeilingsIntensity 0
+#define MVErrorTolerance 0.96
 
 //----------|
 // :: UI :: |
@@ -214,20 +215,6 @@ namespace Barbatos_SSR_TEST
         Texture = History;
     };
 
-    texture TNormal
-    {
-        Width = BUFFER_WIDTH;
-        Height = BUFFER_HEIGHT;
-        Format = RGBA16F;
-    };
-    sampler sNormal
-    {
-        Texture = TNormal;
-        MagFilter = POINT;
-        MinFilter = POINT;
-        MipFilter = POINT;
-    };
-
     texture UpscaledReflection
     {
         Width = BUFFER_WIDTH;
@@ -293,6 +280,20 @@ namespace Barbatos_SSR_TEST
         return dot(linearColor, float3(0.2126, 0.7152, 0.0722));
     }
 
+    float2 GetMotionVectors(float2 texcoord)
+    {
+        float2 p = ReShade::PixelSize;
+        float2 MV = 0;
+        if (MVErrorTolerance < 1)
+        {
+            MV = GetLod(sTexMotionVectorsSampler, texcoord).rg;
+            if (abs(MV.x) < p.x && abs(MV.y) < p.y)
+                MV = 0;
+        }
+        return GetLod(sTexMotionVectorsSampler, texcoord).rg;
+    }
+
+    
 //------------------------------------|
 // :: View Space & Normal Functions ::|
 //------------------------------------|
@@ -376,11 +377,6 @@ namespace Barbatos_SSR_TEST
 
         return normalize(normal + bumpNormal * GeoCorrectionIntensity);
     }
-    
-    float2 SampleMotionVectors(float2 texcoord)
-    {
-        return GetLod(sTexMotionVectorsSampler, texcoord).rg;
-    }
 
 //-------------------|
 // :: Ray Tracing  ::|
@@ -448,7 +444,7 @@ namespace Barbatos_SSR_TEST
                     lo = mid;
             }
             result.viewPos = hi;
-            result.uv = ViewPosToUV(result.viewPos);
+            result.uv = ViewPosToUV(result.viewPos).xy;
             result.found = true;
             return result;
         }
@@ -588,27 +584,6 @@ namespace Barbatos_SSR_TEST
 // :: Pixel Shaders ::|
 //--------------------|
 
-    void PS_GBuffer(float4 vpos : SV_Position, float2 uv : TEXCOORD, out float4 outNormal : SV_Target)
-    {
-        if (any(uv > RenderScale))
-        {
-            outNormal = 0;
-            return;
-        }
-
-        float2 source_uv = uv / RenderScale;
-
-        float3 normal = Normal(source_uv);
-        float depth = GetDepth(source_uv);
-
-        // Apply bump mapping
-        normal = ApplyBumpMapping(source_uv, normal);
-        normal = GeometryCorrection(source_uv, normal);
-
-        outNormal.rgb = normal * 0.5 + 0.5;
-        outNormal.a = depth;
-    }
-
     void PS_TraceReflections(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outReflection : SV_Target)
     {
         if (any(uv > RenderScale))
@@ -629,7 +604,9 @@ namespace Barbatos_SSR_TEST
         float3 viewPos = UVToViewPos(scaled_uv, depth);
         float3 viewDir = -normalize(viewPos);
 
-        float3 normal = (GetLod(sNormal, uv).xyz - 0.5) * 2.0;
+        float3 normal = Normal(scaled_uv).xyz;
+        normal = ApplyBumpMapping(scaled_uv, normal);
+        normal = GeometryCorrection(scaled_uv, normal);
         normal = normalize(normal);
 
         bool isFloor = normal.y > OrientationThreshold;
@@ -683,7 +660,7 @@ namespace Barbatos_SSR_TEST
         {
             float adaptiveDist = depth * 1.2 + 0.012;
             float3 fbViewPos = viewPos + r.direction * adaptiveDist;
-            float2 uvFb = saturate(ViewPosToUV(fbViewPos));
+            float2 uvFb = saturate(ViewPosToUV(fbViewPos).xy);
             reflectionColor = GetColor(uvFb).rgb;
             float vertical_fade = pow(saturate(1.0 - scaled_uv.y), 2.0);
             reflectionAlpha = fresnel * vertical_fade;
@@ -714,7 +691,7 @@ namespace Barbatos_SSR_TEST
         
         float2 full_res_uv = uv / RenderScale;
         
-        float2 motion = SampleMotionVectors(full_res_uv);
+        float2 motion = GetMotionVectors(full_res_uv);
         float2 reprojected_uv_full = full_res_uv + motion;
 
         float currentDepth = GetDepth(full_res_uv);
@@ -768,7 +745,7 @@ namespace Barbatos_SSR_TEST
             outColor = GetLod(sTemp, uv);
             return;
         }
-       
+        
         float2 inputSize = BUFFER_SCREEN_SIZE * RenderScale;
         float2 inputPixelSize = 1.0 / inputSize;
         float4 con1 = float4(inputPixelSize, inputSize);
@@ -793,25 +770,31 @@ namespace Barbatos_SSR_TEST
 
     void PS_Output(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outColor : SV_Target)
     {
-        // Debug 
+        // Debug  
         if (ViewMode != 0)
         {
             switch (ViewMode)
             {
                 case 1: // Motion vectors
-                    float2 motion = SampleMotionVectors(uv);
-                    float velocity = length(motion) * 100.0;
-                    float angle = atan2(motion.y, motion.x);
-                    float3 hsv = float3((angle / (2.0 * PI)) + 0.5, 1.0, saturate(velocity));
-                    outColor = float4(HSVToRGB(hsv), 1.0);
-                    return;
+                    {
+                        float2 motion = GetMotionVectors(uv);
+                        float velocity = length(motion) * 100.0;
+                        float angle = atan2(motion.y, motion.x);
+                        float3 hsv = float3((angle / (2.0 * PI)) + 0.5, 1.0, saturate(velocity));
+                        outColor = float4(HSVToRGB(hsv), 1.0);
+                        return;
+                    }
                 case 2: // Final Reflection (Upscaled)
                     outColor = float4(GetLod(sUpscaledReflection, uv).rgb, 1.0);
                     return;
                 case 3: // Normals
-                    float3 normal = (GetLod(sNormal, uv).xyz - 0.5) * 2.0;
-                    outColor = float4(normalize(normal) * 0.5 + 0.5, 1.0);
-                    return;
+                    {
+                        float3 normal = Normal(uv);
+                        normal = ApplyBumpMapping(uv, normal);
+                        normal = GeometryCorrection(uv, normal);
+                        outColor = float4(normalize(normal) * 0.5 + 0.5, 1.0);
+                        return;
+                    }
                 case 4: // Depth
                     outColor = GetDepth(uv).xxxx;
                     return;
@@ -845,13 +828,6 @@ namespace Barbatos_SSR_TEST
 
     technique Barbatos_SSR_TEST
     {
-        pass GBuffer
-        {
-            VertexShader = PostProcessVS;
-            PixelShader = PS_GBuffer;
-            RenderTarget = TNormal;
-            ClearRenderTargets = true;
-        }
         pass TraceReflections
         {
             VertexShader = PostProcessVS;
