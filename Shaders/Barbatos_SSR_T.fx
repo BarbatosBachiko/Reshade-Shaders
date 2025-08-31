@@ -10,7 +10,7 @@ https://github.com/Blinue/Magpie/blob/dev/src/Effects/SGSR.hlsl
 
     Barbatos SSR, but focused for testing
 
-    Version: 0.0.3
+    Version: 0.0.4
     Author: Barbatos
     License: MIT
 */
@@ -30,15 +30,14 @@ static const float2 ZERO_LOD = float2(0.0, 0.0);
 #define PI 3.1415927
 #define GetDepth(coords) (ReShade::GetLinearizedDepth(coords))
 
-#if __RESHADE__ < 40000 
-    static const int STEPS_PER_RAY_WALLS_DX9 = 20;
-    static const int STEPS_PER_RAY_FLOOR_CEILING_QUALITY_DX9 = 64;
-    static const int STEPS_PER_RAY_FLOOR_CEILING_PERF_DX9 = 32;
+#if __RESHADE__ < 40000
+static const int STEPS_PER_RAY_WALLS_DX9 = 20;
+static const int STEPS_PER_RAY_FLOOR_CEILING_QUALITY_DX9 = 64;
+static const int STEPS_PER_RAY_FLOOR_CEILING_PERF_DX9 = 32;
 #else
     // Default values
     static const int STEPS_PER_RAY_WALLS = 32;
 #endif
-
 
 #define fReflectFloorsIntensity 1
 #define fReflectWallsIntensity 0
@@ -74,8 +73,16 @@ uniform float BumpIntensity <
     ui_label = "Bump Mapping Intensity";
     ui_type = "drag";
     ui_category = "Surface & Normals";
-    ui_min = 0.0; ui_max = 2.0;
-> = 0.003;
+    ui_min = 0.0; ui_max = 5.0; ui_step = 0.01;
+> = 0.1;
+
+uniform float SobelEdgeThreshold <
+    ui_label = "Sobel Edge Threshold";
+    ui_tooltip = "Sets a minimum edge strength for bump mapping to occur. Helps reduce noise on flat surfaces.";
+    ui_type = "drag";
+    ui_category = "Surface & Normals";
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+> = 0.03;
 
 uniform float OrientationThreshold <
     ui_type = "drag";
@@ -92,6 +99,28 @@ uniform float GeoCorrectionIntensity <
     ui_category = "Orientation";
     ui_label = "Geometry Correction Intensity";
 > = -0.01;
+
+uniform bool EnableGlossy <
+    ui_category = "Glossy Reflections";
+    ui_label = "Enable Glossy Reflections";
+    ui_tooltip = "Simulates reflections on non-perfectly smooth surfaces, creating a blurry/glossy effect.";
+> = true;
+
+uniform float Glossiness <
+    ui_type = "drag";
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+    ui_category = "Glossy Reflections";
+    ui_label = "Glossiness (Roughness)";
+    ui_tooltip = "Controls the amount of blur. 0.0 is a perfect mirror, 1.0 is very blurry/rough.";
+> = 0.25;
+
+uniform int GlossySamples <
+    ui_type = "slider";
+    ui_min = 1; ui_max = 128;
+    ui_category = "Glossy Reflections";
+    ui_label = "Glossy Samples";
+    ui_tooltip = "Number of samples for the blur effect. Higher values are better quality but slower.";
+> = 8;
 
 uniform bool EnableTemporal <
     ui_category = "Temporal Filtering";
@@ -189,7 +218,7 @@ namespace Barbatos_SSR_TEST
     {
         Width = BUFFER_WIDTH;
         Height = BUFFER_HEIGHT;
-        Format = RGBA8;
+        Format = RGBA16F;
     };
     sampler sReflection
     {
@@ -200,7 +229,7 @@ namespace Barbatos_SSR_TEST
     {
         Width = BUFFER_WIDTH;
         Height = BUFFER_HEIGHT;
-        Format = RGBA8;
+        Format = RGBA16F;
     };
     sampler sTemp
     {
@@ -216,7 +245,7 @@ namespace Barbatos_SSR_TEST
     {
         Width = BUFFER_WIDTH;
         Height = BUFFER_HEIGHT;
-        Format = RGBA8;
+        Format = RGBA16F;
     };
     sampler sHistory
     {
@@ -227,7 +256,7 @@ namespace Barbatos_SSR_TEST
     {
         Width = BUFFER_WIDTH;
         Height = BUFFER_HEIGHT;
-        Format = RGBA8;
+        Format = RGBA16F;
     };
     sampler sUpscaledReflection
     {
@@ -257,7 +286,7 @@ namespace Barbatos_SSR_TEST
 
     float3 GetColor(float2 uv)
     {
-        return tex2D(samplerColor, uv).rgb;
+        return GetLod(samplerColor, uv).rgb;
     }
 
     float3 RGBToYCoCg(float3 rgb)
@@ -301,7 +330,47 @@ namespace Barbatos_SSR_TEST
         return GetLod(sTexMotionVectorsSampler, texcoord).rg;
     }
 
-    
+    float specularPowerToConeAngle(float specularPower)
+    {
+        if (specularPower >= exp2(12.0))
+        {
+            return 0.0f;
+        }
+
+        const float xi = 0.244f;
+        float exponent = 1.0f / (specularPower + 1.0f);
+        return acos(pow(xi, exponent));
+    }
+
+    float isoscelesTriangleOpposite(float adjacentLength, float coneTheta)
+    {
+        return 2.0f * tan(coneTheta) * adjacentLength;
+    }
+
+    float isoscelesTriangleInRadius(float a, float h)
+    {
+        float a2 = a * a;
+        float fh2 = 4.0f * h * h;
+        return (a * (sqrt(a2 + fh2) - a)) / (4.0f * h);
+    }
+
+    float3 ClipToAABB(float3 aabb_min, float3 aabb_max, float3 q)
+    {
+        float3 center = 0.5 * (aabb_max + aabb_min);
+        float3 extents = 0.5 * (aabb_max - aabb_min);
+        extents = max(extents, 1.0 / 255.0);
+
+        float3 v = q - center;
+        float max_dist = max(abs(v.x / extents.x), max(abs(v.y / extents.y), abs(v.z / extents.z)));
+
+        if (max_dist > 1.0)
+        {
+            return center + v / max_dist;
+        }
+
+        return q;
+    }
+
 //------------------------------------|
 // :: View Space & Normal Functions ::|
 //------------------------------------|
@@ -357,13 +426,26 @@ namespace Barbatos_SSR_TEST
     {
         if (BumpIntensity == 0.0)
             return normal;
+        
+        float l00 = GetLuminance(tex2Doffset(samplerColor, texcoord, int2(-1, -1)).rgb);
+        float l10 = GetLuminance(tex2Doffset(samplerColor, texcoord, int2(0, -1)).rgb);
+        float l20 = GetLuminance(tex2Doffset(samplerColor, texcoord, int2(1, -1)).rgb);
 
-        float h_c = GetLuminance(tex2D(ReShade::BackBuffer, texcoord).rgb);
-        float h_x = GetLuminance(tex2Doffset(ReShade::BackBuffer, texcoord, int2(1, 0)).rgb);
-        float h_y = GetLuminance(tex2Doffset(ReShade::BackBuffer, texcoord, int2(0, 1)).rgb);
+        float l01 = GetLuminance(tex2Doffset(samplerColor, texcoord, int2(-1, 0)).rgb);
+        float l21 = GetLuminance(tex2Doffset(samplerColor, texcoord, int2(1, 0)).rgb);
 
-        float2 slope = float2(h_x - h_c, h_y - h_c) * BumpIntensity * 100.0;
+        float l02 = GetLuminance(tex2Doffset(samplerColor, texcoord, int2(-1, 1)).rgb);
+        float l12 = GetLuminance(tex2Doffset(samplerColor, texcoord, int2(0, 1)).rgb);
+        float l22 = GetLuminance(tex2Doffset(samplerColor, texcoord, int2(1, 1)).rgb);
 
+        float Gx = (l20 + 2.0 * l21 + l22) - (l00 + 2.0 * l01 + l02);
+        float Gy = (l02 + 2.0 * l12 + l22) - (l00 + 2.0 * l10 + l20);
+
+        if (length(float2(Gx, Gy)) < SobelEdgeThreshold)
+            return normal;
+
+        float2 slope = float2(Gx, Gy) * BumpIntensity;
+        
         float3 up = abs(normal.y) < 0.99 ? float3(0, 1, 0) : float3(1, 0, 0);
         float3 T = normalize(cross(up, normal));
         float3 B = cross(normal, T);
@@ -406,7 +488,7 @@ namespace Barbatos_SSR_TEST
             min_step_size = 0.001;
             max_step_size = 1.0;
         }
-        else 
+        else
         {
             max_trace_dist = 2.0;
             refinement_steps = 5;
@@ -419,7 +501,6 @@ namespace Barbatos_SSR_TEST
         float totalDist = 0.0;
         float3 prevPos = r.origin;
 
-        [loop]
         for (int i = 0; i < num_steps; ++i)
         {
             float3 currPos = prevPos + r.direction * stepSize;
@@ -441,7 +522,6 @@ namespace Barbatos_SSR_TEST
             }
 
             float3 lo = prevPos, hi = currPos;
-            [unroll]
             for (int ref_step = 0; ref_step < refinement_steps; ++ref_step)
             {
                 float3 mid = 0.5 * (lo + hi);
@@ -668,7 +748,52 @@ namespace Barbatos_SSR_TEST
 
         if (hit.found)
         {
-            reflectionColor = GetColor(hit.uv).rgb;
+            if (EnableGlossy && Glossiness > 0.0)
+            {
+                float gloss = 1.0 - Glossiness;
+                float specularPower = pow(2.0, 10.0 * gloss + 1.0);
+
+                float coneTheta = specularPowerToConeAngle(specularPower) * 0.5;
+
+                if (coneTheta > 0.001)
+                {
+                    float2 deltaP = (hit.uv - scaled_uv) * BUFFER_SCREEN_SIZE;
+                    float adjacentLength = length(deltaP);
+
+                    if (adjacentLength > 1.0)
+                    {
+                        float oppositeLength = isoscelesTriangleOpposite(adjacentLength, coneTheta);
+                        float incircleSize = isoscelesTriangleInRadius(oppositeLength, adjacentLength);
+                        float blurRadiusUV = incircleSize * ReShade::PixelSize.x;
+
+                        reflectionColor = float3(0.0, 0.0, 0.0);
+                        const float GOLDEN_ANGLE = 2.3999632297;
+
+                        for (int i = 0; i < GlossySamples; ++i)
+                        {
+                            float angle = float(i) * GOLDEN_ANGLE;
+                            float radius = sqrt(float(i) / float(GlossySamples));
+                            
+                            float2 offset = float2(cos(angle), sin(angle)) * radius * blurRadiusUV;
+                            reflectionColor += GetColor(hit.uv + offset).rgb;
+                        }
+                        reflectionColor /= float(GlossySamples);
+                    }
+                    else
+                    {
+                        reflectionColor = GetColor(hit.uv).rgb;
+                    }
+                }
+                else
+                {
+                    reflectionColor = GetColor(hit.uv).rgb;
+                }
+            }
+            else
+            {
+                reflectionColor = GetColor(hit.uv).rgb;
+            }
+            
             float max_trace_dist = 2.0;
             float distFactor = saturate(1.0 - length(hit.viewPos - viewPos) / max_trace_dist);
             float fadeRange = max(FadeEnd, 0.001);
@@ -712,12 +837,31 @@ namespace Barbatos_SSR_TEST
         
         float2 full_res_uv = uv / RenderScale;
         
+        float closest_depth = GetDepth(full_res_uv);
         float2 motion = GetMotionVectors(full_res_uv);
-        float2 reprojected_uv_full = full_res_uv + motion;
 
+        [unroll]
+        for (int y = -1; y <= 1; y++)
+        {
+            for (int x = -1; x <= 1; x++)
+            {
+                if (x == 0 && y == 0)
+                    continue;
+
+                float2 offset_uv = full_res_uv + float2(x, y) * ReShade::PixelSize;
+                float neighbor_depth = GetDepth(offset_uv);
+
+                if (neighbor_depth < closest_depth)
+                {
+                    closest_depth = neighbor_depth;
+                    motion = GetMotionVectors(offset_uv);
+                }
+            }
+        }
+        
+        float2 reprojected_uv_full = full_res_uv + motion;
         float currentDepth = GetDepth(full_res_uv);
         float historyDepth = GetDepth(reprojected_uv_full);
-
         float2 reprojected_uv_low = reprojected_uv_full * RenderScale;
 
         bool validHistory = all(saturate(reprojected_uv_low) == reprojected_uv_low) &&
@@ -730,24 +874,33 @@ namespace Barbatos_SSR_TEST
             float4 historySpec = GetLod(sHistory, reprojected_uv_low);
 
             float3 minBox = RGBToYCoCg(currentSpec.rgb), maxBox = minBox;
+            const int2 offsets[4] = { int2(0, -1), int2(-1, 0), int2(1, 0), int2(0, 1) };
+            float2 low_res_pixel_size = ReShade::PixelSize / RenderScale;
+
             [unroll]
-            for (int y = -1; y <= 1; y++)
+            for (int i = 0; i < 4; i++)
             {
-                for (int x = -1; x <= 1; x++)
-                {
-                    if (x == 0 && y == 0)
-                        continue;
-                    
-                    float2 neighbor_uv = uv + float2(x, y) * ReShade::PixelSize;
-                    float3 neighborSpec = RGBToYCoCg(GetLod(sReflection, neighbor_uv).rgb);
-                    minBox = min(minBox, neighborSpec);
-                    maxBox = max(maxBox, neighborSpec);
-                }
+                float2 neighbor_uv = uv + offsets[i] * low_res_pixel_size;
+                float3 neighborSpec = RGBToYCoCg(GetLod(sReflection, neighbor_uv).rgb);
+                minBox = min(minBox, neighborSpec);
+                maxBox = max(maxBox, neighborSpec);
             }
+            float3 center = (minBox + maxBox) * 0.5;
+            float3 extents = (maxBox - minBox) * 0.5;
+            extents += 0.01; 
+            minBox = center - extents;
+            maxBox = center + extents;
+
+            float3 historyYCoCg = RGBToYCoCg(historySpec.rgb);
+            float3 processedHistoryYCoCg = ClipToAABB(minBox, maxBox, historyYCoCg);
             
-            float3 clampedHistorySpec = clamp(RGBToYCoCg(historySpec.rgb), minBox, maxBox);
-            float alpha = 1.0 / min(FRAME_COUNT, AccumFramesSG);
-            blendedSpec.rgb = YCoCgToRGB(lerp(clampedHistorySpec, RGBToYCoCg(currentSpec.rgb), alpha));
+            float alpha = 1.0 / min((float) FRAME_COUNT, AccumFramesSG);
+            
+            float rejection_dist = distance(historyYCoCg, processedHistoryYCoCg);
+            float rejection_factor = saturate(rejection_dist * 8.0);
+            alpha = max(alpha, rejection_factor);
+
+            blendedSpec.rgb = YCoCgToRGB(lerp(processedHistoryYCoCg, RGBToYCoCg(currentSpec.rgb), alpha));
             blendedSpec.a = lerp(historySpec.a, currentSpec.a, alpha);
         }
         
@@ -882,3 +1035,5 @@ namespace Barbatos_SSR_TEST
         }
     }
 }
+// https://willpgfx.com/2015/07/screen-space-glossy-reflections/
+// https://s3.amazonaws.com/arena-attachments/655504/c5c71c5507f0f8bf344252958254fb7d.pdf?1468341463
