@@ -10,7 +10,7 @@ https://github.com/Blinue/Magpie/blob/dev/src/Effects/SGSR.hlsl
 
     Barbatos SSR, but focused for testing
 
-    Version: 0.0.2
+    Version: 0.0.3
     Author: Barbatos
     License: MIT
 */
@@ -30,7 +30,15 @@ static const float2 ZERO_LOD = float2(0.0, 0.0);
 #define PI 3.1415927
 #define GetDepth(coords) (ReShade::GetLinearizedDepth(coords))
 
-static const int STEPS_PER_RAY_WALLS = 32;
+#if __RESHADE__ < 40000 
+    static const int STEPS_PER_RAY_WALLS_DX9 = 20;
+    static const int STEPS_PER_RAY_FLOOR_CEILING_QUALITY_DX9 = 64;
+    static const int STEPS_PER_RAY_FLOOR_CEILING_PERF_DX9 = 32;
+#else
+    // Default values
+    static const int STEPS_PER_RAY_WALLS = 32;
+#endif
+
 
 #define fReflectFloorsIntensity 1
 #define fReflectWallsIntensity 0
@@ -631,6 +639,18 @@ namespace Barbatos_SSR_TEST
         r.origin += r.direction * 0.0001;
 
         HitResult hit;
+        
+#if __RENDERER__ == 0xd0900
+        if (isWall)
+        {
+            hit = TraceRay(r, STEPS_PER_RAY_WALLS_DX9);
+        }
+        else
+        {
+            int steps_per_ray = (Quality == 1) ? STEPS_PER_RAY_FLOOR_CEILING_PERF_DX9 : STEPS_PER_RAY_FLOOR_CEILING_QUALITY_DX9;
+            hit = TraceRay(r, steps_per_ray);
+        }
+#else
         if (isWall)
         {
             hit = TraceRay(r, STEPS_PER_RAY_WALLS);
@@ -640,6 +660,7 @@ namespace Barbatos_SSR_TEST
             int steps_per_ray = (Quality == 1) ? 128 : 256;
             hit = TraceRay(r, steps_per_ray);
         }
+#endif
 
         float3 reflectionColor = 0;
         float reflectionAlpha = 0.0;
