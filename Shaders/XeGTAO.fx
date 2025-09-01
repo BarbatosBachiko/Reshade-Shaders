@@ -34,20 +34,17 @@ THE SOFTWARE.
 //
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // SmoothNormals from https://github.com/AlucardDH/dh-reshade-shaders-mit/blob/master/smoothNormals.fx
-// SmoothNormals from https://github.com/AlucardDH/dh-reshade-shaders-mit/blob/master/smoothNormals.fx
+// Atrous from https://github.com/yplebedev/BFBSOUPCAN/blob/main/reshade-shaders/Shaders/SoupCanSmooth.fx
 /*------------------.
 | :: Description :: |
 '-------------------/
 
     XeGTAO
-    Version 1.1
+    Version 1.2
     Author: Barbatos
 
     History:
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
-
-    Version 1.1
-    * Res scale
 */
 
 #include "ReShade.fxh"
@@ -88,16 +85,16 @@ THE SOFTWARE.
 #define c_phi 1.0
 #define n_phi 1.0
 #define RadiusMultiplier         1.0
-#define FinalValuePower          0.8
-#define FalloffRange             0.01
-#define SampleDistributionPower  1.0
-#define ThinOccluderCompensation 0.0
+#define FinalValuePower      0.8
+#define FalloffRange             0.6 
+#define SampleDistributionPower  8.0
+#define ThinOccluderCompensation -0.60
 #define ComputeBentNormals       false
 #define EnableTemporal           true
 #define DepthMultiplier          1.0
 #define DepthThreshold           0.999
 #define bSmoothNormals           false
-#define FOV                      90.0
+#define FOV                      35.0
 #endif
 
 
@@ -129,8 +126,8 @@ uniform float EffectRadius <
     ui_label = "Effect Radius";
     ui_tooltip = "Main radius of the AO effect in view-space units.";
     ui_type = "drag";
-    ui_min = 0.1; ui_max = 5.0; ui_step = 0.01;
-> = 1.0;
+    ui_min = 0.1; ui_max = 50.0; ui_step = 0.01;
+> = 20.0;
 
 uniform float4 OcclusionColor <
     ui_category = "General";
@@ -177,7 +174,7 @@ uniform float FalloffRange <
     ui_tooltip = "Controls the smoothness of the AO edge, as a percentage of the radius.";
     ui_type = "drag";
     ui_min = 0.01; ui_max = 1.0; ui_step = 0.01;
-> = 0.01;
+> = 0.6;
 
 uniform float SampleDistributionPower <
     ui_category = "GTAO Quality";
@@ -185,7 +182,7 @@ uniform float SampleDistributionPower <
     ui_tooltip = "Controls how samples are distributed along the view ray. >1 pushes samples further away.";
     ui_type = "drag";
     ui_min = 1.0; ui_max = 8.0; ui_step = 0.1;
-> = 1.0;
+> = 8.0;
 
 uniform float ThinOccluderCompensation <
     ui_category = "GTAO Quality";
@@ -193,7 +190,7 @@ uniform float ThinOccluderCompensation <
     ui_tooltip = "Reduces self-occlusion on thin objects.";
     ui_type = "drag";
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
-> = 0.0;
+> = -0.6;
 
 uniform bool ComputeBentNormals <
     ui_category = "GTAO Quality";
@@ -264,7 +261,7 @@ uniform float FOV <
     ui_category = "Advanced";
     ui_label = "Vertical FOV";
     ui_tooltip = "Set to your game's vertical Field of View for accurate projection calculations.";
-> = 90.0;
+> = 35.0;
 
 #endif // UI_DIFFICULTY == 1
 
@@ -417,7 +414,7 @@ namespace XeGTAO
 | :: Functions :: |
 '----------------*/
 
-    // FSR 1.0 Data Structures (adapted for a single float channel)
+    // FSR
     struct RectificationBox
     {
         float boxCenter;
@@ -467,11 +464,13 @@ namespace XeGTAO
         float2 v = float2(0.5, 0.5) + float2(a1, a2) * (n + 1.0);
         return frac(v);
     }
+    
     // http://h14s.p5r.org/2012/09/0x5f3759df.html, [Drobot2014a] Low Level Optimizations for GCN, https://blog.selfshadow.com/publications/s2016-shading-course/activision/s2016_pbs_activision_occlusion.pdf slide 63
     half XeGTAO_FastSqrt(float x)
     {
         return (half) (asfloat(0x1fbd1df5 + (asint(x) >> 1)));
     }
+    
     // input [-1, 1] and output [0, PI], from https://seblagarde.wordpress.com/2014/12/01/inverse-trigonometric-functions-gpu-optimization-for-amd-gcn-architecture/
     half XeGTAO_FastACos(half inX)
     {
@@ -497,44 +496,44 @@ namespace XeGTAO
 
         return view_pos * DepthMultiplier;
     }
-
-    // Helper for denoiser
-    float3 GetViewPosFromDepth(float2 uv, float view_z)
+    
+    float3 XeGTAO_CalculateNormal(half4 edgesLRTB, float3 CENTER, float3 LEFT, float3 RIGHT, float3 TOP, float3 BOTTOM)
     {
-        float fov_rad = FOV * (PI / 180.0);
-        float proj_scale_y = 1.0 / tan(fov_rad * 0.5);
-        float proj_scale_x = proj_scale_y / BUFFER_ASPECT_RATIO;
-        
-        float2 clip_pos = uv * 2.0 - 1.0;
-
-        float3 view_pos;
-        view_pos.x = clip_pos.x / proj_scale_x * view_z;
-        view_pos.y = -clip_pos.y / proj_scale_y * view_z;
-        view_pos.z = view_z;
-        
-        return view_pos;
+        float3 ddx = RIGHT - LEFT;
+        float3 ddy = BOTTOM - TOP;
+        return normalize(cross(ddy, ddx));
     }
 
-    float3 computeNormal(float2 texcoord)
+    float3 XeGTAO_ComputeViewspaceNormal(float2 texcoord)
     {
         float2 p = ReShade::PixelSize;
+    
+        float2 uv_down1 = min(texcoord + float2(0, p.y), 1.0 - p);
+        float2 uv_down2 = min(texcoord + float2(0, p.y * 2), 1.0 - p);
+        float2 uv_up1 = max(texcoord - float2(0, p.y), p);
+        float2 uv_up2 = max(texcoord - float2(0, p.y * 2), p);
+        float2 uv_right1 = min(texcoord + float2(p.x, 0), 1.0 - p);
+        float2 uv_right2 = min(texcoord + float2(p.x * 2, 0), 1.0 - p);
+        float2 uv_left1 = max(texcoord - float2(p.x, 0), p);
+        float2 uv_left2 = max(texcoord - float2(p.x * 2, 0), p);
+    
         float3 center_pos = GetViewPos(texcoord, getDepth(texcoord));
-        float3 pos_down1 = GetViewPos(texcoord + float2(0, p.y), getDepth(texcoord + float2(0, p.y)));
-        float3 pos_down2 = GetViewPos(texcoord + float2(0, p.y * 2), getDepth(texcoord + float2(0, p.y * 2)));
+        float3 pos_down1 = GetViewPos(uv_down1, getDepth(uv_down1));
+        float3 pos_down2 = GetViewPos(uv_down2, getDepth(uv_down2));
         float3 extrapolated_down = pos_down1 + (pos_down1 - pos_down2);
-        float3 pos_up1 = GetViewPos(texcoord - float2(0, p.y), getDepth(texcoord - float2(0, p.y)));
-        float3 pos_up2 = GetViewPos(texcoord - float2(0, p.y * 2), getDepth(texcoord - float2(0, p.y * 2)));
+        float3 pos_up1 = GetViewPos(uv_up1, getDepth(uv_up1));
+        float3 pos_up2 = GetViewPos(uv_up2, getDepth(uv_up2));
         float3 extrapolated_up = pos_up1 + (pos_up1 - pos_up2);
         float3 ddy = pos_down1 - center_pos;
         if (abs(extrapolated_up.z - center_pos.z) < abs(extrapolated_down.z - center_pos.z))
         {
             ddy = center_pos - pos_up1;
         }
-        float3 pos_right1 = GetViewPos(texcoord + float2(p.x, 0), getDepth(texcoord + float2(p.x, 0)));
-        float3 pos_right2 = GetViewPos(texcoord + float2(p.x * 2, 0), getDepth(texcoord + float2(p.x * 2, 0)));
+        float3 pos_right1 = GetViewPos(uv_right1, getDepth(uv_right1));
+        float3 pos_right2 = GetViewPos(uv_right2, getDepth(uv_right2));
         float3 extrapolated_right = pos_right1 + (pos_right1 - pos_right2);
-        float3 pos_left1 = GetViewPos(texcoord - float2(p.x, 0), getDepth(texcoord - float2(p.x, 0)));
-        float3 pos_left2 = GetViewPos(texcoord - float2(p.x * 2, 0), getDepth(texcoord - float2(p.x * 2, 0)));
+        float3 pos_left1 = GetViewPos(uv_left1, getDepth(uv_left1));
+        float3 pos_left2 = GetViewPos(uv_left2, getDepth(uv_left2));
         float3 extrapolated_left = pos_left1 + (pos_left1 - pos_left2);
         float3 ddx = pos_right1 - center_pos;
         if (abs(extrapolated_left.z - center_pos.z) < abs(extrapolated_right.z - center_pos.z))
@@ -544,38 +543,6 @@ namespace XeGTAO
         return normalize(cross(ddy, ddx));
     }
     
-    float3 GetSmoothedNormal(float2 texcoord)
-    {
-        float3 normal = computeNormal(texcoord);
-        if (bSmoothNormals)
-        {
-            float center_depth = getDepth(texcoord);
-            float2 offset = ReShade::PixelSize * 7.5 * (1.0 - center_depth);
-
-            float3 normalT = computeNormal(texcoord - float2(0, offset.y));
-            float3 normalB = computeNormal(texcoord + float2(0, offset.y));
-            float3 normalL = computeNormal(texcoord - float2(offset.x, 0));
-            float3 normalR = computeNormal(texcoord + float2(offset.x, 0));
-
-            float wT = smoothstep(1, 0, distance(normal, normalT) * 1.5) * 2;
-            float wB = smoothstep(1, 0, distance(normal, normalB) * 1.5) * 2;
-            float wL = smoothstep(1, 0, distance(normal, normalL) * 1.5) * 2;
-            float wR = smoothstep(1, 0, distance(normal, normalR) * 1.5) * 2;
-
-            float4 weightedNormal = float4(normal, 1.0)
-                + float4(normalT * wT, wT)
-                + float4(normalB * wB, wB)
-                + float4(normalL * wL, wL)
-                + float4(normalR * wR, wR);
-
-            if (weightedNormal.a > 0)
-            {
-                normal = normalize(weightedNormal.xyz / weightedNormal.a);
-            }
-        }
-        return normal;
-    }
-
     float XeGTAO_EncodeVisibilityBentNormal(half visibility, half3 bentNormal)
     {
         float4 unpackedInput = float4(bentNormal * 0.5 + 0.5, visibility);
@@ -645,8 +612,7 @@ namespace XeGTAO
         mtx[2][2] = e + hvz * v.z;
         return mtx;
     }
-
-    // A-Trous Denoiser Function
+    
     static const float2 atrous_offsets[9] =
     {
         float2(-1, -1), float2(0, -1), float2(1, -1),
@@ -669,7 +635,7 @@ namespace XeGTAO
             return center_ao;
 
         float3 center_normal = tex2Dlod(sNormal, float4(center_full_res_uv, 0.0, 0.0)).xyz * 2.0 - 1.0;
-        float3 center_pos = GetViewPosFromDepth(center_full_res_uv, center_depth);
+        float3 center_pos = GetViewPos(center_full_res_uv, center_depth / RESHADE_DEPTH_LINEARIZATION_FAR_PLANE);
 
         [loop]
         for (int i = 0; i < 9; i++)
@@ -688,7 +654,7 @@ namespace XeGTAO
                 continue;
 
             const float3 sample_normal = tex2Dlod(sNormal, float4(sample_full_res_uv, 0.0, 0.0)).xyz * 2.0 - 1.0;
-            const float3 sample_pos = GetViewPosFromDepth(sample_full_res_uv, sample_depth);
+            const float3 sample_pos = GetViewPos(sample_full_res_uv, sample_depth / RESHADE_DEPTH_LINEARIZATION_FAR_PLANE);
             
             // AO Weight
             float diff_c = center_ao - sample_ao;
@@ -711,15 +677,62 @@ namespace XeGTAO
         return cum_w > 1e-6 ? (sum / cum_w) : center_ao;
     }
 
+    float GetLuminance(float3 linearColor)
+    {
+        return dot(linearColor, float3(0.2126, 0.7152, 0.0722));
+    }
+    float2 ComputeGradient(float2 texcoord)
+    {
+        const float2 offset = ReShade::PixelSize.xy;
 
+        float3 colorTL = tex2D(ReShade::BackBuffer, texcoord + float2(-offset.x, -offset.y)).rgb;
+        float3 colorT = tex2D(ReShade::BackBuffer, texcoord + float2(0.0, -offset.y)).rgb;
+        float3 colorTR = tex2D(ReShade::BackBuffer, texcoord + float2(offset.x, -offset.y)).rgb;
+        float3 colorL = tex2D(ReShade::BackBuffer, texcoord + float2(-offset.x, 0.0)).rgb;
+        float3 colorR = tex2D(ReShade::BackBuffer, texcoord + float2(offset.x, 0.0)).rgb;
+        float3 colorBL = tex2D(ReShade::BackBuffer, texcoord + float2(-offset.x, offset.y)).rgb;
+        float3 colorB = tex2D(ReShade::BackBuffer, texcoord + float2(0.0, offset.y)).rgb;
+        float3 colorBR = tex2D(ReShade::BackBuffer, texcoord + float2(offset.x, offset.y)).rgb;
+
+        float lumTL = GetLuminance(colorTL);
+        float lumT = GetLuminance(colorT);
+        float lumTR = GetLuminance(colorTR);
+        float lumL = GetLuminance(colorL);
+        float lumR = GetLuminance(colorR);
+        float lumBL = GetLuminance(colorBL);
+        float lumB = GetLuminance(colorB);
+        float lumBR = GetLuminance(colorBR);
+
+        float gx = (-3.0 * lumTL - 10.0 * lumL - 3.0 * lumBL) + (3.0 * lumTR + 10.0 * lumR + 3.0 * lumBR);
+        float gy = (-3.0 * lumTL - 10.0 * lumT - 3.0 * lumTR) + (3.0 * lumBL + 10.0 * lumB + 3.0 * lumBR);
+
+        float2 gradient = float2(gx, gy);
+
+        if (0 > 0.0 && length(gradient) < 0)
+        {
+            gradient = 0.0;
+        }
+
+        return gradient;
+    }
+    float3 Bump(float2 texcoord, float intensity)
+    {
+        float2 gradient = ComputeGradient(texcoord);
+        float3 bumpNormal = float3(gradient.x * -intensity, gradient.y * -intensity, 1.0);
+        return normalize(bumpNormal);
+    }
+    
 /*--------------------.
 | :: Pixel Shaders :: |
 '--------------------*/
-
+    
     float4 PS_Normals(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
-        float3 normal = -GetSmoothedNormal(uv);
-        return float4(normal * 0.5 + 0.5, 1.0);
+        float3 geomNormal = -XeGTAO_ComputeViewspaceNormal(uv);
+        float3 bumpNormal = Bump(uv, 1.0);
+        float blend = 0.5; 
+        float3 finalNormal = normalize(lerp(geomNormal, bumpNormal, blend));
+        return float4(saturate(finalNormal * 0.5 + 0.5), 1.0);
     }
 
     float PS_ViewDepth(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
@@ -734,6 +747,9 @@ namespace XeGTAO
             return 0;
         }
         float2 scaled_uv = uv / RenderScale;
+
+        float viewspaceZ_raw = tex2Dlod(sViewDepthTex, float4(scaled_uv, 0, 0)).r;
+        float2 p = ReShade::PixelSize / RenderScale;
 
         int sliceCount, stepsPerSlice;
         if (QualityLevel == 0)
@@ -757,7 +773,6 @@ namespace XeGTAO
             stepsPerSlice = 8;
         }
 
-        float viewspaceZ_raw = tex2Dlod(sViewDepthTex, float4(scaled_uv, 0, 0)).r;
         float3 pixCenterPos = GetViewPos(scaled_uv, viewspaceZ_raw / RESHADE_DEPTH_LINEARIZATION_FAR_PLANE);
         float viewspaceZ = pixCenterPos.z;
 
@@ -775,6 +790,8 @@ namespace XeGTAO
         const half falloffFrom = effectRadius * (1.0 - (half) FalloffRange);
         const half falloffMul = -1.0 / falloffRange;
         const half falloffAdd = falloffFrom / falloffRange + 1.0;
+        const half sampleDistributionPower = (half) SampleDistributionPower;
+        const half thinOccluderCompensation = (half) ThinOccluderCompensation;
 
         half visibility = 0;
         half3 bentNormal = 0;
@@ -789,19 +806,26 @@ namespace XeGTAO
         const half noiseSample = (half) localNoise.y;
 
         const float fov_rad = FOV * (PI / 180.0);
-        const float pixelViewspaceSize = 2.0 * viewspaceZ * tan(fov_rad * 0.5) / (BUFFER_HEIGHT * RenderScale);
-        half screenspaceRadius = effectRadius / (half) pixelViewspaceSize;
-        screenspaceRadius = max(screenspaceRadius, 4.0);
-        const half minS = 1.3 / screenspaceRadius;
+        float proj_scale_y = 1.0 / tan(fov_rad * 0.5);
+        float proj_scale_x = proj_scale_y / BUFFER_ASPECT_RATIO;
+        const float2 pixelDirRBViewspaceSizeAtCenterZ = viewspaceZ.xx * (float2(2.0 / proj_scale_x, 2.0 / proj_scale_y) / (BUFFER_SCREEN_SIZE * RenderScale));
 
-        for (int sliceIndex = 0; sliceIndex < sliceCount; sliceIndex++)
+        half screenspaceRadius = effectRadius / (half) pixelDirRBViewspaceSizeAtCenterZ.x;
+        
+        visibility += saturate((10.0 - screenspaceRadius) / 100.0) * 0.5;
+
+        const half pixelTooCloseThreshold = 1.3;
+        const half minS = screenspaceRadius > 0 ? (pixelTooCloseThreshold / screenspaceRadius) : 0.0;
+
+        for (half slice = 0; slice < sliceCount; slice++)
         {
-            half slice = (half) sliceIndex;
-            half sliceK = (slice + noiseSlice) / (half) sliceCount;
+            half sliceK = (slice + noiseSlice) / sliceCount;
             half phi = sliceK * PI;
             half cosPhi, sinPhi;
             sincos(phi, sinPhi, cosPhi);
-            half2 omega = half2(cosPhi, -sinPhi) * screenspaceRadius;
+            half2 omega = half2(cosPhi, -sinPhi);
+
+            omega *= screenspaceRadius;
 
             const half3 directionVec = half3(cosPhi, sinPhi, 0);
             const half3 orthoDirectionVec = directionVec - (dot(directionVec, viewVec) * viewVec);
@@ -810,7 +834,8 @@ namespace XeGTAO
 
             half signNorm = (half) sign(dot(orthoDirectionVec, projectedNormalVec));
             half projectedNormalVecLength = length(projectedNormalVec);
-            half cosNorm = saturate(dot(projectedNormalVec, viewVec) / max(projectedNormalVecLength, 1e-6));
+            half cosNorm = saturate(dot(projectedNormalVec, viewVec) / max(projectedNormalVecLength, 1e-4));
+
             half n = signNorm * XeGTAO_FastACos(cosNorm);
 
             const half lowHorizonCos0 = cos(n + PI_HALF);
@@ -819,26 +844,25 @@ namespace XeGTAO
             half horizonCos0 = lowHorizonCos0;
             half horizonCos1 = lowHorizonCos1;
 
-            for (int stepIndex = 0; stepIndex < stepsPerSlice; stepIndex++)
+            [unroll]
+            for (half step = 0; step < stepsPerSlice; step++)
             {
-                half step = (half) stepIndex;
-                const half stepBaseNoise = (step + slice * (half) stepsPerSlice) * 0.61803398875;
+                const half stepBaseNoise = (slice + step * stepsPerSlice) * 0.61803398875;
                 half stepNoise = frac(noiseSample + stepBaseNoise);
-                half s = (step + stepNoise) / (half) stepsPerSlice;
-                s = pow(s, (half) SampleDistributionPower);
-                s = max(s, minS);
+                half s = (step + stepNoise) / stepsPerSlice;
+                s = pow(s, sampleDistributionPower);
+                s += minS;
 
-                half2 sampleOffset = s * omega * ReShade::PixelSize / RenderScale;
+                float2 sampleOffset = round(s * omega) * (ReShade::PixelSize / RenderScale);
 
-                float2 sampleCoord0 = scaled_uv + sampleOffset;
-                float2 sampleCoord1 = scaled_uv - sampleOffset;
+                float2 sampleScreenPos0 = scaled_uv + sampleOffset;
+                float SZ0 = tex2Dlod(sViewDepthTex, float4(sampleScreenPos0, 0, 0)).r;
+                float3 samplePos0 = GetViewPos(sampleScreenPos0, SZ0 / RESHADE_DEPTH_LINEARIZATION_FAR_PLANE);
 
-                float SZ0_raw = tex2Dlod(sViewDepthTex, float4(sampleCoord0, 0, 0)).r;
-                float3 samplePos0 = GetViewPos(sampleCoord0, SZ0_raw / RESHADE_DEPTH_LINEARIZATION_FAR_PLANE);
-
-                float SZ1_raw = tex2Dlod(sViewDepthTex, float4(sampleCoord1, 0, 0)).r;
-                float3 samplePos1 = GetViewPos(sampleCoord1, SZ1_raw / RESHADE_DEPTH_LINEARIZATION_FAR_PLANE);
-
+                float2 sampleScreenPos1 = scaled_uv - sampleOffset;
+                float SZ1 = tex2Dlod(sViewDepthTex, float4(sampleScreenPos1, 0, 0)).r;
+                float3 samplePos1 = GetViewPos(sampleScreenPos1, SZ1 / RESHADE_DEPTH_LINEARIZATION_FAR_PLANE);
+                
                 float3 sampleDelta0 = (samplePos0 - pixCenterPos);
                 float3 sampleDelta1 = (samplePos1 - pixCenterPos);
                 half sampleDist0 = (half) length(sampleDelta0);
@@ -847,8 +871,8 @@ namespace XeGTAO
                 half3 sampleHorizonVec0 = (half3) (sampleDelta0 / max(sampleDist0, 1e-6));
                 half3 sampleHorizonVec1 = (half3) (sampleDelta1 / max(sampleDist1, 1e-6));
 
-                half falloffBase0 = length(half3(sampleDelta0.x, sampleDelta0.y, sampleDelta0.z * (1.0 + (half) ThinOccluderCompensation)));
-                half falloffBase1 = length(half3(sampleDelta1.x, sampleDelta1.y, sampleDelta1.z * (1.0 + (half) ThinOccluderCompensation)));
+                half falloffBase0 = length(half3(sampleDelta0.x, sampleDelta0.y, sampleDelta0.z * (1.0 + thinOccluderCompensation)));
+                half falloffBase1 = length(half3(sampleDelta1.x, sampleDelta1.y, sampleDelta1.z * (1.0 + thinOccluderCompensation)));
                 half weight0 = saturate(falloffBase0 * falloffMul + falloffAdd);
                 half weight1 = saturate(falloffBase1 * falloffMul + falloffAdd);
 
@@ -862,20 +886,14 @@ namespace XeGTAO
                 horizonCos1 = max(horizonCos1, shc1);
             }
 
-            projectedNormalVecLength = max(projectedNormalVecLength, 1.0);
             projectedNormalVecLength = lerp(projectedNormalVecLength, 1.0, 0.05);
 
             half h0 = -XeGTAO_FastACos(clamp(horizonCos1, -1.0, 1.0));
             half h1 = XeGTAO_FastACos(clamp(horizonCos0, -1.0, 1.0));
-            h0 = clamp(h0, -PI_HALF, PI_HALF);
-            h1 = clamp(h1, -PI_HALF, PI_HALF);
-            n = clamp(n, -PI_HALF, PI_HALF);
 
             half iarc0 = (cosNorm + 2.0 * h0 * sin(n) - cos(2.0 * h0 - n)) / 4.0;
             half iarc1 = (cosNorm + 2.0 * h1 * sin(n) - cos(2.0 * h1 - n)) / 4.0;
             half localVisibility = projectedNormalVecLength * (iarc0 + iarc1);
-
-            localVisibility = clamp(localVisibility, 0.0, 1.0);
             visibility += localVisibility;
 
             if (ComputeBentNormals)
@@ -887,7 +905,7 @@ namespace XeGTAO
                 bentNormal += localBentNormal;
             }
         }
-
+        
         visibility /= (half) sliceCount;
         visibility = pow(saturate(visibility), (half) FinalValuePower);
         visibility = max(0.03, visibility);
@@ -930,8 +948,8 @@ namespace XeGTAO
         float2 reprojected_uv_low = reprojected_uv_full * RenderScale;
 
         bool validHistory = all(saturate(reprojected_uv_low) == reprojected_uv_low) &&
-                            FRAME_COUNT > 1 &&
-                            abs(historyDepth - currentDepth) < (currentDepth * 0.02);
+                                  FRAME_COUNT > 1 &&
+                                  abs(historyDepth - currentDepth) < (currentDepth * 0.02);
 
         float4 blendedAO = currentPackedAO;
         if (validHistory)
@@ -976,7 +994,7 @@ namespace XeGTAO
     {
         if (any(uv > RenderScale))
         {
-            return 1.0; // Return full visibility for non-rendered areas
+            return 1.0;
         }
 
         float4 packedAO = tex2D(sAccumulatedAOTex, uv);
@@ -1020,7 +1038,7 @@ namespace XeGTAO
                 return tex2D(sDenoiseInputTex, uv).r;
         }
 
-        // FSR 1.0 Upscaling 
+        // FSR
         const float2 fDownscaleFactor = float2(RenderScale, RenderScale);
         const float2 fRenderSize = BUFFER_SCREEN_SIZE * fDownscaleFactor;
 
