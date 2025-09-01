@@ -726,11 +726,11 @@ namespace XeGTAO
 | :: Pixel Shaders :: |
 '--------------------*/
     
-    float4 PS_Normals(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
+   float4 PS_Normals(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
         float3 geomNormal = -XeGTAO_ComputeViewspaceNormal(uv);
-        float3 bumpNormal = Bump(uv, 1.0);
-        float blend = 0.5; 
+        float3 bumpNormal = Bump(uv, 1.03);
+        float blend = 0.3; 
         float3 finalNormal = normalize(lerp(geomNormal, bumpNormal, blend));
         return float4(saturate(finalNormal * 0.5 + 0.5), 1.0);
     }
