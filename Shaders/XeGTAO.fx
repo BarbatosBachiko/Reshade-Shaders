@@ -886,7 +886,7 @@ namespace XeGTAO
                 horizonCos1 = max(horizonCos1, shc1);
             }
 
-            projectedNormalVecLength = lerp(projectedNormalVecLength, 1.0, 0.05);
+            projectedNormalVecLength = lerp(projectedNormalVecLength, 1.0, 1.8); // remind
 
             half h0 = -XeGTAO_FastACos(clamp(horizonCos1, -1.0, 1.0));
             half h1 = XeGTAO_FastACos(clamp(horizonCos0, -1.0, 1.0));
