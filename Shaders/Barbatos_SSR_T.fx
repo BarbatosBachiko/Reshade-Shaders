@@ -10,7 +10,7 @@ https://github.com/Blinue/Magpie/blob/dev/src/Effects/SGSR.hlsl
 
     Barbatos SSR, but focused for testing
 
-    Version: 0.0.4
+    Version: 0.0.5
     Author: Barbatos
     License: MIT
 */
@@ -43,6 +43,7 @@ static const int STEPS_PER_RAY_FLOOR_CEILING_PERF_DX9 = 32;
 #define fReflectWallsIntensity 0
 #define fReflectCeilingsIntensity 0
 #define MVErrorTolerance 0.96
+#define MaxTraceDistance 10
 
 //----------|
 // :: UI :: |
@@ -120,7 +121,7 @@ uniform int GlossySamples <
     ui_category = "Glossy Reflections";
     ui_label = "Glossy Samples";
     ui_tooltip = "Number of samples for the blur effect. Higher values are better quality but slower.";
-> = 8;
+> = 64;
 
 uniform bool EnableTemporal <
     ui_category = "Temporal Filtering";
@@ -477,20 +478,18 @@ namespace Barbatos_SSR_TEST
         HitResult result;
         result.found = false;
 
-        float max_trace_dist, step_scale, min_step_size, max_step_size;
+        float step_scale, min_step_size, max_step_size;
         int refinement_steps;
 
-        if (Quality == 1)
+        if (Quality == 1) // Performance
         {
-            max_trace_dist = 2.0;
             refinement_steps = 5;
             step_scale = 0.7;
             min_step_size = 0.001;
             max_step_size = 1.0;
         }
-        else
+        else // Quality
         {
-            max_trace_dist = 2.0;
             refinement_steps = 5;
             step_scale = 0.1;
             min_step_size = 0.0001;
@@ -507,7 +506,7 @@ namespace Barbatos_SSR_TEST
             totalDist += stepSize;
 
             float2 uvCurr = ViewPosToUV(currPos);
-            if (any(uvCurr < 0.0) || any(uvCurr > 1.0) || totalDist > max_trace_dist)
+            if (any(uvCurr < 0.0) || any(uvCurr > 1.0) || totalDist > MaxTraceDistance)
                 break;
 
             float sceneDepth = GetDepth(uvCurr);
@@ -794,8 +793,7 @@ namespace Barbatos_SSR_TEST
                 reflectionColor = GetColor(hit.uv).rgb;
             }
             
-            float max_trace_dist = 2.0;
-            float distFactor = saturate(1.0 - length(hit.viewPos - viewPos) / max_trace_dist);
+            float distFactor = saturate(1.0 - length(hit.viewPos - viewPos) / MaxTraceDistance);
             float fadeRange = max(FadeEnd, 0.001);
             float depthFade = saturate((FadeEnd - depth) / fadeRange);
             depthFade *= depthFade;
@@ -804,11 +802,55 @@ namespace Barbatos_SSR_TEST
         }
         else // Fallback for missed rays
         {
-            float adaptiveDist = depth * 1.2 + 0.012;
+            float adaptiveDist = min(depth * 1.2 + 0.012, MaxTraceDistance);
             float3 fbViewPos = viewPos + r.direction * adaptiveDist;
             float2 uvFb = saturate(ViewPosToUV(fbViewPos).xy);
-            reflectionColor = GetColor(uvFb).rgb;
-            float vertical_fade = pow(saturate(1.0 - scaled_uv.y), 2.0);
+            
+            if (EnableGlossy && Glossiness > 0.0)
+            {
+                float gloss = 1.0 - Glossiness;
+                float specularPower = pow(2.0, 10.0 * gloss + 1.0);
+                float coneTheta = specularPowerToConeAngle(specularPower) * 0.5;
+
+                if (coneTheta > 0.001)
+                {
+                    float2 deltaP = (uvFb - scaled_uv) * BUFFER_SCREEN_SIZE;
+                    float adjacentLength = length(deltaP);
+
+                    if (adjacentLength > 1.0)
+                    {
+                        float oppositeLength = isoscelesTriangleOpposite(adjacentLength, coneTheta);
+                        float incircleSize = isoscelesTriangleInRadius(oppositeLength, adjacentLength);
+                        float blurRadiusUV = incircleSize * ReShade::PixelSize.x;
+
+                        reflectionColor = float3(0.0, 0.0, 0.0);
+                        const float GOLDEN_ANGLE = 2.3999632297;
+
+                        for (int i = 0; i < GlossySamples; ++i)
+                        {
+                            float angle = float(i) * GOLDEN_ANGLE;
+                            float radius = sqrt(float(i) / float(GlossySamples));
+                            float2 offset = float2(cos(angle), sin(angle)) * radius * blurRadiusUV;
+                            reflectionColor += GetColor(uvFb + offset).rgb;
+                        }
+                        reflectionColor /= float(GlossySamples);
+                    }
+                    else
+                    {
+                        reflectionColor = GetColor(uvFb).rgb;
+                    }
+                }
+                else
+                {
+                    reflectionColor = GetColor(uvFb).rgb;
+                }
+            }
+            else
+            {
+                reflectionColor = GetColor(uvFb).rgb;
+            }
+
+            float vertical_fade = pow(saturate(1.0 - scaled_uv.y), 3.0);
             reflectionAlpha = fresnel * vertical_fade;
         }
 
@@ -887,7 +929,7 @@ namespace Barbatos_SSR_TEST
             }
             float3 center = (minBox + maxBox) * 0.5;
             float3 extents = (maxBox - minBox) * 0.5;
-            extents += 0.01; 
+            extents += 0.01;
             minBox = center - extents;
             maxBox = center + extents;
 
