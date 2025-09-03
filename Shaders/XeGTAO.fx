@@ -41,12 +41,13 @@ THE SOFTWARE.
 '-------------------/
 
     XeGTAO
-    Version 1.3
+    Version 1.4
     Author: Barbatos
 
     History:
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
 */
+
 
 #include "ReShade.fxh"
 
@@ -76,9 +77,6 @@ THE SOFTWARE.
 | :: UI :: |
 '---------*/
 
-#define BumpIntensity 50
-#define BumpBlendAmount 0.6
-
 #ifndef UI_DIFFICULTY
 #define UI_DIFFICULTY 0
 #endif
@@ -99,6 +97,8 @@ THE SOFTWARE.
 #define DepthThreshold           0.999
 #define bSmoothNormals           false
 #define FOV                      35.0
+#define HeightmapIntensity       100.0
+#define HeightmapBlendAmount     0.6
 #endif
 
 uniform float Intensity <
@@ -265,6 +265,22 @@ uniform float FOV <
     ui_label = "Vertical FOV";
     ui_tooltip = "Set to your game's vertical Field of View for accurate projection calculations.";
 > = 35.0;
+
+uniform float HeightmapIntensity <
+    ui_category = "Heightmap Normals";
+    ui_label = "Heightmap Intensity";
+    ui_tooltip = "Controls the strength of heightmap-based normal perturbation.";
+    ui_type = "drag";
+    ui_min = 0.0; ui_max = 200.0; ui_step = 0.1;
+> = 100.0;
+
+uniform float HeightmapBlendAmount <
+    ui_category = "Heightmap Normals";
+    ui_label = "Heightmap Blend Amount";
+    ui_tooltip = "How much to blend heightmap normals with geometric normals.";
+    ui_type = "drag";
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+> = 0.6;
 
 #endif // UI_DIFFICULTY == 1
 
@@ -440,18 +456,63 @@ namespace XeGTAO
         box.boxVec = max(0.0, box.boxVec * fBoxCenterWeightRcp - (box.boxCenter * box.boxCenter));
     }
 
-
-    float xy2hilbert6(float x, float y)
+    uint part1by1(uint x)
     {
-        return x + y * 64.0;
+        x = (x & 0x0000ffffu);
+        x = ((x ^ (x << 8u)) & 0x00ff00ffu);
+        x = ((x ^ (x << 4u)) & 0x0f0f0f0fu);
+        x = ((x ^ (x << 2u)) & 0x33333333u);
+        x = ((x ^ (x << 1u)) & 0x55555555u);
+        return x;
+    }
+        
+    uint compact1by1(uint x)
+    {
+        x = (x & 0x55555555u);
+        x = ((x ^ (x >> 1u)) & 0x33333333u);
+        x = ((x ^ (x >> 2u)) & 0x0f0f0f0fu);
+        x = ((x ^ (x >> 4u)) & 0x00ff00ffu);
+        x = ((x ^ (x >> 8u)) & 0x0000ffffu);
+        return x;
     }
 
-    float2 R2(float n)
+    // https://www.shadertoy.com/view/llGcDm
+    int hilbert(int2 p, int level)
     {
-        const float a1 = 0.7548776662466927; // ~ 1 / G
-        const float a2 = 0.5698402909980532; // ~ 1 / (G^2)
-        float2 v = float2(0.5, 0.5) + float2(a1, a2) * (n + 1.0);
-        return frac(v);
+        int d = 0;
+        for (int k = 0; k < level; k++)
+        {
+            int n = level - k - 1;
+            int2 r = (p >> n) & 1;
+            d += ((3 * r.x) ^ r.y) << (2 * n);
+            if (r.y == 0)
+            {
+                if (r.x == 1)
+                {
+                    p = (1 << n) - 1 - p;
+                }
+                p = p.yx;
+            }
+        }
+        return d;
+    }
+
+    uint HilbertIndex(uint x, uint y)
+    {
+        // Level 6 for 64x64 tiles, matching the original implementation's tile size.
+        return hilbert(int2(x % 64, y % 64), 6);
+    }
+
+    float2 SpatioTemporalNoise(uint2 pixCoord, uint temporalIndex)
+    {
+        // Hilbert curve driving R2 (see https://www.shadertoy.com/view/3tB3z3)
+        uint index = HilbertIndex(pixCoord.x, pixCoord.y);
+        
+        // why 288? tried out a few and that's the best so far (with XE_HILBERT_LEVEL 6U) - but there's probably better :)
+        index += 288 * (temporalIndex % 64);
+        
+        // R2 sequence - see http://extremelearning.com.au/unreasonable-effectiveness-of-quasirandom-sequences/
+        return frac(0.5 + index * float2(0.75487766624669276005, 0.5698402909980532659114));
     }
     
     // http://h14s.p5r.org/2012/09/0x5f3759df.html, [Drobot2014a] Low Level Optimizations for GCN, https://blog.selfshadow.com/publications/s2016-shading-course/activision/s2016_pbs_activision_occlusion.pdf slide 63
@@ -530,6 +591,73 @@ namespace XeGTAO
             ddx = center_pos - pos_left1;
         }
         return normalize(cross(ddy, ddx));
+    }
+
+    float3 ComputeHeightmapNormal(float h00, float h10, float h20, float h01, float h11, float h21, float h02, float h12, float h22, const float3 pixelWorldSize)
+    {
+        // Sobel 3x3
+        //    0,0 | 1,0 | 2,0
+        //    ----+-----+----
+        //    0,1 | 1,1 | 2,1
+        //    ----+-----+----
+        //    0,2 | 1,2 | 2,2
+
+        h00 -= h11;
+        h10 -= h11;
+        h20 -= h11;
+        h01 -= h11;
+        h21 -= h11;
+        h02 -= h11;
+        h12 -= h11;
+        h22 -= h11;
+       
+        // The Sobel X kernel is:
+        //
+        // [ 1.0  0.0  -1.0 ]
+        // [ 2.0  0.0  -2.0 ]
+        // [ 1.0  0.0  -1.0 ]
+        
+        float Gx = h00 - h20 + 2.0 * h01 - 2.0 * h21 + h02 - h22;
+                    
+        // The Sobel Y kernel is:
+        //
+        // [  1.0    2.0    1.0 ]
+        // [  0.0    0.0    0.0 ]
+        // [ -1.0   -2.0   -1.0 ]
+        
+        float Gy = h00 + 2.0 * h10 + h20 - h02 - 2.0 * h12 - h22;
+        
+        float stepX = pixelWorldSize.x;
+        float stepY = pixelWorldSize.y;
+        float sizeZ = pixelWorldSize.z;
+       
+        Gx = Gx * stepY * sizeZ;
+        Gy = Gy * stepX * sizeZ;
+        
+        float Gz = stepX * stepY * 8;
+        
+        return normalize(float3(Gx, Gy, Gz));
+    }
+
+    float3 GetHeightmapNormal(float2 texcoord)
+    {
+        float2 p = ReShade::PixelSize;
+        
+        float h00 = GetColor(texcoord + float2(-p.x, -p.y));
+        float h10 = GetColor(texcoord + float2(0, -p.y));
+        float h20 = GetColor(texcoord + float2(p.x, -p.y));
+        
+        float h01 = GetColor(texcoord + float2(-p.x, 0));
+        float h11 = GetColor(texcoord);
+        float h21 = GetColor(texcoord + float2(p.x, 0));
+        
+        float h02 = GetColor(texcoord + float2(-p.x, p.y));
+        float h12 = GetColor(texcoord + float2(0, p.y));
+        float h22 = GetColor(texcoord + float2(p.x, p.y));
+
+        float3 pixelWorldSize = float3(p.x, p.y, HeightmapIntensity * 0.001);
+        
+        return ComputeHeightmapNormal(h00, h10, h20, h01, h11, h21, h02, h12, h22, pixelWorldSize);
     }
     
     float XeGTAO_EncodeVisibilityBentNormal(half visibility, half3 bentNormal)
@@ -702,38 +830,6 @@ namespace XeGTAO
         return spatial_result;
     }
 
-#define BT 1000
-    
-    float lum(in float3 color)
-    {
-        return (color.r + color.g + color.b) / 3;
-    }
-    
-    float3 Bump(float2 texcoord, float height)
-    {
-        float2 p = ReShade::PixelSize;
-        
-        float3 s[3];
-        s[0] = GetColor(texcoord + float2(p.x, 0)).rgb;
-        s[1] = GetColor(texcoord + float2(0, p.y)).rgb;
-        s[2] = GetColor(texcoord).rgb;
-        float LC = rcp(lum(s[0] + s[1] + s[2])) * height;
-        s[0] *= LC;
-        s[1] *= LC;
-        s[2] *= LC;
-        float d[3];
-        d[0] = getDepth(texcoord + float2(p.x, 0));
-        d[1] = getDepth(texcoord + float2(0, p.y));
-        d[2] = getDepth(texcoord);
-        
-        float3 XB = s[2] - s[0];
-        float3 YB = s[2] - s[1];
-        
-        float3 bump = float3(lum(XB) * saturate(1 - abs(d[0] - d[2]) * BT), lum(YB) * saturate(1 - abs(d[1] - d[2]) * BT), 1);
-        bump = normalize(bump);
-        return bump;
-    }
-
     float3 blend_normals(float3 n1, float3 n2)
     {
         n1 += float3(0, 0, 1);
@@ -748,9 +844,9 @@ namespace XeGTAO
     float4 PS_Normals(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
         float3 geomNormal = -XeGTAO_ComputeViewspaceNormal(uv);
-        float3 bumpNormal = Bump(uv, BumpIntensity);
-        float3 blended = blend_normals(bumpNormal, geomNormal);
-        float3 finalNormal = normalize(lerp(geomNormal, blended, BumpBlendAmount));
+        float3 heightmapNormal = GetHeightmapNormal(uv);
+        float3 blended = blend_normals(heightmapNormal, geomNormal);
+        float3 finalNormal = normalize(lerp(geomNormal, blended, HeightmapBlendAmount));
         
         return float4(saturate(finalNormal * 0.5 + 0.5), 1.0);
     }
@@ -816,11 +912,8 @@ namespace XeGTAO
         half visibility = 0;
         half3 bentNormal = 0;
 
-        float2 tileCoord = float2(fmod(uv.x * BUFFER_WIDTH, 64.0), fmod(uv.y * BUFFER_HEIGHT, 64.0));
-        float hilbertIndex = xy2hilbert6(tileCoord.x, tileCoord.y);
-        float temporalOffset = 288.0 * fmod(FRAME_COUNT, 64.0);
-        float seqIndex = hilbertIndex + temporalOffset;
-        float2 localNoise = R2(seqIndex);
+        uint2 pixCoord = pos.xy;
+        float2 localNoise = SpatioTemporalNoise(pixCoord, FRAME_COUNT);
 
         const half noiseSlice = (half) localNoise.x;
         const half noiseSample = (half) localNoise.y;
