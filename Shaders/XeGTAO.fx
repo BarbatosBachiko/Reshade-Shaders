@@ -100,7 +100,7 @@ static const float2 ZERO_LOD = float2(0.0, 0.0);
 #define bSmoothNormals           false
 #define FOV                      35.0
 #define HeightmapIntensity       100.0
-#define HeightmapBlendAmount     0.6
+#define HeightmapBlendAmount     0.0
 #endif
 
 uniform float Intensity <
@@ -258,7 +258,7 @@ uniform float HeightmapBlendAmount <
     ui_tooltip = "How much to blend heightmap normals with geometric normals.";
     ui_type = "drag";
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
-> = 0.6;
+> = 0.0;
 
 #endif // UI_DIFFICULTY == 1
 
