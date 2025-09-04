@@ -4,7 +4,7 @@
 
     Extruded Video Image
     
-    Version: 1.1.0
+    Version: 1.1.1
     Author: Converted from Shadertoy, adapted by for reshade by Barbatos
     Original by Shane: https://www.shadertoy.com/view/3stXzB
     
@@ -12,11 +12,13 @@
     using raymarching.
     
     Changelog:
-    1.1.0: Added Dynamic Material System (Plastic, Metal, Glass).
-    1.0.1: little fix
+    1.1.1: Fix
 */
 
 #include "ReShade.fxh"
+
+//Macros
+#define GetColor(coord) tex2Dlod(ReShade::BackBuffer, float4(coord, 0, 0))
 
 //----------|
 // :: UI :: |
@@ -154,24 +156,16 @@ uniform float Timer < source = "timer"; >;
 // :: Functions ::  |
 //------------------|
 
-// Quality settings
 int GetMaxIterations()
 {
     int iterations[4] = { 32, 48, 64, 96 };
-    return iterations[QualityPreset];
+    return iterations[clamp(QualityPreset, 0, 3)];
 }
 
 int GetShadowIterations()
 {
     int iterations[4] = { 8, 12, 16, 24 };
-    return iterations[QualityPreset];
-}
-
-float2x2 rot2(float a)
-{
-    float c = cos(a);
-    float s = sin(a);
-    return float2x2(c, -s, s, c);
+    return iterations[clamp(QualityPreset, 0, 3)];
 }
 
 float hash21(float2 p)
@@ -181,12 +175,11 @@ float hash21(float2 p)
 
 float3 getTex(float2 p)
 {
-    // Stretch to fit screen aspect ratio
-    p *= float2(BUFFER_HEIGHT / (float) BUFFER_WIDTH, 1.0);
+    p *= float2(ReShade::ScreenSize.y / ReShade::ScreenSize.x, 1.0);
     p = frac(p / 2.0 - 0.5);
     
-    float3 tx = tex2Dlod(ReShade::BackBuffer, float4(p, 0, 0)).rgb;
-    return tx * tx; // Rough sRGB to linear conversion
+    float3 tx = GetColor(p).rgb;
+    return tx * tx;
 }
 
 float hm(float2 p)
@@ -206,10 +199,6 @@ float sBoxS(float2 p, float2 b, float sf)
     return length(max(abs(p) - b + sf, 0.0)) - sf;
 }
 
-// Global variables for object tracking
-static float objID;
-static float2 gID;
-
 float4 blocks(float3 q3)
 {
     float scale = GridScale;
@@ -221,7 +210,6 @@ float4 blocks(float3 q3)
     float2 id = float2(0, 0);
     float2 cntr = float2(0, 0);
     
-    // Four block corner positions
     float2 ps4[4] =
     {
         float2(-l.x, l.y),
@@ -229,8 +217,6 @@ float4 blocks(float3 q3)
         -l,
         float2(l.x, -l.y)
     };
-    
-    float boxID = 0.0;
     
     for (int i = 0; i < 4; i++)
     {
@@ -310,7 +296,6 @@ float4 blocks(float3 q3)
                     d = di4[3];
                     id = idi + ps4[3] / 4.0;
                 }
-                // -- End of unrolled loop --
             }
             else
             {
@@ -337,16 +322,13 @@ float4 blocks(float3 q3)
         }
     }
     
-    return float4(d, id, boxID);
+    return float4(d, id, 0.0);
 }
 
 float map(float3 p)
 {
     float fl = -p.z + 0.1;
     float4 d4 = blocks(p);
-    gID = d4.yz;
-    
-    objID = fl < d4.x ? 1.0 : 0.0;
     return min(fl, d4.x);
 }
 
@@ -367,7 +349,7 @@ float trace(float3 ro, float3 rd)
     return min(t, FAR);
 }
 
-float3 getNormal(float3 p, float t)
+float3 getNormal(float3 p)
 {
     const float2 e = float2(0.001, 0);
     return normalize(float3(
@@ -430,10 +412,8 @@ float calcAO(float3 p, float3 n)
 
 float4 PS_ExtrudedVideo(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
 {
-    // Convert screen coordinates
     float2 screenUV = (uv * ReShade::ScreenSize - ReShade::ScreenSize * 0.5) / ReShade::ScreenSize.y;
     
-    // Camera setup
     float time = Timer * 0.001 * CameraSpeed;
     float3 lk = float3(0, 0, 0);
     float3 ro = lk + float3(
@@ -451,23 +431,21 @@ float4 PS_ExtrudedVideo(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Tar
     float3 up = cross(fwd, rgt);
     
     float3 rd = normalize(fwd + FOV * screenUV.x * rgt + FOV * screenUV.y * up);
-    
-    // Raymarch to the scene
     float t = trace(ro, rd);
-    
-    // Save IDs
-    float2 svGID = gID;
-    float svObjID = objID;
-    
     float3 col = float3(0, 0, 0);
     
     // The ray hit the surface
     if (t < FAR)
     {
         float3 sp = ro + rd * t;
-        float3 sn = getNormal(sp, t);
+        float3 sn = getNormal(sp);
         
         float3 texCol;
+        
+        float4 hitD = blocks(sp);
+        float2 svGID = hitD.yz;
+        float fl = -sp.z + 0.1;
+        float svObjID = fl < hitD.x ? 1.0 : 0.0;
         
         // Extruded grid coloring
         if (svObjID < 0.5)
@@ -483,7 +461,6 @@ float4 PS_ExtrudedVideo(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Tar
                 texCol = tx;
             }
             
-            // Sparkle effects
             if (EnableSparkles)
             {
                 float rnd = frac(sin(dot(svGID, float2(141.13, 289.97))) * 43758.5453);
@@ -539,13 +516,13 @@ float4 PS_ExtrudedVideo(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Tar
         }
     }
     
-    // Gamma correction
+    // Gamma correction (sqrt ~ gamma 2.0)
     col = sqrt(max(col, 0.0));
     return float4(col, 1.0);
 }
 
 //----------------|
-// :: Technique ::|
+// :: Technique : |
 //----------------|
 
 technique ExtrudedVideoImage < ui_tooltip = "Creates an extruded, voxel-like 3D effect from the screen buffer"; >
