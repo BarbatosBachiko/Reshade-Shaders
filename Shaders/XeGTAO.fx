@@ -41,13 +41,12 @@ THE SOFTWARE.
 '-------------------/
 
     XeGTAO
-    Version 1.4
+    Version 1.5
     Author: Barbatos
 
     History:
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
 */
-
 
 #include "ReShade.fxh"
 
@@ -68,14 +67,20 @@ THE SOFTWARE.
 #define S_PC MagFilter=POINT;MinFilter=POINT;MipFilter=POINT;AddressU=Clamp;AddressV=Clamp;AddressW=Clamp;
 #define S_LC MagFilter=LINEAR;MinFilter=LINEAR;MipFilter=LINEAR;AddressU=Clamp;AddressV=Clamp;AddressW=Clamp;
 
+static const float2 LOD_MASK = float2(0.0, 1.0);
+static const float2 ZERO_LOD = float2(0.0, 0.0);
+#define GetLod(s,c) tex2Dlod(s, ((c).xyyy * LOD_MASK.yyxx + ZERO_LOD.xxxy))
 #define getDepth(coords) (ReShade::GetLinearizedDepth(coords))
 #define GetColor(c) tex2Dlod(ReShade::BackBuffer, float4((c).xy, 0, 0))
 #define PI 3.1415926535
 #define PI_HALF 1.57079632679
 #define fmod(x, y) (frac((x)*rcp(y)) * (y))
+
 /*---------.
 | :: UI :: |
 '---------*/
+
+#define DenoiseBlurAmount 0.85
 
 #ifndef UI_DIFFICULTY
 #define UI_DIFFICULTY 0
@@ -83,9 +88,6 @@ THE SOFTWARE.
 
 #if UI_DIFFICULTY == 0
 #define EnableDenoise 1
-#define p_phi 0.1
-#define c_phi 1.0
-#define n_phi 1.0
 #define RadiusMultiplier         1.0
 #define FinalValuePower      0.8
 #define FalloffRange             0.6 
@@ -145,12 +147,12 @@ uniform float TemporalAccumulationFrames <
     ui_category = "Temporal Filtering";
     ui_label = "Temporal Accumulation Frames";
     ui_tooltip = "Number of frames to accumulate. Higher values are smoother but may cause more ghosting on moving objects.";
-> = 12.0;
+> = 10.0;
 
 uniform int ViewMode <
     ui_type = "combo";
     ui_label = "View Mode";
-    ui_items = "Normal\0Normals\0View-Space Depth\0Raw AO\0Denoised AO\0Upscaled AO\0";
+    ui_items = "Normal\0Normals\0View-Space Depth\0Raw AO\0Denoised AO\0Temporal AO\0Upscaled AO\0Edges\0";
     ui_tooltip = "Selects the debug view mode.";
 > = 0;
 
@@ -209,33 +211,9 @@ uniform bool EnableTemporal <
 uniform bool EnableDenoise <
     ui_category = "Denoiser";
     ui_type = "checkbox";
-    ui_label = "Enable A-Trous Denoiser";
+    ui_label = "Enable XeGTAO Denoiser";
     ui_tooltip = "Apply a spatial denoiser after the temporal filter to further smooth the result.";
 > = true;
-
-uniform float c_phi <
-    ui_category = "Denoiser";
-    ui_type = "slider";
-    ui_min = 0.01; ui_max = 5.0; ui_step = 0.01;
-    ui_label = "AO Sigma";
-    ui_tooltip = "Controls the sensitivity to AO value differences.";
-> = 0.1;
-
-uniform float n_phi <
-    ui_category = "Denoiser";
-    ui_type = "slider";
-    ui_min = 0.01; ui_max = 5.0; ui_step = 0.01;
-    ui_label = "Normals Sigma";
-    ui_tooltip = "Controls the sensitivity to surface normal differences.";
-> = 1.0;
-
-uniform float p_phi <
-    ui_category = "Denoiser";
-    ui_type = "slider";
-    ui_min = 0.01; ui_max = 10.0; ui_step = 0.01;
-    ui_label = "Position (Depth) Sigma";
-    ui_tooltip = "Controls the sensitivity to view space position differences.";
-> = 1.0;
 
 uniform float DepthMultiplier <
     ui_category = "Advanced";
@@ -298,13 +276,13 @@ uniform int FRAME_COUNT < source = "framecount"; >;
         sampler sMotionVectorsTex { Texture = MotionVectorsTex; };
     }
     float2 SampleMotionVectors(float2 texcoord) {
-        return tex2D(Deferred::sMotionVectorsTex, texcoord).rg;
+        return GetLod(Deferred::sMotionVectorsTex, texcoord).rg;
     }
 #elif USE_VORT_MOTION
     texture2D MotVectTexVort { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
     sampler2D sMotVectTexVort { Texture = MotVectTexVort; MagFilter=POINT;MinFilter=POINT;MipFilter=POINT;AddressU=Clamp;AddressV=Clamp; };
     float2 SampleMotionVectors(float2 texcoord) {
-        return tex2D(sMotVectTexVort, texcoord).rg;
+        return GetLod(sMotVectTexVort, texcoord).rg;
     }
 #else
 texture texMotionVectors
@@ -319,13 +297,13 @@ sampler sTexMotionVectorsSampler
 };
 float2 SampleMotionVectors(float2 texcoord)
 {
-    return tex2D(sTexMotionVectorsSampler, texcoord).rg;
+    return GetLod(sTexMotionVectorsSampler, texcoord).rg;
 }
 #endif
 
 namespace XeGTAO
 {
-    texture normalTex
+    texture NormalT
     {
         Width = BUFFER_WIDTH;
         Height = BUFFER_HEIGHT;
@@ -333,86 +311,98 @@ namespace XeGTAO
     };
     sampler sNormal
     {
-        Texture = normalTex;S_LC
+        Texture = NormalT;S_LC
     };
 
-    texture ViewDepthTex
+    texture DepthT
     {
         Width = BUFFER_WIDTH;
         Height = BUFFER_HEIGHT;
         Format = R32F;
     };
-    sampler sViewDepthTex
+    sampler sDepth
     {
-        Texture = ViewDepthTex;S_LC
+        Texture = DepthT;S_LC
     };
 
-    texture AOTermTex
+    texture AO
     {
         Width = BUFFER_WIDTH;
         Height = BUFFER_HEIGHT;
         Format = RGBA8;
     };
-    sampler sAOTermTex
+    sampler sAO
     {
-        Texture = AOTermTex;S_LC
+        Texture = AO;S_LC
     };
 
     // Denoiser Textures
-    texture DenoiseInputTex
+    texture EdgesT
     {
         Width = BUFFER_WIDTH;
         Height = BUFFER_HEIGHT;
-        Format = R16F;
+        Format = R8;
     };
-    sampler sDenoiseInputTex
+    sampler sEdges
     {
-        Texture = DenoiseInputTex;S_LC
+        Texture = EdgesT;S_LC
     };
 
-    texture DenoiseTex0
+    texture DenoiseT
     {
         Width = BUFFER_WIDTH;
         Height = BUFFER_HEIGHT;
         Format = R16F;
     };
-    sampler sDenoiseTex0
+    sampler sDenoise
     {
-        Texture = DenoiseTex0;S_LC
+        Texture = DenoiseT;S_LC
     };
 
-    texture DenoiseTex1
+    texture DenoiseT0
     {
         Width = BUFFER_WIDTH;
         Height = BUFFER_HEIGHT;
         Format = R16F;
     };
-    sampler sDenoiseTex1
+    sampler sDenoiseT0
     {
-        Texture = DenoiseTex1;S_LC
+        Texture = DenoiseT0;S_LC
     };
 
-    texture DenoiseHistoryTex
+    // Temporal Filter Textures
+    texture TempT
     {
         Width = BUFFER_WIDTH;
         Height = BUFFER_HEIGHT;
         Format = R16F;
     };
-    sampler sDenoiseHistoryTex
+    sampler sTemp
     {
-        Texture = DenoiseHistoryTex;S_LC
+        Texture = TempT;S_LC
+    };
+
+    texture HistoryT
+    {
+        Width = BUFFER_WIDTH;
+        Height = BUFFER_HEIGHT;
+        Format = R16F;
+    };
+    sampler sHistory
+    {
+        Texture = HistoryT;S_LC
     };
 
     // Upscaling Texture
-    texture UpscaledAOTex
+    texture UpscaledT
     {
         Width = BUFFER_WIDTH;
         Height = BUFFER_HEIGHT;
         Format = R16F;
     };
-    sampler sUpscaledAOTex
+    sampler sUpscaled
     {
-        Texture = UpscaledAOTex;S_LC
+        Texture = UpscaledT;S_LC
     };
 
 /*----------------.
@@ -455,7 +445,9 @@ namespace XeGTAO
         box.boxCenter *= fBoxCenterWeightRcp;
         box.boxVec = max(0.0, box.boxVec * fBoxCenterWeightRcp - (box.boxCenter * box.boxCenter));
     }
-
+    //
+    
+    //Noise
     uint part1by1(uint x)
     {
         x = (x & 0x0000ffffu);
@@ -499,7 +491,6 @@ namespace XeGTAO
 
     uint HilbertIndex(uint x, uint y)
     {
-        // Level 6 for 64x64 tiles, matching the original implementation's tile size.
         return hilbert(int2(x % 64, y % 64), 6);
     }
 
@@ -596,11 +587,11 @@ namespace XeGTAO
     float3 ComputeHeightmapNormal(float h00, float h10, float h20, float h01, float h11, float h21, float h02, float h12, float h22, const float3 pixelWorldSize)
     {
         // Sobel 3x3
-        //    0,0 | 1,0 | 2,0
-        //    ----+-----+----
-        //    0,1 | 1,1 | 2,1
-        //    ----+-----+----
-        //    0,2 | 1,2 | 2,2
+        //   0,0 | 1,0 | 2,0
+        //  ----+-----+----
+        //   0,1 | 1,1 | 2,1
+        //  ----+-----+----
+        //   0,2 | 1,2 | 2,2
 
         h00 -= h11;
         h10 -= h11;
@@ -610,7 +601,7 @@ namespace XeGTAO
         h02 -= h11;
         h12 -= h11;
         h22 -= h11;
-       
+        
         // The Sobel X kernel is:
         //
         // [ 1.0  0.0  -1.0 ]
@@ -618,7 +609,7 @@ namespace XeGTAO
         // [ 1.0  0.0  -1.0 ]
         
         float Gx = h00 - h20 + 2.0 * h01 - 2.0 * h21 + h02 - h22;
-                    
+                
         // The Sobel Y kernel is:
         //
         // [  1.0    2.0    1.0 ]
@@ -630,7 +621,7 @@ namespace XeGTAO
         float stepX = pixelWorldSize.x;
         float stepY = pixelWorldSize.y;
         float sizeZ = pixelWorldSize.z;
-       
+        
         Gx = Gx * stepY * sizeZ;
         Gy = Gy * stepX * sizeZ;
         
@@ -642,23 +633,24 @@ namespace XeGTAO
     float3 GetHeightmapNormal(float2 texcoord)
     {
         float2 p = ReShade::PixelSize;
-        
-        float h00 = GetColor(texcoord + float2(-p.x, -p.y));
-        float h10 = GetColor(texcoord + float2(0, -p.y));
-        float h20 = GetColor(texcoord + float2(p.x, -p.y));
-        
-        float h01 = GetColor(texcoord + float2(-p.x, 0));
-        float h11 = GetColor(texcoord);
-        float h21 = GetColor(texcoord + float2(p.x, 0));
-        
-        float h02 = GetColor(texcoord + float2(-p.x, p.y));
-        float h12 = GetColor(texcoord + float2(0, p.y));
-        float h22 = GetColor(texcoord + float2(p.x, p.y));
+    
+        float h00 = GetColor(texcoord + float2(-p.x, -p.y)).r;
+        float h10 = GetColor(texcoord + float2(0, -p.y)).r;
+        float h20 = GetColor(texcoord + float2(p.x, -p.y)).r;
+    
+        float h01 = GetColor(texcoord + float2(-p.x, 0)).r;
+        float h11 = GetColor(texcoord).r;
+        float h21 = GetColor(texcoord + float2(p.x, 0)).r;
+    
+        float h02 = GetColor(texcoord + float2(-p.x, p.y)).r;
+        float h12 = GetColor(texcoord + float2(0, p.y)).r;
+        float h22 = GetColor(texcoord + float2(p.x, p.y)).r;
 
         float3 pixelWorldSize = float3(p.x, p.y, HeightmapIntensity * 0.001);
-        
+    
         return ComputeHeightmapNormal(h00, h10, h20, h01, h11, h21, h02, h12, h22, pixelWorldSize);
     }
+
     
     float XeGTAO_EncodeVisibilityBentNormal(half visibility, half3 bentNormal)
     {
@@ -729,105 +721,88 @@ namespace XeGTAO
         mtx[2][2] = e + hvz * v.z;
         return mtx;
     }
+
+    half4 XeGTAO_CalculateEdges(const half centerZ, const half leftZ, const half rightZ, const half topZ, const half bottomZ)
+    {
+        half4 edgesLRTB = half4(leftZ, rightZ, topZ, bottomZ) - centerZ;
+        half slopeLR = (edgesLRTB.y - edgesLRTB.x) * 0.5;
+        half slopeTB = (edgesLRTB.w - edgesLRTB.z) * 0.5;
+        half4 edgesLRTBSlopeAdjusted = edgesLRTB + half4(slopeLR, -slopeLR, slopeTB, -slopeTB);
+        edgesLRTB = min(abs(edgesLRTB), abs(edgesLRTBSlopeAdjusted));
+        return saturate((1.25 - edgesLRTB / (centerZ * 0.011)));
+    }
+
+    half XeGTAO_PackEdges(half4 edgesLRTB)
+    {
+        edgesLRTB = round(saturate(edgesLRTB) * 2.9);
+        return dot(edgesLRTB, half4(64.0 / 255.0, 16.0 / 255.0, 4.0 / 255.0, 1.0 / 255.0));
+    }
+
+    half4 XeGTAO_UnpackEdges(half _packedVal)
+    {
+        uint packedVal = (uint) (_packedVal * 255.5);
+        half4 edgesLRTB;
+        edgesLRTB.x = half((packedVal >> 6) & 0x03) / 3.0;
+        edgesLRTB.y = half((packedVal >> 4) & 0x03) / 3.0;
+        edgesLRTB.z = half((packedVal >> 2) & 0x03) / 3.0;
+        edgesLRTB.w = half((packedVal >> 0) & 0x03) / 3.0;
+        return saturate(edgesLRTB);
+    }
     
-    static const float2 atrous_offsets[9] =
+    void XeGTAO_AddSample(half ssaoValue, half edgeValue, inout half sum, inout half sumWeight)
     {
-        float2(-1, -1), float2(0, -1), float2(1, -1),
-        float2(-1, 0), float2(0, 0), float2(1, 0),
-        float2(-1, 1), float2(0, 1), float2(1, 1)
-    };
-
-    float atrous(sampler input_sampler, sampler history_sampler, float2 texcoord, float level, bool do_temporal)
+        half weight = edgeValue;
+        sum += (weight * ssaoValue);
+        sumWeight += weight;
+    }
+    
+    float XeGTAO_Denoise(float2 texcoord)
     {
-        // Spatial filter 
-        float sum = 0.0;
-        float cum_w = 0.0;
-        const float2 step_size = ReShade::PixelSize * exp2(level);
-
-        float center_ao = tex2Dlod(input_sampler, float4(texcoord, 0.0, 0.0)).r;
+        half center_ao = GetLod(sDenoise, float4(texcoord, 0.0, 0.0)).r;
         
-        float2 center_full_res_uv = texcoord / RenderScale;
-        float center_depth = tex2Dlod(sViewDepthTex, float4(center_full_res_uv, 0.0, 0.0)).r;
-        
-        if (center_depth / RESHADE_DEPTH_LINEARIZATION_FAR_PLANE >= DepthThreshold)
+        if (!EnableDenoise)
+        {
             return center_ao;
-
-        float3 center_normal = tex2Dlod(sNormal, float4(center_full_res_uv, 0.0, 0.0)).xyz * 2.0 - 1.0;
-        float3 center_pos = GetViewPos(center_full_res_uv, center_depth / RESHADE_DEPTH_LINEARIZATION_FAR_PLANE);
-
-        [loop]
-        for (int i = 0; i < 9; i++)
-        {
-            const float2 uv_low = texcoord + atrous_offsets[i] * step_size;
-
-            if (any(uv_low < 0.0) || any(uv_low > RenderScale))
-                continue;
-
-            const float sample_ao = tex2Dlod(input_sampler, float4(uv_low, 0.0, 0.0)).r;
-            
-            const float2 sample_full_res_uv = uv_low / RenderScale;
-            const float sample_depth = tex2Dlod(sViewDepthTex, float4(sample_full_res_uv, 0.0, 0.0)).r;
-            
-            if (sample_depth / RESHADE_DEPTH_LINEARIZATION_FAR_PLANE >= DepthThreshold)
-                continue;
-
-            const float3 sample_normal = tex2Dlod(sNormal, float4(sample_full_res_uv, 0.0, 0.0)).xyz * 2.0 - 1.0;
-            const float3 sample_pos = GetViewPos(sample_full_res_uv, sample_depth / RESHADE_DEPTH_LINEARIZATION_FAR_PLANE);
-            
-            // AO Weight
-            float diff_c = center_ao - sample_ao;
-            float w_c = exp(-(diff_c * diff_c) / c_phi);
-
-            // Normal Weight
-            float diff_n = dot(center_normal, sample_normal);
-            float w_n = pow(saturate(diff_n), n_phi);
-
-            // Position Weight
-            float diff_p = distance(center_pos, sample_pos);
-            float w_p = exp(-(diff_p * diff_p) / p_phi);
-
-            const float weight = w_c * w_n * w_p;
-
-            sum += sample_ao * weight;
-            cum_w += weight;
         }
-        float spatial_result = cum_w > 1e-6 ? (sum / cum_w) : center_ao;
 
-        if (do_temporal && EnableTemporal)
-        {
-            float2 motion = SampleMotionVectors(center_full_res_uv);
-            float2 reprojected_uv_full = center_full_res_uv + motion;
-            float2 reprojected_uv_low = reprojected_uv_full * RenderScale;
-            float historyDepth = tex2Dlod(sViewDepthTex, float4(reprojected_uv_full, 0, 0)).r;
+        const half diagWeight = 0.85 * 0.5;
+        const float2 p = ReShade::PixelSize / RenderScale;
 
-            bool validHistory = all(saturate(reprojected_uv_low) == reprojected_uv_low) &&
-                                      FRAME_COUNT > 1 &&
-                                      abs(historyDepth - center_depth) < (center_depth * 0.02);
-            
-            if (validHistory)
-            {
-                float history_ao = tex2Dlod(history_sampler, float4(reprojected_uv_low, 0, 0)).r;
+        half4 edgesC_LRTB = XeGTAO_UnpackEdges(GetLod(sEdges, texcoord).r);
+        half4 edgesL_LRTB = XeGTAO_UnpackEdges(GetLod(sEdges, texcoord - float2(p.x, 0)).r);
+        half4 edgesR_LRTB = XeGTAO_UnpackEdges(GetLod(sEdges, texcoord + float2(p.x, 0)).r);
+        half4 edgesT_LRTB = XeGTAO_UnpackEdges(GetLod(sEdges, texcoord - float2(0, p.y)).r);
+        half4 edgesB_LRTB = XeGTAO_UnpackEdges(GetLod(sEdges, texcoord + float2(0, p.y)).r);
+        
+        edgesC_LRTB *= half4(edgesL_LRTB.y, edgesR_LRTB.x, edgesT_LRTB.w, edgesB_LRTB.z);
+        
+        half weightTL = diagWeight * (edgesC_LRTB.x * edgesL_LRTB.z + edgesC_LRTB.z * edgesT_LRTB.x);
+        half weightTR = diagWeight * (edgesC_LRTB.z * edgesT_LRTB.y + edgesC_LRTB.y * edgesR_LRTB.z);
+        half weightBL = diagWeight * (edgesC_LRTB.w * edgesB_LRTB.x + edgesC_LRTB.x * edgesL_LRTB.w);
+        half weightBR = diagWeight * (edgesC_LRTB.y * edgesR_LRTB.w + edgesC_LRTB.w * edgesB_LRTB.y);
 
-                float minBox = center_ao;
-                float maxBox = center_ao;
-                [unroll]
-                for (int y = -1; y <= 1; y++)
-                {
-                    for (int x = -1; x <= 1; x++)
-                    {
-                        if (x == 0 && y == 0)
-                            continue;
-                        float neighbor_ao = tex2Doffset(input_sampler, texcoord, int2(x, y)).r;
-                        minBox = min(minBox, neighbor_ao);
-                        maxBox = max(maxBox, neighbor_ao);
-                    }
-                }
-                float clamped_history_ao = clamp(history_ao, minBox, maxBox);
-                float alpha = 1.0 / min(FRAME_COUNT, TemporalAccumulationFrames);
-                return lerp(clamped_history_ao, spatial_result, alpha);
-            }
-        }
-        return spatial_result;
+        half ssaoValueL = tex2Doffset(sDenoise, texcoord, int2(-1, 0)).r;
+        half ssaoValueR = tex2Doffset(sDenoise, texcoord, int2(1, 0)).r;
+        half ssaoValueT = tex2Doffset(sDenoise, texcoord, int2(0, -1)).r;
+        half ssaoValueB = tex2Doffset(sDenoise, texcoord, int2(0, 1)).r;
+        half ssaoValueTL = tex2Doffset(sDenoise, texcoord, int2(-1, -1)).r;
+        half ssaoValueTR = tex2Doffset(sDenoise, texcoord, int2(1, -1)).r;
+        half ssaoValueBL = tex2Doffset(sDenoise, texcoord, int2(-1, 1)).r;
+        half ssaoValueBR = tex2Doffset(sDenoise, texcoord, int2(1, 1)).r;
+
+        half sumWeight = 1.0 - DenoiseBlurAmount;
+        half sum = center_ao * sumWeight;
+
+        XeGTAO_AddSample(ssaoValueL, edgesC_LRTB.x, sum, sumWeight);
+        XeGTAO_AddSample(ssaoValueR, edgesC_LRTB.y, sum, sumWeight);
+        XeGTAO_AddSample(ssaoValueT, edgesC_LRTB.z, sum, sumWeight);
+        XeGTAO_AddSample(ssaoValueB, edgesC_LRTB.w, sum, sumWeight);
+        XeGTAO_AddSample(ssaoValueTL, weightTL, sum, sumWeight);
+        XeGTAO_AddSample(ssaoValueTR, weightTR, sum, sumWeight);
+        XeGTAO_AddSample(ssaoValueBL, weightBL, sum, sumWeight);
+        XeGTAO_AddSample(ssaoValueBR, weightBR, sum, sumWeight);
+
+        return sum / sumWeight;
     }
 
     float3 blend_normals(float3 n1, float3 n2)
@@ -855,6 +830,25 @@ namespace XeGTAO
     {
         return getDepth(uv) * RESHADE_DEPTH_LINEARIZATION_FAR_PLANE;
     }
+    
+    float PS_Edges(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
+    {
+        if (any(uv > RenderScale))
+        {
+            return 0.0;
+        }
+        float2 scaled_uv = uv / RenderScale;
+        float2 p = ReShade::PixelSize / RenderScale;
+        
+        half centerZ = GetLod(sDepth, float4(scaled_uv, 0, 0)).r;
+        half leftZ = GetLod(sDepth, float4(scaled_uv - float2(p.x, 0), 0, 0)).r;
+        half rightZ = GetLod(sDepth, float4(scaled_uv + float2(p.x, 0), 0, 0)).r;
+        half topZ = GetLod(sDepth, float4(scaled_uv - float2(0, p.y), 0, 0)).r;
+        half bottomZ = GetLod(sDepth, float4(scaled_uv + float2(0, p.y), 0, 0)).r;
+        
+        half4 edgesLRTB = XeGTAO_CalculateEdges(centerZ, leftZ, rightZ, topZ, bottomZ);
+        return XeGTAO_PackEdges(edgesLRTB);
+    }
 
     float4 PS_GTAO_Main(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
@@ -864,7 +858,7 @@ namespace XeGTAO
         }
         float2 scaled_uv = uv / RenderScale;
 
-        float viewspaceZ_raw = tex2Dlod(sViewDepthTex, float4(scaled_uv, 0, 0)).r;
+        float viewspaceZ_raw = GetLod(sDepth, float4(scaled_uv, 0, 0)).r;
         float2 p = ReShade::PixelSize / RenderScale;
 
         int sliceCount, stepsPerSlice;
@@ -898,7 +892,7 @@ namespace XeGTAO
             return ReconstructFloat4(encodedValue);
         }
 
-        half3 viewspaceNormal = tex2Dlod(sNormal, float4(scaled_uv, 0, 0)).xyz * 2.0 - 1.0;
+        half3 viewspaceNormal = GetLod(sNormal, float4(scaled_uv, 0, 0)).xyz * 2.0 - 1.0;
         const half3 viewVec = (half3) normalize(-pixCenterPos);
 
         const half effectRadius = (half) EffectRadius * (half) RadiusMultiplier;
@@ -969,11 +963,11 @@ namespace XeGTAO
                 float2 sampleOffset = round(s * omega) * (ReShade::PixelSize / RenderScale);
 
                 float2 sampleScreenPos0 = scaled_uv + sampleOffset;
-                float SZ0 = tex2Dlod(sViewDepthTex, float4(sampleScreenPos0, 0, 0)).r;
+                float SZ0 = GetLod(sDepth, float4(sampleScreenPos0, 0, 0)).r;
                 float3 samplePos0 = GetViewPos(sampleScreenPos0, SZ0 / RESHADE_DEPTH_LINEARIZATION_FAR_PLANE);
 
                 float2 sampleScreenPos1 = scaled_uv - sampleOffset;
-                float SZ1 = tex2Dlod(sViewDepthTex, float4(sampleScreenPos1, 0, 0)).r;
+                float SZ1 = GetLod(sDepth, float4(sampleScreenPos1, 0, 0)).r;
                 float3 samplePos1 = GetViewPos(sampleScreenPos1, SZ1 / RESHADE_DEPTH_LINEARIZATION_FAR_PLANE);
                 
                 float3 sampleDelta0 = (samplePos0 - pixCenterPos);
@@ -1043,52 +1037,126 @@ namespace XeGTAO
             return 1.0;
         }
 
-        float4 packedAO = tex2D(sAOTermTex, uv);
+        float4 packedAO = GetLod(sAO, uv);
         float encodedValue = ReconstructUint(packedAO);
         half visibility, bentNormal;
         XeGTAO_DecodeVisibilityBentNormal(encodedValue, visibility, bentNormal);
         return visibility;
     }
-
-    float PS_DenoisePass(float4 vpos : SV_Position, float2 texcoord : TEXCOORD, int level, sampler input_sampler, sampler history_sampler, bool do_temporal) : SV_Target
+    
+    float PS_Denoise(float4 vpos : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
     {
         if (any(texcoord > RenderScale))
         {
-            return tex2Dlod(input_sampler, float4(texcoord, 0.0, 0.0)).r;
+            return GetLod(sDenoise, float4(texcoord, 0.0, 0.0)).r;
         }
-        return atrous(input_sampler, history_sampler, texcoord, level, do_temporal);
+        return XeGTAO_Denoise(texcoord);
+    }
+
+    float PS_Accumulate(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
+    {
+        if (any(uv > RenderScale))
+        {
+            return 1.0;
+        }
+
+        float currentAO = GetLod(sDenoiseT0, uv).r;
+
+        if (!EnableTemporal)
+        {
+            return currentAO;
+        }
+        
+        float2 full_res_uv = uv / RenderScale;
+        
+        float closest_view_depth = GetLod(sDepth, full_res_uv).r;
+        float2 motion = SampleMotionVectors(full_res_uv);
+
+        [unroll]
+        for (int y = -1; y <= 1; y++)
+        {
+            for (int x = -1; x <= 1; x++)
+            {
+                if (x == 0 && y == 0)
+                    continue;
+
+                float2 offset_uv = full_res_uv + float2(x, y) * ReShade::PixelSize;
+                float neighbor_view_depth = GetLod(sDepth, offset_uv).r;
+
+                if (neighbor_view_depth < closest_view_depth)
+                {
+                    closest_view_depth = neighbor_view_depth;
+                    motion = SampleMotionVectors(offset_uv);
+                }
+            }
+        }
+        
+        float2 reprojected_uv_full = full_res_uv + motion;
+        float currentViewDepth = GetLod(sDepth, full_res_uv).r;
+        float historyViewDepth = GetLod(sDepth, reprojected_uv_full).r;
+        float2 reprojected_uv_low = reprojected_uv_full * RenderScale;
+
+        bool validHistory = all(saturate(reprojected_uv_low) == reprojected_uv_low) &&
+                                        FRAME_COUNT > 1 &&
+                                        abs(historyViewDepth - currentViewDepth) < (currentViewDepth * 0.02);
+
+        float blendedAO = currentAO;
+        if (validHistory)
+        {
+            float historyAO = GetLod(sHistory, reprojected_uv_low).r;
+
+            float minBox = currentAO, maxBox = currentAO;
+            float2 low_res_pixel_size = ReShade::PixelSize / RenderScale;
+
+            [unroll]
+            for (int y = -1; y <= 1; y++)
+            {
+                for (int x = -1; x <= 1; x++)
+                {
+                    if (x == 0 && y == 0)
+                        continue;
+                    float2 neighbor_uv = uv + float2(x, y) * low_res_pixel_size;
+                    float neighborAO = GetLod(sDenoiseT0, neighbor_uv).r;
+                    minBox = min(minBox, neighborAO);
+                    maxBox = max(maxBox, neighborAO);
+                }
+            }
+
+            float center = (minBox + maxBox) * 0.5;
+            float extents = (maxBox - minBox) * 0.5;
+            extents += 0.01;
+            minBox = center - extents;
+            maxBox = center + extents;
+
+            float clampedHistoryAO = clamp(historyAO, minBox, maxBox);
+            
+            float alpha = 1.0 / min((float) FRAME_COUNT, TemporalAccumulationFrames);
+            
+            float rejection_dist = abs(historyAO - clampedHistoryAO);
+            float rejection_factor = saturate(rejection_dist * 8.0);
+            alpha = max(alpha, rejection_factor);
+
+            blendedAO = lerp(clampedHistoryAO, currentAO, alpha);
+        }
+        
+        return blendedAO;
     }
     
-    float PS_DenoisePass0(float4 vpos : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
-    {
-        // Spatio-temporal
-        return PS_DenoisePass(vpos, texcoord, 0, sDenoiseInputTex, sDenoiseHistoryTex, true);
-    }
-
-    float PS_DenoisePass1(float4 vpos : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
-    {
-        // Spatial
-        return PS_DenoisePass(vpos, texcoord, 1, sDenoiseTex0, sDenoiseHistoryTex, false);
-    }
-
-    void PS_UpdateDenoiseHistory(float4 pos : SV_Position, float2 uv : TEXCOORD, out float outHistory : SV_Target)
+    void PS_UpdateHistory(float4 pos : SV_Position, float2 uv : TEXCOORD, out float outHistory : SV_Target)
     {
         if (any(uv > RenderScale))
         {
             outHistory = 1.0;
             return;
         }
-        outHistory = tex2D(sDenoiseTex1, uv).r;
+        outHistory = GetLod(sTemp, uv).r;
     }
 
     float PS_Upscale(float4 vpos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
         if (RenderScale >= 1.0)
         {
-            if (EnableDenoise)
-                return tex2D(sDenoiseTex1, uv).r;
-            else
-                return tex2D(sDenoiseInputTex, uv).r;
+            return GetLod(sTemp, uv).r;
         }
 
         // FSR
@@ -1122,10 +1190,7 @@ namespace XeGTAO
                 
                 const float2 sample_uv = ((iSrcSamplePos + 0.5) * rcp(fRenderSize)) * RenderScale;
                 
-                if (EnableDenoise)
-                    fSamples[iSampleIndex] = tex2Dlod(sDenoiseTex1, float4(sample_uv, 0, 0)).r;
-                else
-                    fSamples[iSampleIndex] = tex2Dlod(sDenoiseInputTex, float4(sample_uv, 0, 0)).r;
+                fSamples[iSampleIndex] = GetLod(sTemp, float4(sample_uv, 0, 0)).r;
 
                 iSampleIndex++;
             }
@@ -1164,7 +1229,7 @@ namespace XeGTAO
             if (getDepth(uv) >= DepthThreshold)
                 return originalColor;
 
-            half visibility = tex2D(sUpscaledAOTex, uv).r;
+            half visibility = GetLod(sUpscaled, uv).r;
             float occlusion = 1.0 - visibility;
             occlusion = saturate(occlusion * Intensity);
 
@@ -1177,16 +1242,16 @@ namespace XeGTAO
         // Debug
         else if (ViewMode == 1) // Normals
         {
-            return float4(tex2D(sNormal, uv).rgb, 1.0);
+            return float4(GetLod(sNormal, uv).rgb, 1.0);
         }
         else if (ViewMode == 2) // View-Space Depth
         {
-            float depth = tex2D(sViewDepthTex, uv).r / (RESHADE_DEPTH_LINEARIZATION_FAR_PLANE * DepthMultiplier);
+            float depth = GetLod(sDepth, uv).r / (RESHADE_DEPTH_LINEARIZATION_FAR_PLANE * DepthMultiplier);
             return float4(saturate(depth.rrr), 1.0);
         }
         else if (ViewMode == 3) // Raw AO
         {
-            float4 packedAO = tex2D(sAOTermTex, uv);
+            float4 packedAO = GetLod(sAO, uv);
             float encodedValue = ReconstructUint(packedAO);
             half visibility, bentNormal;
             XeGTAO_DecodeVisibilityBentNormal(encodedValue, visibility, bentNormal);
@@ -1195,13 +1260,24 @@ namespace XeGTAO
         else if (ViewMode == 4) // Denoised AO
         {
             if (EnableDenoise)
-                return float4(tex2D(sDenoiseTex1, uv).rrr, 1.0);
+                return float4(GetLod(sDenoiseT0, uv).rrr, 1.0);
             else
                 return float4(0.0, 1.0, 0.0, 1.0); // Green screen to indicate denoiser is off
         }
-        else if (ViewMode == 5) // Upscaled AO
+        else if (ViewMode == 5) // Temporal
         {
-            return float4(tex2D(sUpscaledAOTex, uv).rrr, 1.0);
+            if (EnableTemporal)
+                return float4(GetLod(sTemp, uv).rrr, 1.0);
+            else
+                return float4(0.0, 1.0, 0.0, 1.0); // Green screen to indicate temporal is off
+        }
+        else if (ViewMode == 6) // Upscaled AO
+        {
+            return float4(GetLod(sUpscaled, uv).rrr, 1.0);
+        }
+        else if (ViewMode == 7) // Edges
+        {
+            return float4(XeGTAO_UnpackEdges(GetLod(sEdges, uv).r).xyz, 1.0);
         }
 
         return originalColor;
@@ -1209,61 +1285,67 @@ namespace XeGTAO
 
     technique XeGTAO< ui_tooltip = "Need Motion Vectors like Zenteon Motion to top"; >
     {
-        pass NormalPass
+        pass Normal
         {
             VertexShader = PostProcessVS;
             PixelShader = PS_Normals;
-            RenderTarget = normalTex;
+            RenderTarget = NormalT;
         }
-        pass ViewDepthPass
+        pass Depth
         {
             VertexShader = PostProcessVS;
             PixelShader = PS_ViewDepth;
-            RenderTarget = ViewDepthTex;
+            RenderTarget = DepthT;
         }
-        pass GTAOMainPass
+        pass Edges
+        {
+            VertexShader = PostProcessVS;
+            PixelShader = PS_Edges;
+            RenderTarget = EdgesT;
+        }
+        pass GTAO
         {
             VertexShader = PostProcessVS;
             PixelShader = PS_GTAO_Main;
-            RenderTarget = AOTermTex;
+            RenderTarget = AO;
             ClearRenderTargets = true;
         }
-        pass PrepareDenoisePass
+        pass Prepare_Denoise
         {
             VertexShader = PostProcessVS;
             PixelShader = PS_PrepareDenoise;
-            RenderTarget = DenoiseInputTex;
+            RenderTarget = DenoiseT;
             ClearRenderTargets = true;
         }
-        pass DenoisePass0
+        pass Denoise_O
         {
             VertexShader = PostProcessVS;
-            PixelShader = PS_DenoisePass0;
-            RenderTarget = DenoiseTex0;
+            PixelShader = PS_Denoise;
+            RenderTarget = DenoiseT0;
             ClearRenderTargets = true;
         }
-        pass DenoisePass1
+        pass Temporal
         {
             VertexShader = PostProcessVS;
-            PixelShader = PS_DenoisePass1;
-            RenderTarget = DenoiseTex1;
+            PixelShader = PS_Accumulate;
+            RenderTarget = TempT;
             ClearRenderTargets = true;
         }
-        pass UpdateDenoiseHistoryPass
+        pass History
         {
             VertexShader = PostProcessVS;
-            PixelShader = PS_UpdateDenoiseHistory;
-            RenderTarget = DenoiseHistoryTex;
+            PixelShader = PS_UpdateHistory;
+            RenderTarget = HistoryT;
             ClearRenderTargets = true;
         }
-        pass UpscalePass
+        pass Upscale
         {
             VertexShader = PostProcessVS;
             PixelShader = PS_Upscale;
-            RenderTarget = UpscaledAOTex;
+            RenderTarget = UpscaledT;
         }
         
-        pass OutputPass
+        pass Output
         {
             VertexShader = PostProcessVS;
             PixelShader = PS_Output;
