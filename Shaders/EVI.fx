@@ -5,7 +5,7 @@
     Extruded Video Image
     
     Version: 1.1.1
-    Author: Converted from Shadertoy, adapted by for reshade by Barbatos
+    Author: Converted from Shadertoy, adapted for reshade by Barbatos
     Original by Shane: https://www.shadertoy.com/view/3stXzB
     
     About: Creates an extruded, voxel-like 3D effect from the screen buffer
@@ -510,7 +510,6 @@ float4 PS_ExtrudedVideo(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Tar
         else if (MaterialType == 2)
         { // Glass
             float3 refracted_rd = refract(rd, sn, 0.9);
-            float t_refract = trace(sp + refracted_rd * 0.01, refracted_rd);
             float3 refract_col = tex2Dlod(ReShade::BackBuffer, float4(uv + refracted_rd.xy * 0.1, 0, 0)).rgb;
             col = lerp(col, refract_col, 0.7);
         }
