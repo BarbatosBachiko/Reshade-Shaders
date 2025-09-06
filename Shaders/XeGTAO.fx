@@ -41,7 +41,7 @@ THE SOFTWARE.
 '-------------------/
 
     XeGTAO
-    Version 1.5
+    Version 1.5.1
     Author: Barbatos
 
     History:
@@ -88,19 +88,19 @@ static const float2 ZERO_LOD = float2(0.0, 0.0);
 
 #if UI_DIFFICULTY == 0
 #define EnableDenoise 1
-#define RadiusMultiplier         1.0
-#define FinalValuePower      0.8
-#define FalloffRange             0.6 
+#define RadiusMultiplier        1.0
+#define FinalValuePower     0.8
+#define FalloffRange            0.6 
 #define SampleDistributionPower  8.0
 #define ThinOccluderCompensation -0.60
-#define ComputeBentNormals       false
-#define EnableTemporal           true
-#define DepthMultiplier          1.0
-#define DepthThreshold           0.999
-#define bSmoothNormals           false
-#define FOV                      35.0
-#define HeightmapIntensity       100.0
-#define HeightmapBlendAmount     0.0
+#define ComputeBentNormals      false
+#define EnableTemporal          true
+#define DepthMultiplier         1.0
+#define DepthThreshold          0.999
+#define bSmoothNormals          false
+#define FOV                     35.0
+#define HeightmapIntensity      100.0
+#define HeightmapBlendAmount    0.0
 #endif
 
 uniform float Intensity <
@@ -448,27 +448,8 @@ namespace XeGTAO
     //
     
     //Noise
-    uint part1by1(uint x)
-    {
-        x = (x & 0x0000ffffu);
-        x = ((x ^ (x << 8u)) & 0x00ff00ffu);
-        x = ((x ^ (x << 4u)) & 0x0f0f0f0fu);
-        x = ((x ^ (x << 2u)) & 0x33333333u);
-        x = ((x ^ (x << 1u)) & 0x55555555u);
-        return x;
-    }
-        
-    uint compact1by1(uint x)
-    {
-        x = (x & 0x55555555u);
-        x = ((x ^ (x >> 1u)) & 0x33333333u);
-        x = ((x ^ (x >> 2u)) & 0x0f0f0f0fu);
-        x = ((x ^ (x >> 4u)) & 0x00ff00ffu);
-        x = ((x ^ (x >> 8u)) & 0x0000ffffu);
-        return x;
-    }
-
     // https://www.shadertoy.com/view/llGcDm
+    #if __SHADERMODEL__ >= 40
     int hilbert(int2 p, int level)
     {
         int d = 0;
@@ -493,6 +474,36 @@ namespace XeGTAO
     {
         return hilbert(int2(x % 64, y % 64), 6);
     }
+    #else
+    float hilbert(float2 p, int level)
+    {
+        float d = 0;
+        for (int k = 0; k < level; k++)
+        {
+            int n = level - k - 1;
+            float n_pow2 = exp2(n);
+            float2 r = fmod(floor(p / n_pow2), 2.0);
+
+            float term = r.y + r.x * (3.0 - 2.0 * r.y);
+            d += term * exp2(2 * n);
+
+            if (r.y < 0.5) 
+            {
+                if (r.x > 0.5) 
+                {
+                    p = n_pow2 - 1.0 - p;
+                }
+                p = p.yx;
+            }
+        }
+        return d;
+    }
+    
+    uint HilbertIndex(uint x, uint y)
+    {
+        return hilbert(float2(x % 64, y % 64), 6);
+    }
+#endif
 
     float2 SpatioTemporalNoise(uint2 pixCoord, uint temporalIndex)
     {
@@ -507,10 +518,17 @@ namespace XeGTAO
     }
     
     // http://h14s.p5r.org/2012/09/0x5f3759df.html, [Drobot2014a] Low Level Optimizations for GCN, https://blog.selfshadow.com/publications/s2016-shading-course/activision/s2016_pbs_activision_occlusion.pdf slide 63
+#if __SHADERMODEL__ >= 40
     half XeGTAO_FastSqrt(float x)
     {
         return (half) (asfloat(0x1fbd1df5 + (asint(x) >> 1)));
     }
+#else
+    half XeGTAO_FastSqrt(float x)
+    {
+        return sqrt(x);
+    }
+#endif
     
     // input [-1, 1] and output [0, PI], from https://seblagarde.wordpress.com/2014/12/01/inverse-trigonometric-functions-gpu-optimization-for-amd-gcn-architecture/
     half XeGTAO_FastACos(half inX)
@@ -587,11 +605,11 @@ namespace XeGTAO
     float3 ComputeHeightmapNormal(float h00, float h10, float h20, float h01, float h11, float h21, float h02, float h12, float h22, const float3 pixelWorldSize)
     {
         // Sobel 3x3
-        //   0,0 | 1,0 | 2,0
-        //  ----+-----+----
-        //   0,1 | 1,1 | 2,1
-        //  ----+-----+----
-        //   0,2 | 1,2 | 2,2
+        //  0,0 | 1,0 | 2,0
+        // ----+-----+----
+        //  0,1 | 1,1 | 2,1
+        // ----+-----+----
+        //  0,2 | 1,2 | 2,2
 
         h00 -= h11;
         h10 -= h11;
@@ -738,6 +756,7 @@ namespace XeGTAO
         return dot(edgesLRTB, half4(64.0 / 255.0, 16.0 / 255.0, 4.0 / 255.0, 1.0 / 255.0));
     }
 
+#if __SHADERMODEL__ >= 40
     half4 XeGTAO_UnpackEdges(half _packedVal)
     {
         uint packedVal = (uint) (_packedVal * 255.5);
@@ -748,6 +767,18 @@ namespace XeGTAO
         edgesLRTB.w = half((packedVal >> 0) & 0x03) / 3.0;
         return saturate(edgesLRTB);
     }
+#else
+    half4 XeGTAO_UnpackEdges(half _packedVal)
+    {
+        float packedVal = (_packedVal * 255.5);
+        half4 edgesLRTB;
+        edgesLRTB.x = fmod(floor(packedVal / 64.0), 4.0) / 3.0;
+        edgesLRTB.y = fmod(floor(packedVal / 16.0), 4.0) / 3.0;
+        edgesLRTB.z = fmod(floor(packedVal / 4.0), 4.0) / 3.0;
+        edgesLRTB.w = fmod(packedVal, 4.0) / 3.0;
+        return saturate(edgesLRTB);
+    }
+#endif
     
     void XeGTAO_AddSample(half ssaoValue, half edgeValue, inout half sum, inout half sumWeight)
     {
