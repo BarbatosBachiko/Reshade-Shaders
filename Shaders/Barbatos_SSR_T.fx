@@ -1,7 +1,7 @@
 /*-------------------------------------------------|
-| :: Barbatos SSR_T (Screen-Space Reflections)  :: |
+| :: Barbatos SSR_T (Screen-Space Reflections)  :: |
 '--------------------------------------------------|
-| Version: 0.0.7                                   |
+| Version: 0.0.8                                   |
 | Author: Barbatos                                 |
 | License: MIT                                     |
 | Description:Barbatos SSR, but focused for testing|
@@ -706,6 +706,58 @@ namespace Barbatos_SSR_TEST
         return pix;
     }
 
+    float3 GetGlossySample(float2 sample_uv, float2 pixel_uv)
+    {
+        float3 reflectionColor;
+
+        if (EnableGlossy && Roughness > 0.0)
+        {
+            float gloss = 1.0 - Roughness;
+            float specularPower = pow(2.0, 10.0 * gloss + 1.0);
+            float coneTheta = specularPowerToConeAngle(specularPower) * 0.5;
+
+            if (coneTheta > 0.001)
+            {
+                float2 deltaP = (sample_uv - pixel_uv) * BUFFER_SCREEN_SIZE;
+                float adjacentLength = length(deltaP);
+
+                if (adjacentLength > 1.0)
+                {
+                    float oppositeLength = isoscelesTriangleOpposite(adjacentLength, coneTheta);
+                    float incircleSize = isoscelesTriangleInRadius(oppositeLength, adjacentLength);
+                    float blurRadiusUV = incircleSize * ReShade::PixelSize.x;
+
+                    reflectionColor = 0.0.xxx;
+                    const float GOLDEN_ANGLE = 2.3999632297; // For spiral sampling pattern
+
+                    for (int i = 0; i < GlossySamples; ++i)
+                    {
+                        float angle = float(i) * GOLDEN_ANGLE;
+                        float radius = sqrt(float(i) / float(GlossySamples));
+                        float2 offset = float2(cos(angle), sin(angle)) * radius * blurRadiusUV;
+                        reflectionColor += GetColor(float4(sample_uv + offset, 0, 0)).rgb;
+                    }
+                    reflectionColor /= float(GlossySamples);
+                }
+                else
+                {
+                    reflectionColor = GetColor(float4(sample_uv, 0, 0)).rgb;
+                }
+            }
+            else
+            {
+                reflectionColor = GetColor(float4(sample_uv, 0, 0)).rgb;
+            }
+        }
+        else
+        {
+            reflectionColor = GetColor(float4(sample_uv, 0, 0)).rgb;
+        }
+
+        return reflectionColor;
+    }
+
+
 //--------------------|
 // :: Pixel Shaders ::|
 //--------------------|
@@ -773,59 +825,16 @@ namespace Barbatos_SSR_TEST
 
         if (hit.found)
         {
+            reflectionColor = GetGlossySample(hit.uv, scaled_uv);
+
             float3 L = -r.direction;
             float3 V = eyeDir;
             float3 H = normalize(L + V);
             float VdotH = clamp(dot(V, H), 0.0, 1.0);
 
-			// I'm testing simply using color for albedo
-            float3 albedo = GetColor(float4(hit.uv, 0, 0)).rgb;
+            float3 albedo = GetColor(float4(hit.uv, 0, 0)).rgb;	// I'm testing simply using color for albedo
             float3 f0 = lerp(float3(DIELECTRIC_REFLECTANCE, DIELECTRIC_REFLECTANCE, DIELECTRIC_REFLECTANCE), albedo, Metallic);
             float3 F = F_Schlick(VdotH, f0);
-
-            if (EnableGlossy && Roughness > 0.0)
-            {
-                float gloss = 1.0 - Roughness;
-                float specularPower = pow(2.0, 10.0 * gloss + 1.0);
-                float coneTheta = specularPowerToConeAngle(specularPower) * 0.5;
-
-                if (coneTheta > 0.001)
-                {
-                    float2 deltaP = (hit.uv - scaled_uv) * BUFFER_SCREEN_SIZE;
-                    float adjacentLength = length(deltaP);
-
-                    if (adjacentLength > 1.0)
-                    {
-                        float oppositeLength = isoscelesTriangleOpposite(adjacentLength, coneTheta);
-                        float incircleSize = isoscelesTriangleInRadius(oppositeLength, adjacentLength);
-                        float blurRadiusUV = incircleSize * ReShade::PixelSize.x;
-
-                        reflectionColor = 0.0.xxx;
-                        const float GOLDEN_ANGLE = 2.3999632297; // For spiral sampling pattern
-
-                        for (int i = 0; i < GlossySamples; ++i)
-                        {
-                            float angle = float(i) * GOLDEN_ANGLE;
-                            float radius = sqrt(float(i) / float(GlossySamples));
-                            float2 offset = float2(cos(angle), sin(angle)) * radius * blurRadiusUV;
-                            reflectionColor += GetColor(float4(hit.uv + offset, 0, 0)).rgb;
-                        }
-                        reflectionColor /= float(GlossySamples);
-                    }
-                    else
-                    {
-                        reflectionColor = albedo;
-                    }
-                }
-                else
-                {
-                    reflectionColor = albedo;
-                }
-            }
-            else
-            {
-                reflectionColor = albedo;
-            }
 			
             reflectionColor *= F;
             float distFactor = saturate(1.0 - length(hit.viewPos - viewPos) / 10.0); // MaxTraceDistance
@@ -840,9 +849,7 @@ namespace Barbatos_SSR_TEST
             float adaptiveDist = min(depth * 1.2 + 0.012, 10.0);
             float3 fbViewPos = viewPos + r.direction * adaptiveDist;
             float2 uvFb = saturate(ViewPosToUV(fbViewPos).xy);
-			
-            reflectionColor = GetColor(float4(uvFb, 0, 0)).rgb;
-			
+            reflectionColor = GetGlossySample(uvFb, scaled_uv);
             float fresnel = pow(1.0 - saturate(dot(eyeDir, normal)), 3.0);
             float vertical_fade = pow(saturate(1.0 - scaled_uv.y), 3.0);
             reflectionAlpha = fresnel * vertical_fade;
@@ -923,7 +930,7 @@ namespace Barbatos_SSR_TEST
             }
             float3 center = (minBox + maxBox) * 0.5;
             float3 extents = (maxBox - minBox) * 0.5;
-            extents += 0.01; 
+            extents += 0.01;
             minBox = center - extents;
             maxBox = center + extents;
 
@@ -1036,7 +1043,7 @@ namespace Barbatos_SSR_TEST
 
         reflectionColor *= SPIntensity;
         float reflectionLuminance = GetLuminance(reflectionColor);
-        float conservation= saturate(reflectionLuminance * reflectionMask);
+        float conservation = saturate(reflectionLuminance * reflectionMask);
 
         float3 finalColor = originalColor * (1.0 - conservation) + (reflectionColor * reflectionMask);
 
