@@ -1,7 +1,7 @@
 /*-------------------------------------------------|
 | :: Barbatos SSR_T (Screen-Space Reflections)  :: |
 '--------------------------------------------------|
-| Version: 0.0.8                                   |
+| Version: 0.0.9                                   |
 | Author: Barbatos                                 |
 | License: MIT                                     |
 | Description:Barbatos SSR, but focused for testing|
@@ -142,21 +142,6 @@ uniform float AccumFramesSG <
 	ui_label = "Temporal Accumulation Frames";
 	ui_tooltip = "Number of frames to accumulate. Higher values are smoother but may cause more ghosting.";
 > = 2.0;
-
-// -- Upscaling (SGSR) --
-uniform float EdgeSharpness <
-	ui_type = "drag";
-	ui_min = 0.0; ui_max = 10.0; ui_step = 0.1;
-	ui_category = "Upscaling (SGSR)";
-	ui_label = "Edge Sharpness";
-> = 2.0;
-
-uniform float EdgeThreshold <
-	ui_type = "drag";
-	ui_min = 0.0; ui_max = 16.0; ui_step = 0.1;
-	ui_category = "Upscaling (SGSR)";
-	ui_label = "Edge Threshold";
-> = 8.0;
 
 // -- Advanced --
 uniform float OrientationThreshold <
@@ -557,11 +542,9 @@ namespace Barbatos_SSR_TEST
         return result;
     }
 
-//-----------------------------------|
-// :: Glossy & SGSR Utility Funcs :: |
-//-----------------------------------|
-
-#define UseEdgeDirection
+//---------------|
+// :: Glossy  :: |
+//---------------|
 
     float specularPowerToConeAngle(float specularPower)
     {
@@ -591,121 +574,7 @@ namespace Barbatos_SSR_TEST
         wA *= wA;
         return wB * wA;
     }
-
-#if defined(UseEdgeDirection)
-    float2 weightY(float dx, float dy, float c, float3 data)
-#else
-	float2 weightY(float dx, float dy, float c, float data)
-#endif
-    {
-#if defined(UseEdgeDirection)
-        float std = data.x;
-        float2 dir = data.yz;
-        float edgeDis = ((dx * dir.y) + (dy * dir.x));
-        float x = (((dx * dx) + (dy * dy)) + ((edgeDis * edgeDis) * ((clamp(((c * c) * std), 0.0, 1.0) * 0.7) + -1.0)));
-#else
-		float std = data;
-		float x = ((dx*dx)+(dy* dy))* float(0.5) + clamp(abs(c)*std, 0.0, 1.0);
-#endif
-        float w = fastLanczos2(x);
-        return float2(w, w * c);
-    }
-
-    float2 edgeDirection(float4 left, float4 right)
-    {
-        float2 dir;
-        float RxLz = (right.x + (-left.z));
-        float RwLy = (right.w + (-left.y));
-        float2 delta;
-        delta.x = (RxLz + RwLy);
-        delta.y = (RxLz + (-RwLy));
-        float lengthInv = rsqrt((delta.x * delta.x + 3.075740e-05) + (delta.y * delta.y));
-        dir.x = (delta.x * lengthInv);
-        dir.y = (delta.y * lengthInv);
-        return dir;
-    }
-
-    float4 SGSRH(float2 p)
-    {
-        float g_tl = GetLod(sTemp, p).g;
-        float g_tr = tex2Doffset(sTemp, p, int2(1, 0)).g;
-        float g_bl = tex2Doffset(sTemp, p, int2(0, 1)).g;
-        float g_br = tex2Doffset(sTemp, p, int2(1, 1)).g;
-        return float4(g_tr, g_br, g_bl, g_tl);
-    }
-	
-	// Core SGSR upscaling function.
-    float3 SgsrYuvH(float2 uv, float4 con1)
-    {
-        float3 pix;
-        float edgeThreshold = EdgeThreshold / 255.0;
-        float edgeSharpness = EdgeSharpness;
-		
-        pix = GetLod(sTemp, uv * RenderScale).xyz;
-
-        float2 imgCoord = (uv.xy * con1.zw) - 0.5;
-        float2 imgCoordPixel = floor(imgCoord);
-		
-        float2 coord_corner = imgCoordPixel * con1.xy;
-        float2 coord_center = coord_corner + (0.5 * con1.xy);
-        float2 pl = frac(imgCoord);
-        float4 left = SGSRH(coord_center * RenderScale);
-
-        float edgeVote = abs(left.z - left.y) + abs(pix[1] - left.y) + abs(pix[1] - left.z);
-        if (edgeVote > edgeThreshold)
-        {
-            float2 right_coord_center = coord_center + float2(con1.x, 0.0);
-            float4 right = SGSRH(right_coord_center * RenderScale);
-			
-            float2 up_coord_center = coord_center + float2(0.0, -con1.y);
-            float2 down_coord_center = coord_center + float2(0.0, con1.y);
-
-            float4 upDown;
-            upDown.xy = SGSRH(up_coord_center * RenderScale).wz;
-            upDown.zw = SGSRH(down_coord_center * RenderScale).yx;
-
-            float mean = (left.y + left.z + right.x + right.w) * float(0.25);
-            left = left - float4(mean, mean, mean, mean);
-            right = right - float4(mean, mean, mean, mean);
-            upDown = upDown - float4(mean, mean, mean, mean);
-            float pix_G = pix[1] - mean;
-
-            float sum = (((((abs(left.x) + abs(left.y)) + abs(left.z)) + abs(left.w)) + (((abs(right.x) + abs(right.y)) + abs(right.z)) + abs(right.w))) + (((abs(upDown.x) + abs(upDown.y)) + abs(upDown.z)) + abs(upDown.w)));
-            float sumMean = 1.014185e+01 / sum;
-            float std = (sumMean * sumMean);
-
-#if defined(UseEdgeDirection)
-            float3 data = float3(std, edgeDirection(left, right));
-#else
-			float data = std;
-#endif
-
-            float2 aWY = weightY(pl.x, pl.y + 1.0, upDown.x, data);
-            aWY += weightY(pl.x - 1.0, pl.y + 1.0, upDown.y, data);
-            aWY += weightY(pl.x - 1.0, pl.y - 2.0, upDown.z, data);
-            aWY += weightY(pl.x, pl.y - 2.0, upDown.w, data);
-            aWY += weightY(pl.x + 1.0, pl.y - 1.0, left.x, data);
-            aWY += weightY(pl.x, pl.y - 1.0, left.y, data);
-            aWY += weightY(pl.x, pl.y, left.z, data);
-            aWY += weightY(pl.x + 1.0, pl.y, left.w, data);
-            aWY += weightY(pl.x - 1.0, pl.y - 1.0, right.x, data);
-            aWY += weightY(pl.x - 2.0, pl.y - 1.0, right.y, data);
-            aWY += weightY(pl.x - 2.0, pl.y, right.z, data);
-            aWY += weightY(pl.x - 1.0, pl.y, right.w, data);
-
-            float finalY = aWY.y / aWY.x;
-
-            float max4 = max(max(left.y, left.z), max(right.x, right.w));
-            float min4 = min(min(left.y, left.z), min(right.x, right.w));
-            finalY = clamp(edgeSharpness * finalY, min4, max4);
-
-            float deltaY = finalY - pix_G;
-
-            pix = saturate(pix + deltaY);
-        }
-        return pix;
-    }
-
+    
     float3 GetGlossySample(float2 sample_uv, float2 pixel_uv)
     {
         float3 reflectionColor;
@@ -832,7 +701,7 @@ namespace Barbatos_SSR_TEST
             float3 H = normalize(L + V);
             float VdotH = clamp(dot(V, H), 0.0, 1.0);
 
-            float3 albedo = GetColor(float4(hit.uv, 0, 0)).rgb;	// I'm testing simply using color for albedo
+            float3 albedo = GetColor(float4(hit.uv, 0, 0)).rgb; // I'm testing simply using color for albedo
             float3 f0 = lerp(float3(DIELECTRIC_REFLECTANCE, DIELECTRIC_REFLECTANCE, DIELECTRIC_REFLECTANCE), albedo, Metallic);
             float3 F = F_Schlick(VdotH, f0);
 			
@@ -957,39 +826,19 @@ namespace Barbatos_SSR_TEST
         outHistory = GetLod(sTemp, float4(uv, 0, 0));
     }
 
-    void PS_Upscale_SGSR(float4 vpos : SV_Position, float2 uv : TEXCOORD, out float4 outColor : SV_Target)
+    void PS_Upscale(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outUpscaled : SV_Target)
     {
         if (RenderScale >= 1.0)
         {
-            outColor = GetLod(sTemp, float4(uv, 0, 0));
+            outUpscaled = GetLod(sTemp, uv);
             return;
         }
-		
-        float2 inputSize = BUFFER_SCREEN_SIZE * RenderScale;
-        float2 inputPixelSize = 1.0 / inputSize;
-        float4 con1 = float4(inputPixelSize, inputSize);
-		
-		// Upscale color using SGSR.
-        float3 sgsrColor = SgsrYuvH(uv, con1);
-		
-		// Upscale alpha using standard bilinear interpolation
+        
+        // Simple bilinear upscaling 
         float2 scaled_uv = uv * RenderScale;
-        float2 texel_size = ReShade::PixelSize;
-        float2 uv_floored = floor(scaled_uv / texel_size) * texel_size;
-        float2 f = frac(scaled_uv / texel_size);
-
-        float a_tl = GetLod(sTemp, float4(uv_floored, 0, 0)).a;
-        float a_tr = GetLod(sTemp, float4(uv_floored + float2(texel_size.x, 0), 0, 0)).a;
-        float a_bl = GetLod(sTemp, float4(uv_floored + float2(0, texel_size.y), 0, 0)).a;
-        float a_br = GetLod(sTemp, float4(uv_floored + texel_size, 0, 0)).a;
-
-        float a_top = lerp(a_tl, a_tr, f.x);
-        float a_bot = lerp(a_bl, a_br, f.x);
-        float final_alpha = lerp(a_top, a_bot, f.y);
-
-        outColor = float4(sgsrColor, final_alpha);
+        outUpscaled = GetLod(sTemp, scaled_uv);
     }
-	
+
     void PS_Output(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outColor : SV_Target)
     {
 		// Debug 
@@ -1075,10 +924,10 @@ namespace Barbatos_SSR_TEST
             PixelShader = PS_UpdateHistory;
             RenderTarget = History;
         }
-        pass Upscale_SGSR
+        pass Upscale
         {
             VertexShader = PostProcessVS;
-            PixelShader = PS_Upscale_SGSR;
+            PixelShader = PS_Upscale;
             RenderTarget = UpscaledReflection;
         }
         pass Output
