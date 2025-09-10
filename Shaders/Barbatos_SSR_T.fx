@@ -2,7 +2,7 @@
 | :: Barbatos SSR_T (Screen-Space Reflections)  :: |
 '--------------------------------------------------|
 | Version: 0.0.9                                   |
-| Author: Barbatos                                 |
+| Author: Waldyssoncygenes                         |
 | License: MIT                                     |
 | Description:Barbatos SSR, but focused for testing|
 '--------------------------------------------------*/
