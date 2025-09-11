@@ -1,25 +1,4 @@
 /*
-    FSR code is derived from the FidelityFX SDK, provided under the MIT license.
-    Copyright (C) 2024 Advanced Micro Devices, Inc.
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files(the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and /or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions :
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
-
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Copyright (C) 2016-2021, Intel Corporation
 //
@@ -34,14 +13,12 @@ THE SOFTWARE.
 //
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // SmoothNormals from https://github.com/AlucardDH/dh-reshade-shaders-mit/blob/master/smoothNormals.fx
-// Atrous from https://github.com/yplebedev/BFBSOUPCAN/blob/main/reshade-shaders/Shaders/SoupCanSmooth.fx
-// Bump from https://github.com/mj-ehsan/NiceGuy-Shaders/blob/main/NGLighting-Shader.fxh
 /*------------------.
 | :: Description :: |
 '-------------------/
 
     XeGTAO
-    Version 1.5.1
+    Version 1.5.2
     Author: Barbatos
 
     History:
@@ -409,47 +386,9 @@ namespace XeGTAO
 | :: Functions :: |
 '----------------*/
 
-    // FSR
-    struct RectificationBox
-    {
-        float boxCenter;
-        float boxVec;
-        float aabbMin;
-        float aabbMax;
-        float fBoxCenterWeight;
-    };
-
-    void RectificationBoxAddSample(inout RectificationBox box, bool bInitialSample, float fSample, float fWeight)
-    {
-        if (bInitialSample)
-        {
-            box.boxCenter = fSample * fWeight;
-            box.boxVec = fSample * fSample * fWeight;
-            box.aabbMin = fSample;
-            box.aabbMax = fSample;
-            box.fBoxCenterWeight = fWeight;
-        }
-        else
-        {
-            box.boxCenter += fSample * fWeight;
-            box.boxVec += fSample * fSample * fWeight;
-            box.aabbMin = min(box.aabbMin, fSample);
-            box.aabbMax = max(box.aabbMax, fSample);
-            box.fBoxCenterWeight += fWeight;
-        }
-    }
-
-    void RectificationBoxComputeVarianceBoxData(inout RectificationBox box)
-    {
-        const float fBoxCenterWeightRcp = rcp(max(1e-6, box.fBoxCenterWeight));
-        box.boxCenter *= fBoxCenterWeightRcp;
-        box.boxVec = max(0.0, box.boxVec * fBoxCenterWeightRcp - (box.boxCenter * box.boxCenter));
-    }
-    //
-    
     //Noise
     // https://www.shadertoy.com/view/llGcDm
-    #if __SHADERMODEL__ >= 40
+#if __SHADERMODEL__ >= 40
     int hilbert(int2 p, int level)
     {
         int d = 0;
@@ -474,7 +413,7 @@ namespace XeGTAO
     {
         return hilbert(int2(x % 64, y % 64), 6);
     }
-    #else
+#else
     float hilbert(float2 p, int level)
     {
         float d = 0;
@@ -487,9 +426,9 @@ namespace XeGTAO
             float term = r.y + r.x * (3.0 - 2.0 * r.y);
             d += term * exp2(2 * n);
 
-            if (r.y < 0.5) 
+            if (r.y < 0.5)
             {
-                if (r.x > 0.5) 
+                if (r.x > 0.5)
                 {
                     p = n_pow2 - 1.0 - p;
                 }
@@ -668,7 +607,6 @@ namespace XeGTAO
     
         return ComputeHeightmapNormal(h00, h10, h20, h01, h11, h21, h02, h12, h22, pixelWorldSize);
     }
-
     
     float XeGTAO_EncodeVisibilityBentNormal(half visibility, half3 bentNormal)
     {
@@ -1183,72 +1121,17 @@ namespace XeGTAO
         outHistory = GetLod(sTemp, uv).r;
     }
 
-    float PS_Upscale(float4 vpos : SV_Position, float2 uv : TEXCOORD) : SV_Target
+    void PS_Upscale(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outUpscaled : SV_Target)
     {
         if (RenderScale >= 1.0)
         {
-            return GetLod(sTemp, uv).r;
-        }
-
-        // FSR
-        const float2 fDownscaleFactor = float2(RenderScale, RenderScale);
-        const float2 fRenderSize = BUFFER_SCREEN_SIZE * fDownscaleFactor;
-
-        const float2 fDstOutputPos = uv * BUFFER_SCREEN_SIZE + 0.5f;
-        const float2 fSrcOutputPos = fDstOutputPos * fDownscaleFactor;
-        const int2 iSrcInputPos = int2(floor(fSrcOutputPos));
-        
-        const float2 fSrcUnjitteredPos = (float2(iSrcInputPos) + 0.5f);
-        const float2 fBaseSampleOffset = fSrcUnjitteredPos - fSrcOutputPos;
-
-        int2 offsetTL;
-        offsetTL.x = (fSrcUnjitteredPos.x > fSrcOutputPos.x) ? -2 : -1;
-        offsetTL.y = (fSrcUnjitteredPos.y > fSrcOutputPos.y) ? -2 : -1;
-
-        const bool bFlipCol = fSrcUnjitteredPos.x > fSrcOutputPos.x;
-        const bool bFlipRow = fSrcUnjitteredPos.y > fSrcOutputPos.y;
-
-        RectificationBox clippingBox;
-        float fSamples[9];
-        int iSampleIndex = 0;
-
-        for (int row = 0; row < 3; row++)
-        {
-            for (int col = 0; col < 3; col++)
-            {
-                const int2 sampleColRow = int2(bFlipCol ? (2 - col) : col, bFlipRow ? (2 - row) : row);
-                const int2 iSrcSamplePos = iSrcInputPos + offsetTL + sampleColRow;
-                
-                const float2 sample_uv = ((iSrcSamplePos + 0.5) * rcp(fRenderSize)) * RenderScale;
-                
-                fSamples[iSampleIndex] = GetLod(sTemp, float4(sample_uv, 0, 0)).r;
-
-                iSampleIndex++;
-            }
-        }
-
-        iSampleIndex = 0;
-        for (int row = 0; row < 3; row++)
-        {
-            for (int col = 0; col < 3; col++)
-            {
-                const int2 sampleColRow = int2(bFlipCol ? (2 - col) : col, bFlipRow ? (2 - row) : row);
-                const float2 fOffset = (float2) offsetTL + (float2) sampleColRow;
-                const float2 fSrcSampleOffset = fBaseSampleOffset + fOffset;
-
-                const float fRectificationCurveBias = -2.3f;
-                const float fSrcSampleOffsetSq = dot(fSrcSampleOffset, fSrcSampleOffset);
-                const float fBoxSampleWeight = exp(fRectificationCurveBias * fSrcSampleOffsetSq);
-
-                const bool bInitialSample = (row == 0) && (col == 0);
-                RectificationBoxAddSample(clippingBox, bInitialSample, fSamples[iSampleIndex], fBoxSampleWeight);
-                iSampleIndex++;
-            }
+            outUpscaled = GetLod(sTemp, uv);
+            return;
         }
         
-        RectificationBoxComputeVarianceBoxData(clippingBox);
-
-        return clippingBox.boxCenter;
+        // Simple bilinear upscaling 
+        float2 scaled_uv = uv * RenderScale;
+        outUpscaled = GetLod(sTemp, scaled_uv);
     }
 
     float4 PS_Output(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
