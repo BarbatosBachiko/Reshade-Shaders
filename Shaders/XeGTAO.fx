@@ -109,7 +109,7 @@ uniform float EffectRadius <
     ui_tooltip = "Main radius of the AO effect in view-space units.";
     ui_type = "drag";
     ui_min = 0.1; ui_max = 50.0; ui_step = 0.01;
-> = 20.0;
+> = 2.0;
 
 uniform float4 OcclusionColor <
     ui_category = "General";
