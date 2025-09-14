@@ -9,7 +9,7 @@ License: MIT
 About: Transforms ordinary game visuals into vibrant, high-contrast scenes
 
 Changelog 1.1:
-- Added 'Static Exposure' option to disable brightness adaptation.
+- Added 'Static Exposure' option to disable brightness adaptation for a more consistent image.
 */
 
 #include "ReShade.fxh"
@@ -234,14 +234,22 @@ namespace VividTone
 
     float4 LuminancePass(float4 pos : SV_Position, float2 uv : TexCoord) : SV_Target
     {
-        float currentLum = CalculateSceneLuminance();
-        float prevLum = tex2Dfetch(s_PREV_LUM, int2(0, 0)).r;
-    
-        float adaptSpeed = AdaptationSpeed;
-        if (abs(currentLum - prevLum) > 0.1)
-            adaptSpeed *= 2.0;
-    
-        float adaptedLum = lerp(prevLum, currentLum, adaptSpeed);
+        float adaptedLum;
+
+        if (StaticExposure)
+        {
+            adaptedLum = tex2Dfetch(s_PREV_LUM, int2(0, 0)).r;
+        }
+        else
+        {
+            float currentLum = CalculateSceneLuminance();
+            float prevLum = tex2Dfetch(s_PREV_LUM, int2(0, 0)).r;
+            float adaptSpeed = AdaptationSpeed;
+            if (abs(currentLum - prevLum) > 0.1)
+                adaptSpeed *= 2.0;
+        
+            adaptedLum = lerp(prevLum, currentLum, adaptSpeed);
+        }
     
         return float4(adaptedLum, 0, 0, 1);
     }
@@ -254,15 +262,11 @@ namespace VividTone
     float4 Final(float4 pos : SV_Position, float2 uv : TexCoord) : SV_Target
     {
         float3 color = GetColor(uv).rgb;
-    
         color = pow(abs(color), HDRPower);
-    
-        float sceneLum = StaticExposure ? 0.5 : tex2Dfetch(sLUM, int2(0, 0)).r;
+        float sceneLum = tex2Dfetch(sLUM, int2(0, 0)).r;
         float exposure = pow(2.0, Exposure);
-    
         color = AdaptiveToneMapping(color, sceneLum, exposure);
         color = MultipleExposuresHDR(color, sceneLum);
-    
         return float4(saturate(color), 1.0);
     }
 
@@ -274,12 +278,14 @@ namespace VividTone
             PixelShader = LuminancePass;
             RenderTarget = LUM;
         }
+    
         pass StorePreviousLuminance
         {
             VertexShader = PostProcessVS;
             PixelShader = StoreLuminancePass;
             RenderTarget = PREV_LUM;
         }
+    
         pass
         {
             VertexShader = PostProcessVS;
