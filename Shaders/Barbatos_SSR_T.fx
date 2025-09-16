@@ -1,7 +1,7 @@
 /*-------------------------------------------------|
 | :: Barbatos SSR_T (Screen-Space Reflections)  :: |
 '--------------------------------------------------|
-| Version: 0.0.10                                  |
+| Version: 0.0.11                                  |
 | Author: Barbatos                                 |
 | License: MIT                                     |
 | Description:Barbatos SSR, but focused for testing|
@@ -470,7 +470,7 @@ namespace Barbatos_SSR_TEST
         float l22 = GetColor(texcoord + ReShade::PixelSize * float2( 1,  1)).g;
 
         float Gx = (l20 + 2.0 * l21 + l22) - (l00 + 2.0 * l01 + l02);
-        float Gy = (l02 + 2.0 * l12 + l22) - (l00 + 2.0 * l10 + l20); 
+        float Gy = (l02 + 2.0 * l12 + l22) - (l00 + 2.0 * l10 + l20);
 
         if (length(float2(Gx, Gy)) < SobelEdgeThreshold)
             return normal;
@@ -623,7 +623,7 @@ namespace Barbatos_SSR_TEST
 
                     for (int i = 0; i < GlossySamples; ++i)
                     {
-                        float2 random_seed = pixel_uv * BUFFER_SCREEN_SIZE + float2(i, i * 2.0);
+                        float2 random_seed = pixel_uv * BUFFER_SCREEN_SIZE + float2(i, i * 2.0) + float2(float(FRAME_COUNT % 100), float(FRAME_COUNT % 50));
                         float2 u = frac(sin(float2(dot(random_seed, float2(12.9898, 78.233)), dot(random_seed, float2(39.345, 41.123)))) * 43758.5453);
                         float2 offset = ConcentricSquareMapping(u) * blurRadiusUV;
                         reflectionColor += GetColor(float4(sample_uv + offset, 0, 0)).rgb;
@@ -820,7 +820,7 @@ namespace Barbatos_SSR_TEST
             }
             float3 center = (minBox + maxBox) * 0.5;
             float3 extents = (maxBox - minBox) * 0.5;
-            extents += 0.01;
+            extents += 0.1;
             minBox = center - extents;
             maxBox = center + extents;
 
@@ -911,7 +911,7 @@ namespace Barbatos_SSR_TEST
 
         reflectionColor *= SPIntensity;
         float reflectionLuminance = GetLuminance(reflectionColor);
-        float conservation = saturate(reflectionLuminance * reflectionMask);
+        float conservation = saturate(reflectionLuminance * reflectionMask) * 1.05;
 
         float3 finalColor = originalColor * (1.0 - conservation) + (reflectionColor * reflectionMask);
 
