@@ -1,7 +1,7 @@
 /*-------------------------------------------------|
 | :: Barbatos SSR_T (Screen-Space Reflections)  :: |
 '--------------------------------------------------|
-| Version: 0.0.11                                  |
+| Version: 0.0.12                                  |
 | Author: Barbatos                                 |
 | License: MIT                                     |
 | Description:Barbatos SSR, but focused for testing|
@@ -38,17 +38,18 @@ static const float2 ZERO_LOD = float2(0.0, 0.0);
 //----------|
 // :: UI :: |
 //----------|
+// UI updated to use macros from ReShadeUI.fxh for compatibility
 
 // -- Main Settings --
 uniform float SPIntensity <
-    ui_type = "drag";
+    __UNIFORM_DRAG_FLOAT1
     ui_min = 0.0; ui_max = 3.0; ui_step = 0.01;
     ui_category = "Main Settings";
     ui_label = "Reflection Intensity";
 > = 1.1;
 
 uniform float FadeEnd <
-    ui_type = "drag";
+    __UNIFORM_DRAG_FLOAT1
     ui_min = 0.0; ui_max = 5.0; ui_step = 0.010;
     ui_category = "Main Settings";
     ui_label = "Fade Distance";
@@ -56,7 +57,7 @@ uniform float FadeEnd <
 > = 4.999;
 
 uniform float THICKNESS_THRESHOLD <
-    ui_type = "drag";
+    __UNIFORM_DRAG_FLOAT1
     ui_min = 0.001; ui_max = 0.02; ui_step = 0.001;
     ui_category = "Main Settings";
     ui_label = "Thickness Threshold";
@@ -65,7 +66,7 @@ uniform float THICKNESS_THRESHOLD <
 
 // -- Surface & Material --
 uniform float Metallic <
-    ui_type = "drag";
+    __UNIFORM_DRAG_FLOAT1
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
     ui_category = "Surface & Material";
     ui_label = "Metallic";
@@ -73,7 +74,7 @@ uniform float Metallic <
 > = 0.2;
 
 uniform float Roughness <
-    ui_type = "drag";
+    __UNIFORM_DRAG_FLOAT1
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
     ui_category = "Surface & Material";
     ui_label = "Roughness";
@@ -82,7 +83,7 @@ uniform float Roughness <
 
 uniform float BumpIntensity <
     ui_label = "Bump Mapping Intensity";
-    ui_type = "drag";
+    __UNIFORM_DRAG_FLOAT1
     ui_category = "Surface & Material";
     ui_min = 0.0; ui_max = 5.0; ui_step = 0.01;
 > = 0.1;
@@ -90,14 +91,14 @@ uniform float BumpIntensity <
 uniform float SobelEdgeThreshold <
     ui_label = "Sobel Edge Threshold";
     ui_tooltip = "Sets a minimum edge strength for bump mapping to occur. Helps reduce noise on flat surfaces.";
-    ui_type = "drag";
+    __UNIFORM_DRAG_FLOAT1
     ui_category = "Surface & Material";
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
 > = 0.03;
 
 // -- Performance & Quality --
 uniform int Quality <
-    ui_type = "combo";
+    __UNIFORM_COMBO_INT1
     ui_items = "Quality\0Performance\0";
     ui_category = "Performance & Quality";
     ui_label = "Quality Preset";
@@ -105,7 +106,7 @@ uniform int Quality <
 > = 0;
 
 uniform float RenderScale <
-    ui_type = "drag";
+    __UNIFORM_DRAG_FLOAT1
     ui_min = 0.1; ui_max = 0.99; ui_step = 0.01;
     ui_category = "Performance & Quality";
     ui_label = "Render Scale";
@@ -120,7 +121,7 @@ uniform bool EnableGlossy <
 > = true;
 
 uniform int GlossySamples <
-    ui_type = "slider";
+    __UNIFORM_SLIDER_INT1
     ui_min = 1; ui_max = 20;
     ui_category = "Glossy Reflections";
     ui_label = "Glossy Samples";
@@ -128,24 +129,23 @@ uniform int GlossySamples <
 > = 10;
 
 // -- Temporal Filtering --
-uniform bool EnableTemporal <
+uniform bool EnableTAA <
     ui_category = "Temporal Filtering";
-    ui_label = "Enable Temporal Accumulation";
-    ui_tooltip = "Blends the current frame's reflection with previous frames to reduce noise and flickering.";
+    ui_label = "Enable Temporal Reprojection";
+    ui_tooltip = "Blends the current frame's reflection with previous frames to reduce noise and flickering using temporal reprojection.";
 > = true;
 
-uniform float AccumFramesSG <
-    ui_type = "slider";
-    ui_min = 1.0; ui_max = 32.0;
-    ui_step = 1.0;
+uniform float FeedbackFactor <
+    __UNIFORM_DRAG_FLOAT1
+    ui_min = 0.0; ui_max = 0.99; ui_step = 0.01;
     ui_category = "Temporal Filtering";
-    ui_label = "Temporal Accumulation Frames";
-    ui_tooltip = "Number of frames to accumulate. Higher values are smoother but may cause more ghosting.";
-> = 2.0;
+    ui_label = "Temporal Feedback";
+    ui_tooltip = "Controls how much of the previous frame is blended in. Higher values are smoother but can cause more ghosting.";
+> = 0.99;
 
 // -- Advanced --
 uniform float OrientationThreshold <
-    ui_type = "drag";
+    __UNIFORM_DRAG_FLOAT1
     ui_min = 0.01; ui_max = 1.0; ui_step = 0.01;
     ui_category = "Advanced";
     ui_label = "Orientation Threshold";
@@ -153,7 +153,7 @@ uniform float OrientationThreshold <
 > = 0.90;
 
 uniform float GeoCorrectionIntensity <
-    ui_type = "drag";
+    __UNIFORM_DRAG_FLOAT1
     ui_min = -0.1; ui_max = 0.01;
     ui_step = 0.01;
     ui_category = "Advanced";
@@ -162,7 +162,7 @@ uniform float GeoCorrectionIntensity <
 > = -0.01;
 
 uniform float VERTICAL_FOV <
-    ui_type = "drag";
+    __UNIFORM_DRAG_FLOAT1
     ui_min = 15.0; ui_max = 120.0;
     ui_step = 0.1;
     ui_category = "Advanced";
@@ -171,7 +171,7 @@ uniform float VERTICAL_FOV <
 
 // -- Debug --
 uniform int ViewMode <
-    ui_type = "combo";
+    __UNIFORM_COMBO_INT1
     ui_items = "None\0Motion Vectors\0Final Reflection\0Normals\0Depth\0Raw Low-Res Reflection\0Reflection Mask\0";
     ui_category = "Debug";
     ui_label = "Debug View Mode";
@@ -309,22 +309,6 @@ namespace Barbatos_SSR_TEST
     {
         return f0 + (1.0.xxx - f0) * pow(1.0 - VdotH, 5.0);
     }
-
-    float3 RGBToYCoCg(float3 rgb)
-    {
-        float Y = dot(rgb, float3(0.25, 0.5, 0.25));
-        float Co = dot(rgb, float3(0.5, 0, -0.5));
-        float Cg = dot(rgb, float3(-0.25, 0.5, -0.25));
-        return float3(Y, Co, Cg);
-    }
-
-    float3 YCoCgToRGB(float3 ycocg)
-    {
-        float r = ycocg.x + ycocg.y - ycocg.z;
-        float g = ycocg.x + ycocg.z;
-        float b = ycocg.x - ycocg.y - ycocg.z;
-        return float3(r, g, b);
-    }
     
     float3 HSVToRGB(float3 c)
     {
@@ -350,25 +334,7 @@ namespace Barbatos_SSR_TEST
         }
         return SampleMotionVectors(texcoord).rg;
     }
-
-    // Clips the history sample to the AABB of the current pixel's neighbors.
-    float3 ClipToAABB(float3 aabb_min, float3 aabb_max, float3 q)
-    {
-        float3 center = 0.5 * (aabb_max + aabb_min);
-        float3 extents = 0.5 * (aabb_max - aabb_min);
-        extents = max(extents, 1.0 / 255.0);
-
-        float3 v = q - center;
-        float max_dist = max(abs(v.x / extents.x), max(abs(v.y / extents.y), abs(v.z / extents.z)));
-
-        if (max_dist > 1.0)
-        {
-            return center + v / max_dist;
-        }
-
-        return q;
-    }
-
+    
     // From http://psgraphics.blogspot.com/2011/01/improved-code-for-concentric-map.html
     float2 ConcentricSquareMapping(float2 u)
     {
@@ -400,7 +366,7 @@ namespace Barbatos_SSR_TEST
 
         return float2(X, Y);
     }
-
+    
 //------------------------------------|
 // :: View Space & Normal Functions ::|
 //------------------------------------|
@@ -574,7 +540,7 @@ namespace Barbatos_SSR_TEST
     }
 
 //---------------|
-// :: Glossy  :: |
+// :: Glossy    :: |
 //---------------|
 
     float specularPowerToConeAngle(float specularPower)
@@ -646,6 +612,114 @@ namespace Barbatos_SSR_TEST
         }
 
         return reflectionColor;
+    }
+    
+//---------------------------------------------------|
+// :: Temporal Reprojection (TAA) Helper Functions ::|
+//---------------------------------------------------|
+
+    // Line-box clipping towards AABB center (PLAYDEAD's)
+    float3 ClipToAABB(float3 aabb_min, float3 aabb_max, float3 history_sample, float3 current_sample)
+    {
+        float3 p_clip = 0.5 * (aabb_max + aabb_min);
+        float3 e_clip = 0.5 * (aabb_max - aabb_min) + 1e-6; // Small epsilon 
+        float3 v_clip = history_sample - p_clip;
+        float3 v_unit = v_clip / e_clip;
+        float3 a_unit = abs(v_unit);
+        float ma_unit = max(a_unit.x, max(a_unit.y, a_unit.z));
+        
+        if (ma_unit > 1.0)
+            return p_clip + v_clip / ma_unit;
+        else
+            return history_sample; // Point inside AABB
+    }
+
+    // Get velocity from closest fragment in 3x3 neighborhood
+    float2 GetVelocityFromClosestFragment(float2 texcoord)
+    {
+        float2 pixel_size = ReShade::PixelSize;
+        float closest_depth = 1.0;
+        float2 closest_velocity = float2(0, 0);
+        
+        // 3x3 neighborhood offsets
+        const int2 offsets[9] =
+        {
+            int2(-1, -1), int2(0, -1), int2(1, -1),
+            int2(-1, 0), int2(0, 0), int2(1, 0),
+            int2(-1, 1), int2(0, 1), int2(1, 1)
+        };
+        
+        [unroll]
+        for (int i = 0; i < 9; i++)
+        {
+            float2 sample_coord = texcoord + offsets[i] * pixel_size;
+            float sample_depth = GetDepth(sample_coord);
+            
+            if (sample_depth < closest_depth)
+            {
+                closest_depth = sample_depth;
+                closest_velocity = SampleMotionVectors(sample_coord);
+            }
+        }
+        
+        return closest_velocity;
+    }
+
+    // Compute neighborhood min/max for clipping (rounded 3x3 + cross pattern)
+    void ComputeNeighborhoodMinMax(sampler2D color_tex, float2 texcoord, out float3 color_min, out float3 color_max)
+    {
+        float2 pixel_size = ReShade::PixelSize / RenderScale;
+        
+        // Sample center
+        float3 center_color = GetLod(color_tex, float4(texcoord, 0, 0)).rgb;
+        color_min = center_color;
+        color_max = center_color;
+        
+        // 3x3 neighborhood
+        const int2 offsets_3x3[8] =
+        {
+            int2(-1, -1), int2(0, -1), int2(1, -1),
+            int2(-1, 0), int2(1, 0),
+            int2(-1, 1), int2(0, 1), int2(1, 1)
+        };
+        
+        [unroll]
+        for (int i = 0; i < 8; i++)
+        {
+            float2 sample_coord = texcoord + offsets_3x3[i] * pixel_size;
+            float3 neighbor_color = GetLod(color_tex, float4(sample_coord, 0, 0)).rgb;
+            color_min = min(color_min, neighbor_color);
+            color_max = max(color_max, neighbor_color);
+        }
+        
+        // Additional cross pattern (5-tap) 
+        const int2 offsets_cross[4] =
+        {
+            int2(0, -2), int2(-2, 0), int2(2, 0), int2(0, 2)
+        };
+        
+        float3 cross_min = center_color;
+        float3 cross_max = center_color;
+        
+        [unroll]
+        for (int j = 0; j < 4; j++)
+        {
+            float2 sample_coord = texcoord + offsets_cross[j] * pixel_size;
+            float3 neighbor_color = GetLod(color_tex, float4(sample_coord, 0, 0)).rgb;
+            cross_min = min(cross_min, neighbor_color);
+            cross_max = max(cross_max, neighbor_color);
+        }
+        
+        // Blend 3x3 with cross pattern
+        color_min = lerp(cross_min, color_min, 0.5);
+        color_max = lerp(cross_max, color_max, 0.5);
+    }
+
+    // Compute trust factor based on velocity magnitude
+    float ComputeTrustFactor(float2 velocity_pixels, float low_threshold = 2.0, float high_threshold = 15.0)
+    {
+        float velocity_magnitude = length(velocity_pixels);
+        return saturate((high_threshold - velocity_magnitude) / (high_threshold - low_threshold));
     }
 
 //--------------------|
@@ -760,86 +834,71 @@ namespace Barbatos_SSR_TEST
             return;
         }
 
-        float4 currentSpec = GetLod(sReflection, float4(uv, 0, 0));
+        float4 current_reflection = GetLod(sReflection, float4(uv, 0, 0));
 
-        if (!EnableTemporal)
+        if (!EnableTAA)
         {
-            outBlended = currentSpec;
+            outBlended = current_reflection;
             return;
         }
         
         float2 full_res_uv = uv / RenderScale;
+        float2 velocity = GetVelocityFromClosestFragment(full_res_uv);
+        float current_depth = GetDepth(full_res_uv);
         
-        // Use motion vector from the nearest surface to avoid disocclusion artifacts.
-        float closest_depth = GetDepth(full_res_uv);
-        float2 motion = GetMotionVectors(full_res_uv);
-        [unroll]
-        for (int y = -1; y <= 1; y++)
-        {
-            for (int x = -1; x <= 1; x++)
-            {
-                if (x == 0 && y == 0)
-                    continue;
-                float2 offset_uv = full_res_uv + float2(x, y) * ReShade::PixelSize;
-                float neighbor_depth = GetDepth(offset_uv);
-                if (neighbor_depth < closest_depth)
-                {
-                    closest_depth = neighbor_depth;
-                    motion = GetMotionVectors(offset_uv);
-                }
-            }
-        }
+        float2 reprojected_uv_full = full_res_uv + velocity;
+        float history_depth = GetDepth(reprojected_uv_full);
         
-        float2 reprojected_uv_full = full_res_uv + motion;
-        float currentDepth = GetDepth(full_res_uv);
-        float historyDepth = GetDepth(reprojected_uv_full);
         float2 reprojected_uv_low = reprojected_uv_full * RenderScale;
 
-        // Check if the reprojected coordinate is valid (on-screen, similar depth).
-        bool validHistory = all(saturate(reprojected_uv_low) == reprojected_uv_low) &&
-                            FRAME_COUNT > 1 &&
-                            abs(historyDepth - currentDepth) < 0.01;
+        bool valid_history = all(saturate(reprojected_uv_low) == reprojected_uv_low) &&
+                             FRAME_COUNT > 1 &&
+                             abs(history_depth - current_depth) < 0.01;
 
-        float4 blendedSpec = currentSpec;
-        if (validHistory)
+        if (!valid_history)
         {
-            float4 historySpec = GetLod(sHistory, float4(reprojected_uv_low, 0, 0));
-
-            // Create a color bounding box from neighbors to clamp the history sample.
-            float3 minBox = RGBToYCoCg(currentSpec.rgb), maxBox = minBox;
-            const int2 offsets[4] = { int2(0, -1), int2(-1, 0), int2(1, 0), int2(0, 1) };
-            float2 low_res_pixel_size = ReShade::PixelSize / RenderScale;
-
-            [unroll]
-            for (int i = 0; i < 4; i++)
-            {
-                float2 neighbor_uv = uv + offsets[i] * low_res_pixel_size;
-                float3 neighborSpec = RGBToYCoCg(GetLod(sReflection, float4(neighbor_uv, 0, 0)).rgb);
-                minBox = min(minBox, neighborSpec);
-                maxBox = max(maxBox, neighborSpec);
-            }
-            float3 center = (minBox + maxBox) * 0.5;
-            float3 extents = (maxBox - minBox) * 0.5;
-            extents += 0.1;
-            minBox = center - extents;
-            maxBox = center + extents;
-
-            float3 historyYCoCg = RGBToYCoCg(historySpec.rgb);
-            float3 processedHistoryYCoCg = ClipToAABB(minBox, maxBox, historyYCoCg);
-            
-            float alpha = 1.0 / min((float) FRAME_COUNT, AccumFramesSG);
-            
-            // History rejection: if the original history sample was far from the clamped one,
-            // it's likely an artifact (e.g., ghosting), so we blend more of the current frame.
-            float rejection_dist = distance(historyYCoCg, processedHistoryYCoCg);
-            float rejection_factor = saturate(rejection_dist * 8.0);
-            alpha = max(alpha, rejection_factor);
-
-            blendedSpec.rgb = YCoCgToRGB(lerp(processedHistoryYCoCg, RGBToYCoCg(currentSpec.rgb), alpha));
-            blendedSpec.a = lerp(historySpec.a, currentSpec.a, alpha);
+            outBlended = current_reflection;
+            return;
         }
         
-        outBlended = blendedSpec;
+        float4 history_reflection = GetLod(sHistory, float4(reprojected_uv_low, 0, 0));
+        
+        float3 color_min, color_max;
+        ComputeNeighborhoodMinMax(sReflection, uv, color_min, color_max);
+        
+        float3 clipped_history_rgb = ClipToAABB(color_min, color_max, history_reflection.rgb, current_reflection.rgb);
+        
+        float clipping_distance = length(history_reflection.rgb - clipped_history_rgb);
+        float rejection_factor = saturate(clipping_distance * 9000.0); // Sensitivity
+        
+        float final_feedback = lerp(FeedbackFactor, 0.1, rejection_factor);
+        
+        float3 temporal_rgb = lerp(current_reflection.rgb, clipped_history_rgb, final_feedback);
+        float temporal_a = lerp(current_reflection.a, history_reflection.a, final_feedback);
+        
+        if (1)
+        {
+            float trust_factor = ComputeTrustFactor(velocity * BUFFER_SCREEN_SIZE);
+            if (trust_factor < 1.0)
+            {
+                float3 blurred_color = current_reflection.rgb;
+                const int blur_samples = 5;
+                [unroll]
+                for (int i = 1; i < blur_samples; i++)
+                {
+                    float t = (float) i / (float) (blur_samples - 1);
+                    float2 blur_coord_low = uv - (velocity * RenderScale) * 0.5 * t; // Blur in low-res space
+                    if (all(saturate(blur_coord_low) == blur_coord_low))
+                    {
+                        blurred_color += GetLod(sReflection, float4(blur_coord_low, 0, 0)).rgb;
+                    }
+                }
+                blurred_color /= (float) blur_samples;
+                temporal_rgb = lerp(blurred_color, temporal_rgb, trust_factor);
+            }
+        }
+
+        outBlended = float4(temporal_rgb, temporal_a);
     }
 
     void PS_UpdateHistory(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outHistory : SV_Target)
