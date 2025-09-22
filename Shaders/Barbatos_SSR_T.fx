@@ -1,7 +1,7 @@
 /*-------------------------------------------------|
 | :: Barbatos SSR_T (Screen-Space Reflections)  :: |
 '--------------------------------------------------|
-| Version: 0.0.12                                  |
+| Version: 0.0.13                                  |
 | Author: Barbatos                                 |
 | License: MIT                                     |
 | Description:Barbatos SSR, but focused for testing|
@@ -38,7 +38,6 @@ static const float2 ZERO_LOD = float2(0.0, 0.0);
 //----------|
 // :: UI :: |
 //----------|
-// UI updated to use macros from ReShadeUI.fxh for compatibility
 
 // -- Main Settings --
 uniform float SPIntensity <
@@ -232,7 +231,7 @@ float2 SampleMotionVectors(float2 texcoord)
     }
 #endif
 
-namespace Barbatos_SSR_TEST
+namespace Barbatos_SSR_TEST2
 {
     // Stores the raw
     texture Reflection
@@ -271,15 +270,15 @@ namespace Barbatos_SSR_TEST
     };
 
     // Stores the final
-    texture UpscaledReflection
+    texture Upscaled
     {
         Width = BUFFER_WIDTH;
         Height = BUFFER_HEIGHT;
         Format = RGBA16F;
     };
-    sampler sUpscaledReflection
+    sampler sUpscaled
     {
-        Texture = UpscaledReflection;
+        Texture = Upscaled;
     };
 
 //---------------|
@@ -325,14 +324,15 @@ namespace Barbatos_SSR_TEST
     float2 GetMotionVectors(float2 texcoord)
     {
         float2 p = ReShade::PixelSize;
-        float2 MV = 0;
-        if (MVErrorTolerance < 1)
+        float2 MV = SampleMotionVectors(texcoord);
+
+        if (MVErrorTolerance < 1.0)
         {
-            MV = SampleMotionVectors(texcoord).rg;
             if (abs(MV.x) < p.x && abs(MV.y) < p.y)
-                MV = 0;
+                return float2(0.0, 0.0);
         }
-        return SampleMotionVectors(texcoord).rg;
+
+        return MV;
     }
     
     // From http://psgraphics.blogspot.com/2011/01/improved-code-for-concentric-map.html
@@ -540,7 +540,7 @@ namespace Barbatos_SSR_TEST
     }
 
 //---------------|
-// :: Glossy    :: |
+// :: Glossy  :: |
 //---------------|
 
     float specularPowerToConeAngle(float specularPower)
@@ -614,15 +614,15 @@ namespace Barbatos_SSR_TEST
         return reflectionColor;
     }
     
-//---------------------------------------------------|
-// :: Temporal Reprojection (TAA) Helper Functions ::|
-//---------------------------------------------------|
+//------------|
+// :: TAA  :: |
+//------------|
 
     // Line-box clipping towards AABB center (PLAYDEAD's)
     float3 ClipToAABB(float3 aabb_min, float3 aabb_max, float3 history_sample, float3 current_sample)
     {
         float3 p_clip = 0.5 * (aabb_max + aabb_min);
-        float3 e_clip = 0.5 * (aabb_max - aabb_min) + 1e-6; // Small epsilon 
+        float3 e_clip = 0.5 * (aabb_max - aabb_min) + 1e-6; 
         float3 v_clip = history_sample - p_clip;
         float3 v_unit = v_clip / e_clip;
         float3 a_unit = abs(v_unit);
@@ -631,10 +631,9 @@ namespace Barbatos_SSR_TEST
         if (ma_unit > 1.0)
             return p_clip + v_clip / ma_unit;
         else
-            return history_sample; // Point inside AABB
+            return history_sample; 
     }
 
-    // Get velocity from closest fragment in 3x3 neighborhood
     float2 GetVelocityFromClosestFragment(float2 texcoord)
     {
         float2 pixel_size = ReShade::PixelSize;
@@ -665,7 +664,6 @@ namespace Barbatos_SSR_TEST
         return closest_velocity;
     }
 
-    // Compute neighborhood min/max for clipping (rounded 3x3 + cross pattern)
     void ComputeNeighborhoodMinMax(sampler2D color_tex, float2 texcoord, out float3 color_min, out float3 color_max)
     {
         float2 pixel_size = ReShade::PixelSize / RenderScale;
@@ -876,26 +874,23 @@ namespace Barbatos_SSR_TEST
         float3 temporal_rgb = lerp(current_reflection.rgb, clipped_history_rgb, final_feedback);
         float temporal_a = lerp(current_reflection.a, history_reflection.a, final_feedback);
         
-        if (1)
+        float trust_factor = ComputeTrustFactor(velocity * BUFFER_SCREEN_SIZE);
+        if (trust_factor < 1.0)
         {
-            float trust_factor = ComputeTrustFactor(velocity * BUFFER_SCREEN_SIZE);
-            if (trust_factor < 1.0)
+            float3 blurred_color = current_reflection.rgb;
+            const int blur_samples = 5;
+            [unroll]
+            for (int i = 1; i < blur_samples; i++)
             {
-                float3 blurred_color = current_reflection.rgb;
-                const int blur_samples = 5;
-                [unroll]
-                for (int i = 1; i < blur_samples; i++)
+                float t = (float) i / (float) (blur_samples - 1);
+                float2 blur_coord_low = uv - (velocity * RenderScale) * 0.5 * t; // Blur in low-res space
+                if (all(saturate(blur_coord_low) == blur_coord_low))
                 {
-                    float t = (float) i / (float) (blur_samples - 1);
-                    float2 blur_coord_low = uv - (velocity * RenderScale) * 0.5 * t; // Blur in low-res space
-                    if (all(saturate(blur_coord_low) == blur_coord_low))
-                    {
-                        blurred_color += GetLod(sReflection, float4(blur_coord_low, 0, 0)).rgb;
-                    }
+                    blurred_color += GetLod(sReflection, float4(blur_coord_low, 0, 0)).rgb;
                 }
-                blurred_color /= (float) blur_samples;
-                temporal_rgb = lerp(blurred_color, temporal_rgb, trust_factor);
             }
+            blurred_color /= (float) blur_samples;
+            temporal_rgb = lerp(blurred_color, temporal_rgb, trust_factor);
         }
 
         outBlended = float4(temporal_rgb, temporal_a);
@@ -934,7 +929,7 @@ namespace Barbatos_SSR_TEST
                         return;
                     }
                 case 2: // Final Reflection (Upscaled)
-                    outColor = float4(tex2Dlod(sUpscaledReflection, float4(uv, 0, 0)).rgb, 1.0);
+                    outColor = float4(tex2Dlod(sUpscaled, float4(uv, 0, 0)).rgb, 1.0);
                     return;
                 case 3: // Normals
                 {
@@ -951,7 +946,7 @@ namespace Barbatos_SSR_TEST
                     outColor = float4(GetLod(sReflection, float4(uv, 0, 0)).rgb, 1.0);
                     return;
                 case 6: // Reflection Mask
-                    outColor = GetLod(sUpscaledReflection, float4(uv, 0, 0)).aaaa;
+                    outColor = GetLod(sUpscaled, float4(uv, 0, 0)).aaaa;
                     return;
             }
         }
@@ -964,13 +959,13 @@ namespace Barbatos_SSR_TEST
             return;
         }
 
-        float4 reflectionSample = GetLod(sUpscaledReflection, float4(uv, 0, 0));
+        float4 reflectionSample = GetLod(sUpscaled, float4(uv, 0, 0));
         float3 reflectionColor = reflectionSample.rgb;
         float reflectionMask = reflectionSample.a;
 
         reflectionColor *= SPIntensity;
         float reflectionLuminance = GetLuminance(reflectionColor);
-        float conservation = saturate(reflectionLuminance * reflectionMask) * 1.05;
+        float conservation = saturate(reflectionLuminance * reflectionMask);
 
         float3 finalColor = originalColor * (1.0 - conservation) + (reflectionColor * reflectionMask);
 
@@ -1006,7 +1001,7 @@ namespace Barbatos_SSR_TEST
         {
             VertexShader = PostProcessVS;
             PixelShader = PS_Upscale;
-            RenderTarget = UpscaledReflection;
+            RenderTarget = Upscaled;
         }
         pass Output
         {
