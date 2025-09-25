@@ -12,10 +12,9 @@
     History:
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
 
-    Version 1.6.4
-    X Fix NaN/error in directx9
+    Version 1.6.5
+    + Better lum Gradient
 */
-
 
 // Includes
 #include "ReShade.fxh"
@@ -165,14 +164,21 @@ float lum(float3 color)
     return dot(color, 0.3333333);
 }
 
-float2 computeGradient(float2 t)
+float2 computeGradient(float2 t) //with sobel
 {
-    float gradX = lum(tex2Doffset(ReShade::BackBuffer, t, int2(1, 0)).rgb) -
-                  lum(tex2Doffset(ReShade::BackBuffer, t, int2(-1, 0)).rgb);
-    float gradY = lum(tex2Doffset(ReShade::BackBuffer, t, int2(0, 1)).rgb) -
-                  lum(tex2Doffset(ReShade::BackBuffer, t, int2(0, -1)).rgb);
-    
-    return float2(gradX, gradY) * 2.0;
+    float l0 = lum(tex2Doffset(ReShade::BackBuffer, t, int2(-1, -1)).rgb);
+    float l1 = lum(tex2Doffset(ReShade::BackBuffer, t, int2(0, -1)).rgb);
+    float l2 = lum(tex2Doffset(ReShade::BackBuffer, t, int2(1, -1)).rgb);
+    float l3 = lum(tex2Doffset(ReShade::BackBuffer, t, int2(-1, 0)).rgb);
+    float l5 = lum(tex2Doffset(ReShade::BackBuffer, t, int2(1, 0)).rgb);
+    float l6 = lum(tex2Doffset(ReShade::BackBuffer, t, int2(-1, 1)).rgb);
+    float l7 = lum(tex2Doffset(ReShade::BackBuffer, t, int2(0, 1)).rgb);
+    float l8 = lum(tex2Doffset(ReShade::BackBuffer, t, int2(1, 1)).rgb);
+
+    float gradX = -l0 - 2.0 * l3 - l6 + l2 + 2.0 * l5 + l8;
+    float gradY = -l0 - 2.0 * l1 - l2 + l6 + 2.0 * l7 + l8;
+
+    return float2(gradX, gradY);
 }
 
 float4 DAA(float2 t)
