@@ -18,7 +18,7 @@
 '-------------------/
 
     XeGTAO
-    Version 1.5.2
+    Version 1.5.3
     Author: Barbatos
 
     History:
@@ -66,8 +66,8 @@ static const float2 ZERO_LOD = float2(0.0, 0.0);
 #if UI_DIFFICULTY == 0
 #define EnableDenoise 1
 #define RadiusMultiplier        1.0
-#define FinalValuePower     0.8
-#define FalloffRange            0.6 
+#define FinalValuePower      0.8
+#define FalloffRange           0.6 
 #define SampleDistributionPower  8.0
 #define ThinOccluderCompensation -0.60
 #define ComputeBentNormals      false
@@ -827,6 +827,13 @@ namespace XeGTAO
         }
         float2 scaled_uv = uv / RenderScale;
 
+        float depth_value = getDepth(scaled_uv);
+        if (depth_value >= DepthThreshold || depth_value < 0.0001)
+        {
+            float encodedValue = XeGTAO_EncodeVisibilityBentNormal(1.0, float3(0, 0, 1));
+            return ReconstructFloat4(encodedValue);
+        }
+
         float viewspaceZ_raw = GetLod(sDepth, float4(scaled_uv, 0, 0)).r;
         float2 p = ReShade::PixelSize / RenderScale;
 
@@ -854,12 +861,6 @@ namespace XeGTAO
 
         float3 pixCenterPos = GetViewPos(scaled_uv, viewspaceZ_raw / RESHADE_DEPTH_LINEARIZATION_FAR_PLANE);
         float viewspaceZ = pixCenterPos.z;
-
-        if (getDepth(scaled_uv) >= DepthThreshold)
-        {
-            float encodedValue = XeGTAO_EncodeVisibilityBentNormal(1.0, float3(0, 0, 1));
-            return ReconstructFloat4(encodedValue);
-        }
 
         half3 viewspaceNormal = GetLod(sNormal, float4(scaled_uv, 0, 0)).xyz * 2.0 - 1.0;
         const half3 viewVec = (half3) normalize(-pixCenterPos);
@@ -1066,8 +1067,8 @@ namespace XeGTAO
         float2 reprojected_uv_low = reprojected_uv_full * RenderScale;
 
         bool validHistory = all(saturate(reprojected_uv_low) == reprojected_uv_low) &&
-                                        FRAME_COUNT > 1 &&
-                                        abs(historyViewDepth - currentViewDepth) < (currentViewDepth * 0.02);
+                                          FRAME_COUNT > 1 &&
+                                          abs(historyViewDepth - currentViewDepth) < (currentViewDepth * 0.02);
 
         float blendedAO = currentAO;
         if (validHistory)
@@ -1137,17 +1138,18 @@ namespace XeGTAO
     float4 PS_Output(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
         float4 originalColor = GetColor(uv);
+        float depth = getDepth(uv);
 
         if (ViewMode == 0) // Normal
         {
-            if (getDepth(uv) >= DepthThreshold)
+            if (depth >= DepthThreshold || depth < 0.0001)
                 return originalColor;
 
             half visibility = GetLod(sUpscaled, uv).r;
             float occlusion = 1.0 - visibility;
             occlusion = saturate(occlusion * Intensity);
 
-            float fade = saturate(1.0 - smoothstep(0.95, 1.0, getDepth(uv)));
+            float fade = saturate(1.0 - smoothstep(0.95, 1.0, depth));
             occlusion *= fade;
 
             originalColor.rgb = lerp(originalColor.rgb, OcclusionColor.rgb, occlusion);
@@ -1160,8 +1162,8 @@ namespace XeGTAO
         }
         else if (ViewMode == 2) // View-Space Depth
         {
-            float depth = GetLod(sDepth, uv).r / (RESHADE_DEPTH_LINEARIZATION_FAR_PLANE * DepthMultiplier);
-            return float4(saturate(depth.rrr), 1.0);
+            float view_depth = GetLod(sDepth, uv).r / (RESHADE_DEPTH_LINEARIZATION_FAR_PLANE * DepthMultiplier);
+            return float4(saturate(view_depth.rrr), 1.0);
         }
         else if (ViewMode == 3) // Raw AO
         {
