@@ -1,7 +1,7 @@
 /*-------------------------------------------------|
 | :: Barbatos SSR_T (Screen-Space Reflections)  :: |
 '--------------------------------------------------|
-| Version: 0.0.13                                  |
+| Version: 0.0.14                                  |
 | Author: Barbatos                                 |
 | License: MIT                                     |
 | Description:Barbatos SSR, but focused for testing|
@@ -22,10 +22,6 @@ static const int STEPS_PER_RAY_FLOOR_CEILING_PERF_DX9 = 32;
     static const int STEPS_PER_RAY_WALLS = 32;
 #endif
 
-#define fReflectFloorsIntensity 1
-#define fReflectWallsIntensity 0
-#define fReflectCeilingsIntensity 0
-
 static const float2 LOD_MASK = float2(0.0, 1.0);
 static const float2 ZERO_LOD = float2(0.0, 0.0);
 #define PI 3.1415927
@@ -42,14 +38,22 @@ static const float2 ZERO_LOD = float2(0.0, 0.0);
 // -- Main Settings --
 uniform float SPIntensity <
     __UNIFORM_DRAG_FLOAT1
-    ui_min = 0.0; ui_max = 3.0; ui_step = 0.01;
+    ui_min = 0.0; ui_max = 3.0;ui_step = 0.01;
     ui_category = "Main Settings";
     ui_label = "Reflection Intensity";
 > = 1.1;
 
+uniform int ReflectionMode <
+    __UNIFORM_COMBO_INT1
+    ui_items = "Floors Only\0Walls Only\0Ceilings Only\0Floors & Ceilings\0All Surfaces\0";
+    ui_category = "Main Settings";
+    ui_label = "Reflection Mode";
+    ui_tooltip = "Controls which surfaces will cast reflections.";
+> = 0;
+
 uniform float FadeEnd <
     __UNIFORM_DRAG_FLOAT1
-    ui_min = 0.0; ui_max = 5.0; ui_step = 0.010;
+    ui_min = 0.0; ui_max = 5.0;ui_step = 0.010;
     ui_category = "Main Settings";
     ui_label = "Fade Distance";
     ui_tooltip = "Distance at which reflections begin to fade out.";
@@ -57,16 +61,16 @@ uniform float FadeEnd <
 
 uniform float THICKNESS_THRESHOLD <
     __UNIFORM_DRAG_FLOAT1
-    ui_min = 0.001; ui_max = 0.02; ui_step = 0.001;
+    ui_min = 0.001; ui_max = 0.2;ui_step = 0.001;
     ui_category = "Main Settings";
     ui_label = "Thickness Threshold";
     ui_tooltip = "Determines how thick a surface is before a ray passes through it. Prevents self-reflection artifacts.";
-> = 0.01;
+> = 0.1;
 
 // -- Surface & Material --
 uniform float Metallic <
     __UNIFORM_DRAG_FLOAT1
-    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+    ui_min = 0.0; ui_max = 1.0;ui_step = 0.01;
     ui_category = "Surface & Material";
     ui_label = "Metallic";
     ui_tooltip = "Controls how metallic a surface is. 0.0 for dielectrics (plastic, wood), 1.0 for metals.";
@@ -74,7 +78,7 @@ uniform float Metallic <
 
 uniform float Roughness <
     __UNIFORM_DRAG_FLOAT1
-    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+    ui_min = 0.0; ui_max = 1.0;ui_step = 0.01;
     ui_category = "Surface & Material";
     ui_label = "Roughness";
     ui_tooltip = "Controls the surface roughness. 0.0 is a perfect mirror, 1.0 is very rough (diffuse).";
@@ -82,7 +86,7 @@ uniform float Roughness <
 
 uniform float BumpIntensity <
     ui_label = "Bump Mapping Intensity";
-    __UNIFORM_DRAG_FLOAT1
+__UNIFORM_DRAG_FLOAT1
     ui_category = "Surface & Material";
     ui_min = 0.0; ui_max = 5.0; ui_step = 0.01;
 > = 0.1;
@@ -90,7 +94,7 @@ uniform float BumpIntensity <
 uniform float SobelEdgeThreshold <
     ui_label = "Sobel Edge Threshold";
     ui_tooltip = "Sets a minimum edge strength for bump mapping to occur. Helps reduce noise on flat surfaces.";
-    __UNIFORM_DRAG_FLOAT1
+__UNIFORM_DRAG_FLOAT1
     ui_category = "Surface & Material";
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
 > = 0.03;
@@ -102,11 +106,11 @@ uniform int Quality <
     ui_category = "Performance & Quality";
     ui_label = "Quality Preset";
     ui_tooltip = "Choose between higher quality ray tracing or a faster preset.";
-> = 0;
+> = 1;
 
 uniform float RenderScale <
     __UNIFORM_DRAG_FLOAT1
-    ui_min = 0.1; ui_max = 0.99; ui_step = 0.01;
+    ui_min = 0.1; ui_max = 0.99;ui_step = 0.01;
     ui_category = "Performance & Quality";
     ui_label = "Render Scale";
     ui_tooltip = "Renders reflections at a lower resolution for performance";
@@ -136,7 +140,7 @@ uniform bool EnableTAA <
 
 uniform float FeedbackFactor <
     __UNIFORM_DRAG_FLOAT1
-    ui_min = 0.0; ui_max = 0.99; ui_step = 0.01;
+    ui_min = 0.0; ui_max = 0.99;ui_step = 0.01;
     ui_category = "Temporal Filtering";
     ui_label = "Temporal Feedback";
     ui_tooltip = "Controls how much of the previous frame is blended in. Higher values are smoother but can cause more ghosting.";
@@ -145,11 +149,11 @@ uniform float FeedbackFactor <
 // -- Advanced --
 uniform float OrientationThreshold <
     __UNIFORM_DRAG_FLOAT1
-    ui_min = 0.01; ui_max = 1.0; ui_step = 0.01;
+    ui_min = 0.01; ui_max = 1.0;ui_step = 0.01;
     ui_category = "Advanced";
     ui_label = "Orientation Threshold";
     ui_tooltip = "Controls sensitivity for detecting floors/walls/ceilings based on their normal vector. Lower is stricter.";
-> = 0.90;
+> = 0.50;
 
 uniform float GeoCorrectionIntensity <
     __UNIFORM_DRAG_FLOAT1
@@ -622,7 +626,7 @@ namespace Barbatos_SSR_TEST2
     float3 ClipToAABB(float3 aabb_min, float3 aabb_max, float3 history_sample, float3 current_sample)
     {
         float3 p_clip = 0.5 * (aabb_max + aabb_min);
-        float3 e_clip = 0.5 * (aabb_max - aabb_min) + 1e-6; 
+        float3 e_clip = 0.5 * (aabb_max - aabb_min) + 1e-6;
         float3 v_clip = history_sample - p_clip;
         float3 v_unit = v_clip / e_clip;
         float3 a_unit = abs(v_unit);
@@ -631,7 +635,7 @@ namespace Barbatos_SSR_TEST2
         if (ma_unit > 1.0)
             return p_clip + v_clip / ma_unit;
         else
-            return history_sample; 
+            return history_sample;
     }
 
     float2 GetVelocityFromClosestFragment(float2 texcoord)
@@ -748,6 +752,32 @@ namespace Barbatos_SSR_TEST2
         normal = GeometryCorrection(scaled_uv, normal);
         normal = normalize(normal);
 
+        float fReflectFloorsIntensity = 0.0;
+        float fReflectWallsIntensity = 0.0;
+        float fReflectCeilingsIntensity = 0.0;
+
+        switch (ReflectionMode)
+        {
+            case 0: // Floors Only
+                fReflectFloorsIntensity = 1.0;
+                break;
+            case 1: // Walls Only
+                fReflectWallsIntensity = 1.0;
+                break;
+            case 2: // Ceilings Only
+                fReflectCeilingsIntensity = 1.0;
+                break;
+            case 3: // Floors & Ceilings
+                fReflectFloorsIntensity = 1.0;
+                fReflectCeilingsIntensity = 1.0;
+                break;
+            case 4: // All Surfaces
+                fReflectFloorsIntensity = 1.0;
+                fReflectWallsIntensity = 1.0;
+                fReflectCeilingsIntensity = 1.0;
+                break;
+        }
+
         bool isFloor = normal.y > OrientationThreshold;
         bool isCeiling = normal.y < -OrientationThreshold;
         bool isWall = abs(normal.y) <= OrientationThreshold;
@@ -788,17 +818,6 @@ namespace Barbatos_SSR_TEST2
         if (hit.found)
         {
             reflectionColor = GetGlossySample(hit.uv, scaled_uv);
-
-            float3 L = -r.direction;
-            float3 V = eyeDir;
-            float3 H = normalize(L + V);
-            float VdotH = clamp(dot(V, H), 0.0, 1.0);
-
-            float3 albedo = GetColor(float4(hit.uv, 0, 0)).rgb; // I'm testing simply using color for albedo
-            float3 f0 = lerp(float3(DIELECTRIC_REFLECTANCE, DIELECTRIC_REFLECTANCE, DIELECTRIC_REFLECTANCE), albedo, Metallic);
-            float3 F = F_Schlick(VdotH, f0);
-            
-            reflectionColor *= F;
             float distFactor = saturate(1.0 - length(hit.viewPos - viewPos) / 10.0); // MaxTraceDistance
             float fadeRange = max(FadeEnd, 0.001);
             float depthFade = saturate((FadeEnd - depth) / fadeRange);
@@ -812,9 +831,8 @@ namespace Barbatos_SSR_TEST2
             float3 fbViewPos = viewPos + r.direction * adaptiveDist;
             float2 uvFb = saturate(ViewPosToUV(fbViewPos).xy);
             reflectionColor = GetGlossySample(uvFb, scaled_uv);
-            float fresnel = pow(1.0 - saturate(dot(eyeDir, normal)), 3.0);
             float vertical_fade = pow(saturate(1.0 - scaled_uv.y), 3.0);
-            reflectionAlpha = fresnel * vertical_fade;
+            reflectionAlpha = vertical_fade;
         }
 
         float angleWeight = pow(saturate(dot(-viewDir, r.direction)), 2.0);
@@ -952,8 +970,9 @@ namespace Barbatos_SSR_TEST2
         }
 
         float3 originalColor = GetColor(uv).rgb;
+        float depth = GetDepth(uv);
 
-        if (GetDepth(uv) >= 1.0)
+        if (depth >= 1.0)
         {
             outColor = float4(originalColor, 1.0);
             return;
@@ -963,12 +982,19 @@ namespace Barbatos_SSR_TEST2
         float3 reflectionColor = reflectionSample.rgb;
         float reflectionMask = reflectionSample.a;
 
+        float3 viewPos = UVToViewPos(uv, depth);
+        float3 viewDir = -normalize(viewPos);
+        float3 normal = Normal(uv);
+        normal = ApplyBumpMapping(uv, normal);
+        normal = GeometryCorrection(uv, normal);
+
+        float VdotN = saturate(dot(viewDir, normal));
+        
+        float3 f0 = lerp(float3(DIELECTRIC_REFLECTANCE, DIELECTRIC_REFLECTANCE, DIELECTRIC_REFLECTANCE), originalColor, Metallic);
+        float3 F = F_Schlick(VdotN, f0);
+
         reflectionColor *= SPIntensity;
-        float reflectionLuminance = GetLuminance(reflectionColor);
-        float conservation = saturate(reflectionLuminance * reflectionMask);
-
-        float3 finalColor = originalColor * (1.0 - conservation) + (reflectionColor * reflectionMask);
-
+        float3 finalColor = lerp(originalColor, reflectionColor, F * reflectionMask);
         outColor = float4(finalColor, 1.0);
     }
 
