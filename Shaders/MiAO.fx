@@ -75,7 +75,7 @@ uniform float Radius <
     ui_category = "AO Settings";
     ui_min = 0.1; ui_max = 10.0; ui_step = 0.01;
     ui_tooltip = "World-space radius of the ambient occlusion effect.";
-> = 3.0;
+> = 6.0;
 
 uniform int QualityLevel <
     ui_type = "combo";
@@ -858,4 +858,5 @@ technique MiAO
         PixelShader = PS_Apply;
     }
   }
+
 }
