@@ -78,6 +78,13 @@ uniform bool EnableTemporalAA <
 
 #elif UI_DIFFICULTY == 1 // Advanced Mode
 
+uniform int View_Mode <
+        ui_category = "Debug";
+        ui_type = "combo";
+        ui_items = "Output\0Edge Mask Overlay\0Edge Mask\0Gradient Direction\0";
+        ui_label = "View Mode";
+    > = 0;
+
     // -- Main Settings --
     uniform float DirectionalStrength <
         ui_type = "drag";
@@ -463,3 +470,4 @@ technique DAA
         PixelShader = OutPut;
     }
 }
+
