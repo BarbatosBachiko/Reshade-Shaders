@@ -1,29 +1,13 @@
 /*----------------------------------------------|
 | :: Barbatos SSR (Screen-Space Reflections) :: |
 '-----------------------------------------------|
-| Version: 0.3.0                                |
+| Version: 0.3.1                                |
 | Author: Barbatos                              |
 | License: MIT                                  |
 '----------------------------------------------*/
 
 #include "ReShade.fxh"
 #include "ReShadeUI.fxh"
-
-//--------------------|
-// :: Preprocessor :: |
-//--------------------|
-
-#ifndef UI_DIFFICULTY
-#define UI_DIFFICULTY 0
-#endif
-
-#if __RESHADE__ < 40000
-static const int STEPS_PER_RAY_WALLS_DX9 = 20;
-static const int STEPS_PER_RAY_FLOOR_CEILING_QUALITY_DX9 = 64;
-static const int STEPS_PER_RAY_FLOOR_CEILING_PERF_DX9 = 32;
-#else
-    static const int STEPS_PER_RAY_WALLS = 32;
-#endif
 
 static const float2 LOD_MASK = float2(0.0, 1.0);
 static const float2 ZERO_LOD = float2(0.0, 0.0);
@@ -37,269 +21,127 @@ static const float2 ZERO_LOD = float2(0.0, 0.0);
 // :: UI :: |
 //----------|
 
-#if UI_DIFFICULTY == 0 // Simple Mode
-#define Metallic 0.2
-#define Roughness 0.25
-#define BumpIntensity 0.1
-#define SobelEdgeThreshold 0.03
-#define EnableGlossy true
-#define GlossySamples 10
-#define EnableTAA true
-#define FeedbackFactor 0.99
-#define OrientationThreshold 0.5
-#define GeoCorrectionIntensity -0.01
-#define VERTICAL_FOV 37.0
-#define THICKNESS_THRESHOLD 0.1
-// Denoiser settings
-#define c_phi 0.3
-#define n_phi 5.0
-#define p_phi 1.0
-// Smooth Normals settings
-#define SmoothMode 0
-#define Smooth_Threshold 0.5
-
-
-uniform float SPIntensity <
-        ui_type = "drag";
-        ui_min = 0.0; ui_max = 3.0; ui_step = 0.01;
-        ui_category = "Reflection Settings";
-        ui_label = "Intensity";
-    > = 1.1;
-
-uniform float FadeEnd <
-        ui_type = "drag";
-        ui_min = 0.0; ui_max = 5.0; ui_step = 0.010;
-        ui_category = "Reflection Settings";
-        ui_label = "Fade Distance";
-    > = 4.999;
-
-uniform int Quality <
-        ui_type = "combo";
-        ui_items = "Quality\0Performance\0";
-        ui_category = "Performance & Quality";
-        ui_label = "Quality Preset";
-        ui_tooltip = "Choose between higher quality ray tracing or a faster preset.";
-    > = 1;
-
-uniform float RenderScale <
-        ui_type = "drag";
-        ui_min = 0.1; ui_max = 0.99; ui_step = 0.01;
-        ui_category = "Performance & Quality";
-        ui_label = "Render Scale";
-        ui_tooltip = "Renders reflections at a lower resolution for performance.";
-    > = 0.8;
-
-uniform bool bEnableDenoise <
-        ui_category = "Denoiser";
-        ui_type = "checkbox";
-        ui_label = "Enable A-Trous Denoiser";
-    > = false;
+uniform float ReflectionIntensity <
+    ui_type = "drag";
+    ui_min = 0.0; ui_max = 3.0; ui_step = 0.01;
+    ui_category = "Basic Settings";
+    ui_label = "Reflection Strength";
+    ui_tooltip = "Overall intensity of reflections";
+> = 1.1;
 
 uniform int ReflectionMode <
-        ui_type = "combo";
-        ui_items = "Floors Only\0Walls Only\0Ceilings Only\0Floors & Ceilings\0All Surfaces\0";
-        ui_category = "Reflection Settings";
-        ui_label = "Reflection Mode";
-    > = 4;
+    ui_type = "combo";
+    ui_items = "Floors Only\0Walls Only\0Ceilings Only\0Floors & Ceilings\0All Surfaces\0";
+    ui_category = "Basic Settings";
+    ui_label = "Reflection Surfaces";
+    ui_tooltip = "Choose which surfaces show reflections";
+> = 4;
 
-uniform int ViewMode <
-        ui_type = "combo";
-        ui_items = "None\0Motion Vectors\0Final Reflection\0Normals\0Depth\0Raw Low-Res Reflection\0Denoised Low-Res Reflection\0Reflection Mask\0";
-        ui_category = "Debug";
-        ui_label = "Debug View Mode";
-    > = 0;
+uniform float FadeDistance <
+    ui_type = "drag";
+    ui_min = 0.0; ui_max = 5.0; ui_step = 0.01;
+    ui_category = "Basic Settings";
+    ui_label = "Fade Distance";
+    ui_tooltip = "How far away reflections start to fade out";
+> = 4.999;
 
-#elif UI_DIFFICULTY == 1 // Advanced Mode
+uniform float SurfaceSharpness <
+    ui_type = "drag";
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+    ui_category = "Surface Quality";
+    ui_label = "Surface Sharpness";
+    ui_tooltip = "How clear or blurry reflections appear (0=blurry, 1=sharp)";
+> = 0.75;
 
-    // -- Main Settings --
-    uniform float SPIntensity <
-        ui_type = "drag";
-        ui_min = 0.0; ui_max = 3.0; ui_step = 0.01;
-        ui_category = "Main Settings";
-        ui_label = "Reflection Intensity";
-    > = 1.1;
+uniform float MetallicLook <
+    ui_type = "drag";
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+    ui_category = "Surface Quality";
+    ui_label = "Metallic Look";
+    ui_tooltip = "Make surfaces look more metallic (0=non-metal, 1=metal)";
+> = 0.2;
 
-    uniform int ReflectionMode <
-        ui_type = "combo";
-        ui_items = "Floors Only\0Walls Only\0Ceilings Only\0Floors & Ceilings\0All Surfaces\0";
-        ui_category = "Main Settings";
-        ui_label = "Reflection Mode";
-        ui_tooltip = "Controls which surfaces will cast reflections.";
-    > = 4;
+uniform float SurfaceDetails <
+    ui_label = "Surface Details";
+    ui_type = "drag";
+    ui_category = "Surface Quality";
+    ui_min = 0.0; ui_max = 5.0; ui_step = 0.01;
+    ui_tooltip = "Adds small surface details to reflections";
+> = 0.1;
 
-    uniform float FadeEnd <
-        ui_type = "drag";
-        ui_min = 0.0; ui_max = 5.0; ui_step = 0.010;
-        ui_category = "Main Settings";
-        ui_label = "Fade Distance";
-        ui_tooltip = "Distance at which reflections begin to fade out.";
-    > = 4.999;
+uniform int QualityPreset <
+    ui_type = "combo";
+    ui_items = "Balanced\0Performance\0";
+    ui_category = "Performance";
+    ui_label = "RT Quality";
+    ui_tooltip = "Higher quality = better reflections but slower performance";
+> = 1;
 
-    uniform float THICKNESS_THRESHOLD <
-        ui_type = "drag";
-        ui_min = 0.001; ui_max = 0.2; ui_step = 0.001;
-        ui_category = "Main Settings";
-        ui_label = "Thickness Threshold";
-        ui_tooltip = "Determines how thick a surface is before a ray passes through it. Prevents self-reflection artifacts.";
-    > = 0.1;
+uniform float RenderResolution <
+    ui_type = "drag";
+    ui_min = 0.3; ui_max = 1.0; ui_step = 0.05;
+    ui_category = "Performance";
+    ui_label = "Render Resolution";
+    ui_tooltip = "Lower values = better performance but less details";
+> = 0.8;
 
-    // -- Surface & Material --
-    uniform float Metallic <
-        ui_type = "drag";
-        ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
-        ui_category = "Surface & Material";
-        ui_label = "Metallic";
-        ui_tooltip = "Controls how metallic a surface is. 0.0 for dielectrics (plastic, wood), 1.0 for metals.";
-    > = 0.2;
+uniform bool EnableSmoothing <
+    ui_category = "Advanced Options";
+    ui_label = "Reduce Reflection Noise (TAA)";
+    ui_tooltip = "Reduces flickering and noise in reflections using temporal anti-aliasing";
+> = true;
 
-    uniform float Roughness <
-        ui_type = "drag";
-        ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
-        ui_category = "Surface & Material";
-        ui_label = "Roughness";
-        ui_tooltip = "Controls the surface roughness. 0.0 is a perfect mirror, 1.0 is very rough (diffuse).";
-    > = 0.25;
+uniform int SmartSurfaceMode <
+    ui_type = "combo";
+    ui_items = "Off\0Performance\0Balanced\0Quality\0";
+    ui_category = "Advanced Options";
+    ui_label = "Smart Surface Detection";
+    ui_tooltip = "Quality of the normal smoothing filter.";
+> = 1;
 
-    uniform float BumpIntensity <
-        ui_label = "Bump Mapping Intensity";
-        ui_type = "drag";
-        ui_category = "Surface & Material";
-        ui_min = 0.0; ui_max = 5.0; ui_step = 0.01;
-    > = 0.1;
+uniform float THICKNESS_THRESHOLD <
+    ui_type = "drag";
+    ui_min = 0.001; ui_max = 0.5; ui_step = 0.001;
+    ui_category = "Advanced Options";
+    ui_label = "Reflection Thickness Threshold";
+    ui_tooltip = "Controls how 'thick' surfaces are before a ray passes through them.";
+> = 0.009;
 
-    uniform float SobelEdgeThreshold <
-        ui_label = "Sobel Edge Threshold";
-        ui_tooltip = "Sets a minimum edge strength for bump mapping to occur. Helps reduce noise on flat surfaces.";
-        ui_type = "drag";
-        ui_category = "Surface & Material";
-        ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
-    > = 0.03;
+uniform int DebugView <
+    ui_type = "combo";
+    ui_items = "Off\0Reflections Only\0Surface Normals\0Depth View\0Motion\0";
+    ui_category = "Debug";
+    ui_label = "Debug View";
+    ui_tooltip = "Special views";
+> = 0;
 
-    uniform int SmoothMode <
-        ui_label = "Smooth Normals Mode";
-        ui_type = "combo";
-        ui_items = "Off\0Fast (13x13)\0Medium (16x16)\0High Quality (31x31)\0";
-        ui_category = "Surface & Material";
-    > = 0;
+#define SPIntensity ReflectionIntensity
+#define FadeEnd FadeDistance
+#define Roughness (1.0 - SurfaceSharpness)
+#define Metallic MetallicLook
+#define BumpIntensity SurfaceDetails
+#define EnableTAA EnableSmoothing
+#define Quality (QualityPreset)
+#define RenderScale RenderResolution
+#define ViewMode (DebugView == 0 ? 0 : (DebugView == 1 ? 1 : (DebugView == 2 ? 2 : (DebugView == 3 ? 3 : 5))))
 
-    uniform float Smooth_Threshold <
-        ui_label = "Smooth Normals Threshold";
-        ui_type = "drag";
-        ui_min = 0.0; ui_max = 1.0;
-        ui_category = "Surface & Material";
-    > = 0.5;
+static const float SobelEdgeThreshold = 0.03;
+static const float Smooth_Threshold = 0.5;
+static const int GlossySamples = 10;
+static const float FeedbackFactor = 0.99;
+static const float OrientationThreshold = 0.5;
+static const float GeoCorrectionIntensity = -0.01;
+static const float VERTICAL_FOV = 37.0;
+static const bool EnableGlossy = true;
+#define SmoothMode (SmartSurfaceMode) 
 
-    uniform int Quality <
-        ui_type = "combo";
-        ui_items = "Quality\0Performance\0";
-        ui_category = "Performance & Quality";
-        ui_label = "Quality Preset";
-        ui_tooltip = "Choose between higher quality ray tracing or a faster preset.";
-    > = 1;
-
-    uniform float RenderScale <
-        ui_type = "drag";
-        ui_min = 0.1; ui_max = 0.99; ui_step = 0.01;
-        ui_category = "Performance & Quality";
-        ui_label = "Render Scale";
-        ui_tooltip = "Renders reflections at a lower resolution for performance";
-    > = 0.8;
-
-    // -- Glossy Reflections --
-    uniform bool EnableGlossy <
-        ui_category = "Glossy Reflections";
-        ui_label = "Enable Glossy Reflections";
-        ui_tooltip = "Simulates reflections on non-perfectly smooth surfaces, creating a blurry/glossy effect.";
-    > = true;
-
-    uniform int GlossySamples <
-        ui_type = "slider";
-        ui_min = 1; ui_max = 20;
-        ui_category = "Glossy Reflections";
-        ui_label = "Glossy Samples";
-        ui_tooltip = "Number of samples for the blur effect. Higher values are better quality but slower.";
-    > = 10;
-    
-    // -- Denoiser --
-    uniform bool bEnableDenoise <
-        ui_category = "Denoiser";
-        ui_type = "checkbox";
-        ui_label = "Enable A-Trous Denoiser";
-    > = false;
-
-    uniform float c_phi <
-        ui_category = "Denoiser";
-        ui_type = "drag";
-        ui_min = 0.01; ui_max = 5.0; ui_step = 0.01;
-        ui_label = "Color Sigma";
-        ui_tooltip = "Controls the influence of color similarity in the denoiser. Lower values consider only very similar colors.";
-    > = 0.3;
-
-    uniform float n_phi <
-        ui_category = "Denoiser";
-        ui_type = "drag";
-        ui_min = 0.01; ui_max = 5.0; ui_step = 0.01;
-        ui_label = "Normals Sigma";
-        ui_tooltip = "Controls the influence of normal similarity. Lower values restrict filtering to surfaces with similar orientation.";
-    > = 5.0;
-
-    uniform float p_phi <
-        ui_category = "Denoiser";
-        ui_type = "drag";
-        ui_min = 0.01; ui_max = 10.0; ui_step = 0.01;
-        ui_label = "Position (Depth) Sigma";
-        ui_tooltip = "Controls the influence of world-space position similarity. Lower values restrict filtering to nearby pixels.";
-    > = 1.0;
-
-    // -- Temporal Filtering --
-    uniform bool EnableTAA <
-        ui_category = "Temporal Filtering";
-        ui_label = "Enable Temporal Reprojection";
-        ui_tooltip = "Blends the current frame's reflection with previous frames to reduce noise and flickering using temporal reprojection.";
-    > = true;
-
-    uniform float FeedbackFactor <
-        ui_type = "drag";
-        ui_min = 0.0; ui_max = 0.99; ui_step = 0.01;
-        ui_category = "Temporal Filtering";
-        ui_label = "Temporal Feedback";
-        ui_tooltip = "Controls how much of the previous frame is blended in. Higher values are smoother but can cause more ghosting.";
-    > = 0.99;
-
-    // -- Advanced --
-    uniform float OrientationThreshold <
-        ui_type = "drag";
-        ui_min = 0.01; ui_max = 1.0; ui_step = 0.01;
-        ui_category = "Advanced";
-        ui_label = "Orientation Threshold";
-        ui_tooltip = "Controls sensitivity for detecting floors/walls/ceilings based on their normal vector. Lower is stricter.";
-    > = 0.50;
-
-    uniform float GeoCorrectionIntensity <
-        ui_type = "drag";
-        ui_min = -0.1; ui_max = 0.01;
-        ui_step = 0.01;
-        ui_category = "Advanced";
-        ui_label = "Geometry Correction Intensity";
-        ui_tooltip = "Subtly adjusts surface normals based on color data to correct minor geometry inaccuracies.";
-    > = -0.01;
-
-    uniform float VERTICAL_FOV <
-        ui_type = "drag";
-        ui_min = 15.0; ui_max = 120.0;
-        ui_step = 0.1;
-        ui_category = "Advanced";
-        ui_label = "Vertical FOV";
-    > = 37.0;
-
-    // -- Debug --
-    uniform int ViewMode <
-        ui_type = "combo";
-        ui_items = "None\0Motion Vectors\0Final Reflection\0Normals\0Depth\0Raw Low-Res Reflection\0Denoised Low-Res Reflection\0Reflection Mask\0";
-        ui_category = "Debug";
-        ui_label = "Debug View Mode";
-    > = 0;
-
+#if __RENDERER__== 0x9000
+static const int STEPS_PER_RAY_WALLS_DX9 = 20;
+static const int STEPS_PER_RAY_FLOOR_CEILING_QUALITY_DX9 = 64;
+static const int STEPS_PER_RAY_FLOOR_CEILING_BALANCED_DX9 = 48;
+static const int STEPS_PER_RAY_FLOOR_CEILING_PERF_DX9 = 32;
+#else
+static const int STEPS_PER_RAY_WALLS = 32;
 #endif
 
 uniform int FRAME_COUNT < source = "framecount"; >;
@@ -357,7 +199,7 @@ float2 SampleMotionVectors(float2 texcoord)
     }
 #endif
 
-namespace Barbatos_SSR201
+namespace Barbatos_SSR202
 {
     texture TNormal
     {
@@ -425,28 +267,6 @@ namespace Barbatos_SSR201
         Texture = History;
     };
 
-    texture DenoiseTex0
-    {
-        Width = BUFFER_WIDTH;
-        Height = BUFFER_HEIGHT;
-        Format = RGBA16;
-    };
-    sampler sDenoiseTex0
-    {
-        Texture = DenoiseTex0;
-    };
-
-    texture DenoiseTex1
-    {
-        Width = BUFFER_WIDTH;
-        Height = BUFFER_HEIGHT;
-        Format = RGBA16;
-    };
-    sampler sDenoiseTex1
-    {
-        Texture = DenoiseTex1;
-    };
-
     texture Upscaled
     {
         Width = BUFFER_WIDTH;
@@ -458,9 +278,9 @@ namespace Barbatos_SSR201
         Texture = Upscaled;
     };
 
-//---------------|
-// :: Structs :: |
-//---------------|
+//-------------|
+// :: Utility::|
+//-------------|
 
     struct Ray
     {
@@ -474,11 +294,7 @@ namespace Barbatos_SSR201
         float3 viewPos;
         float2 uv;
     };
-
-//-------------|
-// :: Utility::|
-//-------------|
-
+    
     static const float DIELECTRIC_REFLECTANCE = 0.04;
 
     float3 F_Schlick(float VdotH, float3 f0)
@@ -628,11 +444,11 @@ namespace Barbatos_SSR201
             min_step_size = 0.001;
             max_step_size = 1.0;
         }
-        else // Quality
+        else if (Quality == 0) // Balanced
         {
             refinement_steps = 5;
-            step_scale = 0.1;
-            min_step_size = 0.0001;
+            step_scale = 0.4;
+            min_step_size = 0.0005;
             max_step_size = 1.0;
         }
 
@@ -803,63 +619,6 @@ namespace Barbatos_SSR201
         return saturate((high_threshold - vel_mag) / (high_threshold - low_threshold));
     }
 
-//--------------------------|
-// :: A-Trous Denoising  :: |
-//--------------------------|
-    float4 PS_DenoisePass(float4 vpos : SV_Position, float2 uv : TEXCOORD, int level, sampler input_sampler)
-    {
-        if (any(uv > RenderScale))
-            return GetLod(input_sampler, uv);
-
-        float4 center_color = GetLod(input_sampler, uv);
-        float2 full_res_uv = uv / RenderScale;
-        float center_depth = GetDepth(full_res_uv);
-        
-        if (center_depth >= 0.999)
-            return center_color;
-
-        float3 center_normal = SampleNormal(full_res_uv);
-        float center_normal_len_sq = dot(center_normal, center_normal);
-        float3 center_pos = UVToViewPos(full_res_uv, center_depth);
-
-        float4 sum = 0.0;
-        float cum_w = 0.0;
-        
-        const float2 step_size = ReShade::PixelSize * exp2(level);
-        static const float2 atrous_offsets[9] = { float2(-1, -1), float2(0, -1), float2(1, -1), float2(-1, 0), float2(0, 0), float2(1, 0), float2(-1, 1), float2(0, 1), float2(1, 1) };
-
-        [loop]
-        for (int i = 0; i < 9; i++)
-        {
-            const float2 neighbor_uv_low = uv + atrous_offsets[i] * step_size;
-            if (any(neighbor_uv_low < 0.0) || any(neighbor_uv_low > RenderScale))
-                continue;
-
-            const float4 sample_color = GetLod(input_sampler, neighbor_uv_low);
-            const float2 neighbor_uv_full = neighbor_uv_low / RenderScale;
-            const float sample_depth = GetDepth(neighbor_uv_full);
-
-            if (sample_depth >= 0.999)
-                continue;
-
-            const float3 sample_normal = SampleNormal(neighbor_uv_full);
-            const float3 sample_pos = UVToViewPos(neighbor_uv_full, sample_depth);
-            
-            float diff_c = distance(center_color.rgb, sample_color.rgb);
-            float w_c = exp(-(diff_c * diff_c) / c_phi);
-            const float sample_normal_len_sq = dot(sample_normal, sample_normal);
-            float diff_n = dot(center_normal, sample_normal) * rsqrt(max(1e-6, center_normal_len_sq * sample_normal_len_sq));
-            float w_n = exp(n_phi * (saturate(diff_n) - 1.0));
-            float diff_p = distance(center_pos, sample_pos);
-            float w_p = exp(-(diff_p * diff_p) / p_phi);
-
-            const float weight = w_c * w_n * w_p;
-            sum += sample_color * weight;
-            cum_w += weight;
-        }
-        return cum_w > 1e-6 ? (sum / cum_w) : center_color;
-    }
-
 //--------------------|
 // :: Pixel Shaders ::|
 //--------------------|
@@ -935,22 +694,15 @@ namespace Barbatos_SSR201
         }
         
         s1.rgba = s1.rgba / sc;
-        
-        float3 finalNormal = s1.rgb; 
+        float3 finalNormal = s1.rgb;
         finalNormal = ApplyBumpMapping(uv, finalNormal);
-        finalNormal = GeometryCorrection(uv, finalNormal); 
+        finalNormal = GeometryCorrection(uv, finalNormal);
         
         outNormal = float4(finalNormal * 0.5 + 0.5, s1.a);
     }
     
     void PS_TraceReflections(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outReflection : SV_Target)
     {
-        if (any(uv > RenderScale))
-        {
-            outReflection = 0;
-            return;
-        }
-
         float2 scaled_uv = uv / RenderScale;
         float depth = GetDepth(scaled_uv);
         if (depth >= 1.0)
@@ -1003,12 +755,16 @@ namespace Barbatos_SSR201
         r.origin += r.direction * 0.0001;
         HitResult hit;
 #if __RENDERER__ == 0xd0900
-        if (isWall) hit = TraceRay(r, STEPS_PER_RAY_WALLS_DX9); else hit = TraceRay(r, (Quality == 1) ? STEPS_PER_RAY_FLOOR_CEILING_PERF_DX9 : STEPS_PER_RAY_FLOOR_CEILING_QUALITY_DX9);
+        // MODIFIED: Use 3-tier quality for DX9
+        if (isWall) 
+            hit = TraceRay(r, STEPS_PER_RAY_WALLS_DX9); 
+        else 
+            hit = TraceRay(r, (Quality == 2) ? STEPS_PER_RAY_FLOOR_CEILING_PERF_DX9 : ((Quality == 1) ? STEPS_PER_RAY_FLOOR_CEILING_BALANCED_DX9 : STEPS_PER_RAY_FLOOR_CEILING_QUALITY_DX9));
 #else
         if (isWall)
             hit = TraceRay(r, STEPS_PER_RAY_WALLS);
         else
-            hit = TraceRay(r, (Quality == 1) ? 128 : 256);
+            hit = TraceRay(r, (Quality == 2) ? 128 : ((Quality == 1) ? 192 : 256));
 #endif
         float3 reflectionColor = 0;
         float reflectionAlpha = 0.0;
@@ -1037,11 +793,6 @@ namespace Barbatos_SSR201
     
     void PS_Accumulate(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outBlended : SV_Target)
     {
-        if (any(uv > RenderScale))
-        {
-            outBlended = 0;
-            return;
-        }
         float4 current_reflection = GetLod(sReflection, float4(uv, 0, 0));
         if (!EnableTAA)
         {
@@ -1064,7 +815,7 @@ namespace Barbatos_SSR201
         float3 color_min, color_max;
         ComputeNeighborhoodMinMax(sReflection, uv, color_min, color_max);
         float3 clipped_history_rgb = ClipToAABB(color_min, color_max, history_reflection.rgb);
-        float rejection_factor = saturate(length(history_reflection.rgb - clipped_history_rgb) * 9000.0);
+        float rejection_factor = saturate(length(history_reflection.rgb - clipped_history_rgb) * 900.0);
         float final_feedback = lerp(FeedbackFactor, 0.1, rejection_factor);
         float3 temporal_rgb = lerp(current_reflection.rgb, clipped_history_rgb, final_feedback);
         float temporal_a = lerp(current_reflection.a, history_reflection.a, final_feedback);
@@ -1072,7 +823,8 @@ namespace Barbatos_SSR201
         if (trust_factor < 1.0)
         {
             float3 blurred_color = current_reflection.rgb;
-            const int blur_samples = 5;[unroll]
+            const int blur_samples = 5;
+            [unroll]
             for (int i = 1; i < blur_samples; i++)
             {
                 float t = (float) i / (float) (blur_samples - 1);
@@ -1090,24 +842,7 @@ namespace Barbatos_SSR201
     {
         outHistory = GetLod(sTemp, float4(uv, 0, 0));
     }
-    float4 PS_DenoisePass0(float4 vpos : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
-    {
-        if (!bEnableDenoise || RenderScale >= 1.0)
-            return GetLod(sTemp, texcoord);
-        return PS_DenoisePass(vpos, texcoord, 0, sTemp);
-    }
-    float4 PS_DenoisePass1(float4 vpos : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
-    {
-        if (!bEnableDenoise || RenderScale >= 1.0)
-            return GetLod(sDenoiseTex0, texcoord);
-        return PS_DenoisePass(vpos, texcoord, 1, sDenoiseTex0);
-    }
-    float4 PS_DenoisePass2(float4 vpos : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
-    {
-        if (!bEnableDenoise || RenderScale >= 1.0)
-            return GetLod(sDenoiseTex1, texcoord);
-        return PS_DenoisePass(vpos, texcoord, 2, sDenoiseTex1);
-    }
+    
     void PS_Upscale(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outUpscaled : SV_Target)
     {
         if (RenderScale >= 1.0)
@@ -1124,31 +859,25 @@ namespace Barbatos_SSR201
         {
             switch (ViewMode)
             {
-                case 1:{
-                        float2 m = GetMotionVectors(uv);
-                        float v = length(m) * 100.0;
-                        float a = atan2(m.y, m.x);
-                        outColor = float4(HSVToRGB(float3((a / (2.0 * PI)) + 0.5, 1.0, saturate(v))), 1.0);
-                        return;
-                    }
-                case 2:
+                case 1:
                     outColor = float4(GetLod(sUpscaled, uv).rgb, 1.0);
                     return;
-                case 3:
+                case 2:
                     outColor = float4(SampleNormal(uv) * 0.5 + 0.5, 1.0);
                     return;
-                case 4:
+                case 3:
                     outColor = GetDepth(uv).xxxx;
                     return;
-                case 5:
-                    outColor = float4(GetLod(sReflection, uv).rgb, 1.0);
-                    return;
-                case 6:
-                    outColor = float4(GetLod(sTemp, uv).rgb, 1.0);
-                    return;
-                case 7:
-                    outColor = GetLod(sUpscaled, uv).aaaa;
-                    return;
+                case 5:{    
+                        float2 m = GetMotionVectors(uv);
+                        float v_mag = length(m) * 100.0;
+                        float a = atan2(m.y, m.x);
+                        float3 hsv_color = HSVToRGB(float3((a / (2.0 * PI)) + 0.5, 1.0, 1.0));
+                        float3 grey_bg = float3(0.5, 0.5, 0.5);
+                        float3 final_color = lerp(grey_bg, hsv_color, saturate(v_mag));
+                        outColor = float4(final_color, 1.0);
+                        return;
+                    }
             }
         }
 
@@ -1170,10 +899,6 @@ namespace Barbatos_SSR201
         float3 finalColor = lerp(originalColor, reflectionColor * SPIntensity, F * reflectionMask);
         outColor = float4(finalColor, 1.0);
     }
-
-//-----------------|
-// :: Technique :: |
-//-----------------|
 
     technique Barbatos_SSR
     {
@@ -1219,24 +944,6 @@ namespace Barbatos_SSR201
             VertexShader = PostProcessVS;
             PixelShader = PS_UpdateHistory;
             RenderTarget = History;
-        }
-        pass DenoisePass0
-        {
-            VertexShader = PostProcessVS;
-            PixelShader = PS_DenoisePass0;
-            RenderTarget = DenoiseTex0;
-        }
-        pass DenoisePass1
-        {
-            VertexShader = PostProcessVS;
-            PixelShader = PS_DenoisePass1;
-            RenderTarget = DenoiseTex1;
-        }
-        pass DenoisePass2
-        {
-            VertexShader = PostProcessVS;
-            PixelShader = PS_DenoisePass2;
-            RenderTarget = Temp;
         }
         pass Upscale
         {
