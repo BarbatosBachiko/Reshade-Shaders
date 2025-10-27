@@ -1,7 +1,7 @@
 /*-------------------------------------------------|
 | ::                SoftMotion                   ::|
 '--------------------------------------------------|
-| Version: 1.0                                     |
+| Version: 1.1                                     |
 | Author: Barbatos                                 |
 | License: MIT                                     |
 | Description: >EMULATES< frame interpolation or   |
@@ -30,35 +30,47 @@ uniform int Mode <
 
 uniform float BlendAmount <
     __UNIFORM_DRAG_FLOAT1
-    ui_min = 0.0; ui_max = 0.99;ui_step = 0.01;
+    ui_min = 0.0; ui_max = 0.99; ui_step = 0.01;
     ui_label = "Blend Amount";
     ui_tooltip = "Controls the mix between the current frame and the alternate (previous in interpolation, projected in extrapolation).\n0.0 = No blending (current frame only)\n0.5 = 50/50 mix\n0.99 = Alternate frame dominant";
 > = 0.5;
 
 uniform float MotionScale <
     __UNIFORM_DRAG_FLOAT1
-    ui_min = 0.0; ui_max = 2.0;ui_step = 0.01;
+    ui_min = 0.0; ui_max = 2.0; ui_step = 0.01;
     ui_label = "Motion Vector Scale";
     ui_tooltip = "Adjusts the influence of motion vectors. Can help fine-tune the effect if motion seems exaggerated or too subtle.";
 > = 1.0;
 
+uniform bool UseLumaFlowConfidence <
+    ui_label = "Use LumaFlow Confidence";
+    ui_tooltip = "Need LumaFlow";
+> = true;
+
+uniform float ConfidenceScale <
+    __UNIFORM_DRAG_FLOAT1
+    ui_min = 0.0; ui_max = 2.0; ui_step = 0.01;
+    ui_label = "Confidence Scale";
+    ui_tooltip = "Scales the LumaFlow confidence value. Values >1.0 make it more aggressive, <1.0 more conservative.";
+> = 1.0;
+
 uniform float OcclusionSensitivity <
     __UNIFORM_DRAG_FLOAT1
-    ui_min = 0.0; ui_max = 10.0;ui_step = 0.1;
+    ui_min = 0.0; ui_max = 10.0; ui_step = 0.1;
     ui_label = "Occlusion Sensitivity";
-    ui_tooltip = "Reduces ghosting artifacts. Higher values make the blending more sensitive to color differences between frames, reducing the blend amount in areas of high discrepancy (like occlusion boundaries).";
+    ui_tooltip = "Reduces ghosting artifacts. Higher values make the blending more sensitive to color differences between frames.\nOnly used when LumaFlow Confidence is disabled.";
 > = 0.4;
 
 uniform int DebugView <
     __UNIFORM_COMBO_INT1
-    ui_items = "None\0Motion Vectors\0Occlusion Mask\0";
+    ui_items = "None\0Motion Vectors\0Occlusion/Confidence Mask\0";
     ui_label = "Debug View";
     ui_tooltip = "Visualize internal data for debugging.";
 > = 0;
 
-//--------------------|
-// :: Textures      ::|
-//--------------------|
+//----------------|
+// :: Textures  ::|
+//----------------|
 
 #ifndef USE_MARTY_LAUNCHPAD_MOTION
 #define USE_MARTY_LAUNCHPAD_MOTION 0
@@ -75,24 +87,14 @@ uniform int DebugView <
     }
 #elif USE_VORT_MOTION
     texture2D MotVectTexVort { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
-    sampler2D sMotVectTexVort { Texture = MotVectTexVort; MagFilter=POINT;MinFilter=POINT;MipFilter=POINT;AddressU=Clamp;AddressV=Clamp; };
+    sampler2D sMotVectTexVort { Texture = MotVectTexVort; MagFilter=POINT; MinFilter=POINT; MipFilter=POINT; AddressU=Clamp; AddressV=Clamp; };
 #else
-texture texMotionVectors
-{
-    Width = BUFFER_WIDTH;
-    Height = BUFFER_HEIGHT;
-    Format = RG16F;
-};
-sampler sTexMotionVectorsSampler
-{
-    Texture = texMotionVectors;
-    MagFilter = POINT;
-    MinFilter = POINT;
-    MipFilter = POINT;
-    AddressU = Clamp;
-    AddressV = Clamp;
-};
+    texture texMotionVectors { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
+    sampler sTexMotionVectorsSampler { Texture = texMotionVectors; MagFilter = POINT; MinFilter = POINT; MipFilter = POINT; AddressU = Clamp; AddressV = Clamp; };
 #endif
+
+texture tMotionConfidence { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = R16F; };
+sampler sMotionConfidence { Texture = tMotionConfidence; MagFilter = POINT; MinFilter = POINT; AddressU = CLAMP; AddressV = CLAMP; AddressW = CLAMP; };
 
 float2 GetMotion(float2 texcoord)
 {
@@ -103,6 +105,11 @@ float2 GetMotion(float2 texcoord)
 #else
     return GetLod(sTexMotionVectorsSampler, texcoord).rg;
 #endif
+}
+
+float GetConfidence(float2 texcoord)
+{
+    return GetLod(sMotionConfidence, texcoord).r;
 }
 
 texture HistoryTex
@@ -152,8 +159,19 @@ void PS_FrameBlend(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 ou
         altColor = GetLod(ReShade::BackBuffer, offsetUV).rgb;
     }
 
-    float colorDiff = distance(currentColor, altColor);
-    float confidence = 1.0 - saturate(colorDiff * OcclusionSensitivity);
+    float confidence;
+    
+    if (UseLumaFlowConfidence)
+    {
+        confidence = GetConfidence(uv) * ConfidenceScale;
+        confidence = saturate(confidence);
+    }
+    else
+    {
+        float colorDiff = distance(currentColor, altColor);
+        confidence = 1.0 - saturate(colorDiff * OcclusionSensitivity);
+    }
+
     float effectiveBlend = BlendAmount * confidence;
 
     // Debug Views
@@ -168,11 +186,11 @@ void PS_FrameBlend(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 ou
         outColor = float4(final_color, 1.0);
         return;
     }
-    else if (DebugView == 2) // Occlusion Mask
+    else if (DebugView == 2) // Occlusion/Confidence Mask
     {
         float3 colorA = float3(0.5, 0.0, 0.0);
-        float3 colorB = float3(1.0, 1.0, 0.0);
-        float3 colorC = float3(0.0, 0.0, 0.1);
+        float3 colorB = float3(1.0, 1.0, 0.0); 
+        float3 colorC = float3(0.0, 0.0, 0.1); 
 
         float3 finalColor;
         if (confidence < 0.5)
