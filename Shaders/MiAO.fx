@@ -20,7 +20,7 @@ THE SOFTWARE.
 /*-------------------------------------------------|
 | ::                   MiAO                     :: |
 '--------------------------------------------------|
-| Version: 1.1                                     |
+| Version: 1.2                                     |
 | Author: Barbatos                                 |
 | License: MIT                                     |
 | Description: Simple ambient occlusion with repur-|
@@ -34,8 +34,12 @@ THE SOFTWARE.
 // :: Preprocessor :: |
 //--------------------|
 
-#ifndef UI_DIFFICULTY
-#define UI_DIFFICULTY 0
+#ifndef USE_MARTY_LAUNCHPAD_MOTION
+#define USE_MARTY_LAUNCHPAD_MOTION 0
+#endif
+
+#ifndef USE_VORT_MOTION
+#define USE_VORT_MOTION 0
 #endif
 
 static const float2 LOD_MASK = float2(0.0, 1.0);
@@ -53,84 +57,26 @@ static const float2 R2 = float2(0.75487766624669276005, 0.5698402909980532659114
 // :: UI :: |
 //----------|
 
-#if UI_DIFFICULTY == 0 // Simple Mode
-#define EffectShadowClamp 0.98
-#define EffectHorizonAngleThreshold 0.04
-#define FadeOutFrom 50.0
-#define FadeOutTo 300.0
-#define FOV 75.0
-#define RadiusDistanceScale 0.25
-#define ShadowPow 1.5
-
-uniform float Intensity <
-    ui_type = "drag";
-    ui_label = "Intensity";
-    ui_category = "AO Settings";
-    ui_min = 0.0; ui_max = 4.0; ui_step = 0.01;
-    ui_tooltip = "Global strength of the ambient occlusion effect.";
-> = 1.0;
-
-uniform float Radius <
-    ui_type = "drag";
-    ui_label = "Radius";
-    ui_category = "AO Settings";
-    ui_min = 0.1; ui_max = 10.0; ui_step = 0.01;
-    ui_tooltip = "World-space radius of the ambient occlusion effect.";
-> = 6.0;
-
-uniform int QualityLevel <
-    ui_type = "combo";
-    ui_label = "Quality";
-    ui_category = "Performance & Quality";
-    ui_items = "Lowest (3 taps)\0Low (5 taps)\0Medium (12 taps)\0High (20 taps)\0Very high (32 taps)\0";
-    ui_tooltip = "Controls the number of samples used for AO calculation.";
-> = 2;
-
-uniform float RenderScale <
-    ui_type = "drag";
-    ui_category = "Performance & Quality";
-    ui_label = "Render Scale";
-    ui_min = 0.5; ui_max = 1.0; ui_step = 0.01;
-    ui_tooltip = "Renders AO at a lower resolution for better performance, then upscales it.";
-> = 0.8;
-
-uniform int DebugView <
-    ui_type = "combo";
-    ui_label = "Debug View";
-    ui_category = "Debug";
-    ui_items = "None\0Raw SSAO\0View-space Normals\0";
-> = 0;
-
-#elif UI_DIFFICULTY == 1 // Advanced Mode
-
-// -- Main Settings --
-uniform float Intensity <
-    ui_type = "drag";
-    ui_category = "Main Settings";
-    ui_label = "Intensity";
-    ui_min = 0.0; ui_max = 4.0; ui_step = 0.01;
-    ui_tooltip = "Global strength of the ambient occlusion effect.";
-> = 1.0;
-
+// -- Basic Settings --
 uniform float ShadowPow <
     ui_type = "drag";
-    ui_category = "Main Settings";
-    ui_label = "Contrast";
+    ui_category = "Basic Settings";
+    ui_label = "Intensity";
     ui_min = 0.1; ui_max = 8.0; ui_step = 0.01;
-    ui_tooltip = "Controls the contrast of the occlusion. Higher values create a darker, more defined effect.";
+    ui_tooltip = "Global strength of the ambient occlusion effect.";
 > = 1.5;
 
 uniform float Radius <
     ui_type = "drag";
-    ui_category = "Main Settings";
+    ui_category = "Basic Settings";
     ui_label = "Radius";
     ui_min = 0.1; ui_max = 10.0; ui_step = 0.01;
     ui_tooltip = "World-space radius of the ambient occlusion effect.";
-> = 3.0;
+> = 5.0;
 
 uniform float EffectShadowClamp <
     ui_type = "drag";
-    ui_category = "Main Settings";
+    ui_category = "Basic Settings";
     ui_label = "Clamp";
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
     ui_tooltip = "Limits the maximum amount of occlusion to prevent excessive darkening.";
@@ -141,7 +87,7 @@ uniform int QualityLevel <
     ui_type = "combo";
     ui_label = "Quality";
     ui_category = "Performance & Quality";
-    ui_items = "Lowest (3 taps)\0Low (5 taps)\0Medium (12 taps)\0High (20 taps)\0Very high (20 taps)\0";
+    ui_items = "Lowest (3 taps)\0Low (5 taps)\0Medium (12 taps)\0High (20 taps)\0Very high (31 taps)\0";
     ui_tooltip = "Controls the number of samples used for AO calculation.";
 > = 2;
 
@@ -153,26 +99,31 @@ uniform float RenderScale <
     ui_tooltip = "Renders AO at a lower resolution for better performance, then upscales it.";
 > = 0.8;
 
-// -- Advanced Settings --
+uniform float TemporalBlend <
+    __UNIFORM_DRAG_FLOAT1
+    ui_min = 0.0; ui_max = 0.99;ui_step = 0.01;
+    ui_category = "Performance & Quality";
+    ui_label = "Temporal Feedback";
+    ui_tooltip = "Controls how much of the previous frame is blended in. Higher values are smoother but can cause more ghosting.";
+> = 0.8;
+
+// -- Advanced Options --
+uniform bool EnableDistantRadius <
+    ui_category = "Advanced Options";
+    ui_label = "Enable Distant Radius";
+> = false;
+
 uniform float EffectHorizonAngleThreshold <
     ui_type = "drag";
-    ui_category = "Advanced Settings";
+    ui_category = "Advanced Options";
     ui_label = "Horizon Angle Threshold";
     ui_min = 0.0; ui_max = 0.5; ui_step = 0.001;
     ui_tooltip = "Limits errors on slopes and caused by insufficient geometry tessellation.";
 > = 0.04;
 
-uniform float RadiusDistanceScale <
-    ui_type = "drag";
-    ui_category = "Advanced Settings";
-    ui_label = "Distant Radius Scale";
-    ui_min = 0.0; ui_max = 2.0; ui_step = 0.01;
-    ui_tooltip = "Increases the AO radius for distant objects.";
-> = 0.25;
-
 uniform float FadeOutFrom <
     ui_type = "drag";
-    ui_category = "Advanced Settings";
+    ui_category = "Advanced Options";
     ui_label = "Fade Out Start";
     ui_min = 1.0; ui_max = 500.0; ui_step = 1.0;
     ui_tooltip = "The distance at which the AO effect begins to fade out.";
@@ -180,21 +131,20 @@ uniform float FadeOutFrom <
 
 uniform float FadeOutTo <
     ui_type = "drag";
-    ui_category = "Advanced Settings";
+    ui_category = "Advanced Options";
     ui_label = "Fade Out End";
-    ui_min = 1.0; ui_max = 500.0; ui_step = 1.0;
+    ui_min = 1.0; ui_max = 550.0; ui_step = 1.0;
     ui_tooltip = "The distance at which the AO effect has completely faded out.";
 > = 300.0;
 
 uniform float FOV <
     ui_type = "slider";
-    ui_category = "Advanced Settings";
+    ui_category = "Advanced Options";
     ui_label = "Vertical FOV";
     ui_min = 30.0; ui_max = 120.0;
     ui_tooltip = "Set to your game's vertical Field of View for accurate projection calculations.";
 > = 75.0;
 
-// -- Debug --
 uniform int DebugView <
     ui_type = "combo";
     ui_category = "Debug";
@@ -202,17 +152,54 @@ uniform int DebugView <
     ui_items = "None\0Raw SSAO\0View-space Normals\0";
 > = 0;
 
-#endif
-
-static const bool EnableTemporalFilter = true;
-static const float TemporalFeedback = 0.9;
-static const float VarianceClippingStrength = 0.9;
-
 uniform int FRAME_COUNT < source = "framecount"; >;
-
+ static const float OcclusionSensitivity = 4.0;
 //----------------|
 // :: Textures :: |
 //----------------|
+
+#if USE_MARTY_LAUNCHPAD_MOTION
+    namespace Deferred {
+        texture MotionVectorsTex { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
+        sampler sMotionVectorsTex { Texture = MotionVectorsTex; };
+    }
+#elif USE_VORT_MOTION
+    texture2D MotVectTexVort { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
+    sampler2D sMotVectTexVort { Texture = MotVectTexVort; MagFilter=POINT; MinFilter=POINT; MipFilter=POINT; AddressU=Clamp; AddressV=Clamp; };
+#else
+texture texMotionVectors
+{
+    Width = BUFFER_WIDTH;
+    Height = BUFFER_HEIGHT;
+    Format = RG16F;
+};
+sampler sTexMotionVectorsSampler
+{
+    Texture = texMotionVectors;
+    MagFilter = POINT;
+    MinFilter = POINT;
+    MipFilter = POINT;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+#endif
+
+texture tMotionConfidence
+{
+    Width = BUFFER_WIDTH;
+    Height = BUFFER_HEIGHT;
+    Format = R16F;
+};
+sampler sMotionConfidence
+{
+    Texture = tMotionConfidence;
+    MagFilter = POINT;
+    MinFilter = POINT;
+    AddressU = CLAMP;
+    AddressV = CLAMP;
+    AddressW = CLAMP;
+};
+
 namespace MiAO
 {
     texture DEPTH
@@ -263,7 +250,7 @@ namespace MiAO
     {
         Width = BUFFER_WIDTH;
         Height = BUFFER_HEIGHT;
-        Format = RG16F;
+        Format = R16;
     };
     sampler sHISTORY_AO
     {
@@ -273,6 +260,22 @@ namespace MiAO
 //----------------|
 // :: Functions ::|
 //----------------|
+
+    float2 GetMotion(float2 texcoord)
+    {
+#if USE_MARTY_LAUNCHPAD_MOTION
+        return GetLod(Deferred::sMotionVectorsTex, texcoord).rg;
+#elif USE_VORT_MOTION
+        return GetLod(sMotVectTexVort, texcoord).rg;
+#else
+        return GetLod(sTexMotionVectorsSampler, texcoord).rg;
+#endif
+    }
+
+    float GetConfidence(float2 texcoord)
+    {
+        return GetLod(sMotionConfidence, texcoord).r;
+    }
 
     float hilbert(float2 p, int level)
     {
@@ -314,6 +317,7 @@ namespace MiAO
         float tanHalfFOV = tan(fov_rad * 0.5);
         return float2(tanHalfFOV, tanHalfFOV);
     }
+    
     float2 NDCToViewMul()
     {
         float2 tanHalfFOV = CameraTanHalfFOV();
@@ -486,7 +490,8 @@ namespace MiAO
         float3 pixCenterPos = DepthBufferUVToViewSpace(scaled_uv, pixZ);
         float3 pixelNormal = normalize(tex2D(sNORMALS, scaled_uv).rgb * 2.0 - 1.0);
 
-        float effectViewspaceRadius = Radius + (pixZ * RadiusDistanceScale);
+        float activeRadiusDistanceScale = EnableDistantRadius ? 1.0 : 0.0;
+        float effectViewspaceRadius = Radius + (pixZ * activeRadiusDistanceScale);
         float pixelRadius = effectViewspaceRadius / pixZ;
     
         uint2 random_coord = uint2(vpos.xy);
@@ -499,7 +504,7 @@ namespace MiAO
         float s, c;
         sincos(angle, s, c);
 
-        float2x2 rotScale = float2x2(c, s, -s, c) * pixelRadius * 50.0;
+        float2x2 rotScale = float2x2(c, s, -s, c) * pixelRadius * 100.0;
 
         float obscuranceSum = 0.0;
         float weightSum = 0.0001;
@@ -525,7 +530,6 @@ namespace MiAO
         float edgeFadeoutFactor = saturate((1.0 - edgesLRTB.x - edgesLRTB.y) * 0.35) +
                                   saturate((1.0 - edgesLRTB.z - edgesLRTB.w) * 0.35);
         fadeOut *= saturate(1.0 - edgeFadeoutFactor);
-        obscurance *= Intensity;
         obscurance = min(obscurance, EffectShadowClamp);
         obscurance *= fadeOut;
         float occlusion = 1.0 - obscurance;
@@ -533,7 +537,7 @@ namespace MiAO
 
         return occlusion;
     }
-
+    
     void PS_Upscale(float4 vpos : SV_Position, float2 uv : TEXCOORD, out float2 outUpscaled : SV_Target)
     {
         float current_ao;
@@ -545,49 +549,55 @@ namespace MiAO
         {
             current_ao = GetLod(sAO, uv * RenderScale).r;
         }
+
+        if (FRAME_COUNT < 2)
+        {
+            outUpscaled = float2(current_ao, current_ao * current_ao);
+            return;
+        }
+
+        float2 motion = GetMotion(uv);
+        float2 reprojected_uv = uv + motion;
+
+        bool reproj_out_of_bounds = any(reprojected_uv < 0.0) || any(reprojected_uv > 1.0);
+        bool large_motion = dot(motion, motion) > (1 * 1);
+
+        float2 history_moments = GetLod(sHISTORY_AO, saturate(reprojected_uv)).rg;
+        float hist_m1 = history_moments.r;
+        float hist_m2 = history_moments.g;
+
+        float depth_cur = GetDepth(uv);
+        float depth_prev = GetLod(sHISTORY_AO, saturate(reprojected_uv)).r;
+        bool depth_invalid = (depth_cur <= 0.0) || (depth_prev <= 0.0);
+
+        float depth_diff = abs(depth_cur - depth_prev);
+        bool depth_close = depth_diff <= 1;
+        bool valid_history = !reproj_out_of_bounds && !large_motion && !depth_invalid && depth_close;
     
-        if (!EnableTemporalFilter || FRAME_COUNT < 2)
+        float blend_factor = valid_history ? TemporalBlend: 0.0; //Temporal Blend
+
+        if (blend_factor > 0.0)
+        {
+            float confidence = GetConfidence(uv) * 1.0;
+            if (confidence <= 0.001)
+            {
+                float aoDiff = abs(current_ao - hist_m1);
+                confidence = 1.0 - saturate(aoDiff * OcclusionSensitivity);
+            }
+            blend_factor *= saturate(confidence);
+        }
+
+        if (blend_factor <= 0.0)
         {
             outUpscaled = float2(current_ao, current_ao * current_ao);
             return;
         }
     
-        // Variance Clipping
-        float2 pixel_size_low_res = BUFFER_RCP / RenderScale;
-        float moment1 = 0.0; // E[x]
-        float moment2 = 0.0; // E[x^2]
-    
-        [unroll]
-        for (int y = -1; y <= 1; ++y)
-        {
-            for (int x = -1; x <= 1; ++x)
-            {
-                float2 offset_uv = uv + float2(x, y) * pixel_size_low_res;
-                float neighbor_ao;
-            
-                if (RenderScale >= 1.0)
-                    neighbor_ao = GetLod(sAO, saturate(offset_uv)).r;
-                else
-                    neighbor_ao = GetLod(sAO, saturate(offset_uv) * RenderScale).r;
-            
-                moment1 += neighbor_ao;
-                moment2 += neighbor_ao * neighbor_ao;
-            }
-        }
-    
-        moment1 /= 9.0;
-        moment2 /= 9.0;
-    
-        float variance = max(0.0, moment2 - (moment1 * moment1));
-        float std_dev = sqrt(variance);
-        float2 range = moment1 + float2(-VarianceClippingStrength, VarianceClippingStrength) * std_dev;
-    
-        float2 history_moments = GetLod(sHISTORY_AO, uv).rg;
-        float clamped_history_ao = clamp(history_moments.r, range.x, range.y);
-    
-        float new_moment1 = lerp(current_ao, clamped_history_ao, TemporalFeedback);
-        float new_moment2 = lerp(current_ao * current_ao, clamped_history_ao * clamped_history_ao, TemporalFeedback);
-    
+        float hist_m2_safe = (hist_m2 > 0.0) ? hist_m2 : (hist_m1 * hist_m1);
+
+        float new_moment1 = lerp(current_ao, hist_m1, blend_factor);
+        float new_moment2 = lerp(current_ao * current_ao, hist_m2_safe, blend_factor);
+        new_moment2 = max(new_moment2, 0.0);
         outUpscaled = float2(new_moment1, new_moment2);
     }
 
