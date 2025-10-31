@@ -1,13 +1,14 @@
 /*----------------------------------------------|
 | :: Barbatos SSR (Screen-Space Reflections) :: |
 '-----------------------------------------------|
-| Version: 0.3.1                                |
+| Version: 0.3.2                                |
 | Author: Barbatos                              |
 | License: MIT                                  |
 '----------------------------------------------*/
 
 #include "ReShade.fxh"
 #include "ReShadeUI.fxh"
+#include "Blending.fxh"
 
 static const float2 LOD_MASK = float2(0.0, 1.0);
 static const float2 ZERO_LOD = float2(0.0, 0.0);
@@ -68,6 +69,22 @@ uniform float SurfaceDetails <
     ui_min = 0.0; ui_max = 5.0; ui_step = 0.01;
     ui_tooltip = "Adds small surface details to reflections";
 > = 0.1;
+
+BLENDING_COMBO(g_BlendMode, "Blending Mode", "Select how reflections are blended with the scene.", "Color Adjustments", false, 0, 0)
+
+uniform float g_Contrast <
+    ui_type = "drag";
+    ui_min = 0.0; ui_max = 2.0; ui_step = 0.01;
+    ui_category = "Color Adjustments";
+    ui_label = "Contrast";
+> = 1.0;
+
+uniform float g_Saturation <
+    ui_type = "drag";
+    ui_min = 0.0; ui_max = 2.0; ui_step = 0.01;
+    ui_category = "Color Adjustments";
+    ui_label = "Saturation";
+> = 1.0;
 
 uniform int QualityPreset <
     ui_type = "combo";
@@ -199,7 +216,7 @@ float2 SampleMotionVectors(float2 texcoord)
     }
 #endif
 
-namespace Barbatos_SSR202
+namespace Barbatos_SSR203
 {
     texture TNormal
     {
@@ -348,6 +365,17 @@ namespace Barbatos_SSR202
         float Y = r * sin(phi);
 
         return float2(X, Y);
+    }
+
+    float3 AdjustContrast(float3 color, float contrast)
+    {
+        return (color - 0.5) * contrast + 0.5;
+    }
+
+    float3 AdjustSaturation(float3 color, float saturation)
+    {
+        float lum = GetLuminance(color);
+        return lerp(lum.xxx, color, saturation);
     }
     
 //------------------------------------|
@@ -891,12 +919,19 @@ namespace Barbatos_SSR202
         float4 reflectionSample = GetLod(sUpscaled, uv);
         float3 reflectionColor = reflectionSample.rgb;
         float reflectionMask = reflectionSample.a;
+
+        reflectionColor = AdjustContrast(reflectionColor, g_Contrast);
+        reflectionColor = AdjustSaturation(reflectionColor, g_Saturation);
+
         float3 viewDir = -normalize(UVToViewPos(uv, GetDepth(uv)));
         float3 normal = SampleNormal(uv);
         float VdotN = saturate(dot(viewDir, normal));
         float3 f0 = lerp(float3(DIELECTRIC_REFLECTANCE, DIELECTRIC_REFLECTANCE, DIELECTRIC_REFLECTANCE), originalColor, Metallic);
         float3 F = F_Schlick(VdotN, f0);
-        float3 finalColor = lerp(originalColor, reflectionColor * SPIntensity, F * reflectionMask);
+
+        float blendAmount = dot(F, float3(0.333, 0.333, 0.334)) * reflectionMask;
+        float3 finalColor = ComHeaders::Blending::Blend(g_BlendMode, originalColor, reflectionColor * SPIntensity, blendAmount);
+        
         outColor = float4(finalColor, 1.0);
     }
 
