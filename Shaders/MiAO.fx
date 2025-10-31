@@ -135,7 +135,7 @@ uniform float FadeOutTo <
     ui_label = "Fade Out End";
     ui_min = 1.0; ui_max = 550.0; ui_step = 1.0;
     ui_tooltip = "The distance at which the AO effect has completely faded out.";
-> = 300.0;
+> = 1.0;
 
 uniform float FOV <
     ui_type = "slider";
@@ -663,3 +663,4 @@ namespace MiAO
         }
     }
 }
+
