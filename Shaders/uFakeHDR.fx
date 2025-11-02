@@ -47,7 +47,7 @@ float4 FHDR(float4 pos : SV_Position, float2 uv : TexCoord) : SV_Target
     return float4(saturate(c), 1.0);
 }
 
-technique UFakeHDR2
+technique UFakeHDR
 <
     ui_label = "uFakeHDR 2.0";
     ui_tooltip = "Make the game less gray ;)";
