@@ -1,7 +1,7 @@
 /*----------------------------------------------|
 | :: Barbatos SSR (Screen-Space Reflections) :: |
 '-----------------------------------------------|
-| Version: 0.3.2                                |
+| Version: 0.3.21                                |
 | Author: Barbatos                              |
 | License: MIT                                  |
 '----------------------------------------------*/
@@ -781,7 +781,19 @@ namespace Barbatos_SSR203
         r.origin = viewPos;
         r.direction = normalize(reflect(-viewDir, normal));
         r.origin += r.direction * 0.0001;
+    
         HitResult hit;
+#if __RENDERER__ == 0x9000
+        if (isWall) 
+            hit = TraceRay(r, STEPS_PER_RAY_WALLS_DX9); 
+        else 
+            hit = TraceRay(r, (Quality == 1) ? STEPS_PER_RAY_FLOOR_CEILING_PERF_DX9 : STEPS_PER_RAY_FLOOR_CEILING_BALANCED_DX9);
+#else
+        if (isWall)
+            hit = TraceRay(r, STEPS_PER_RAY_WALLS);
+        else
+            hit = TraceRay(r, (Quality == 1) ? 128 : 160);
+#endif
 
         float3 reflectionColor = 0;
         float reflectionAlpha = 0.0;
