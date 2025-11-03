@@ -782,18 +782,7 @@ namespace Barbatos_SSR203
         r.direction = normalize(reflect(-viewDir, normal));
         r.origin += r.direction * 0.0001;
         HitResult hit;
-#if __RENDERER__ == 0xd0900
-        // MODIFIED: Use 3-tier quality for DX9
-        if (isWall) 
-            hit = TraceRay(r, STEPS_PER_RAY_WALLS_DX9); 
-        else 
-            hit = TraceRay(r, (Quality == 2) ? STEPS_PER_RAY_FLOOR_CEILING_PERF_DX9 : ((Quality == 1) ? STEPS_PER_RAY_FLOOR_CEILING_BALANCED_DX9 : STEPS_PER_RAY_FLOOR_CEILING_QUALITY_DX9));
-#else
-        if (isWall)
-            hit = TraceRay(r, STEPS_PER_RAY_WALLS);
-        else
-            hit = TraceRay(r, (Quality == 2) ? 128 : ((Quality == 1) ? 192 : 256));
-#endif
+
         float3 reflectionColor = 0;
         float reflectionAlpha = 0.0;
         if (hit.found)
