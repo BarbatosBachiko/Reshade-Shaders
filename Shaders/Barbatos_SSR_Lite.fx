@@ -1,7 +1,7 @@
 /*----------------------------------------------|
 | :: Barbatos SSR  LITE                      :: |
 '-----------------------------------------------|
-| Version: 1.0                                  |
+| Version: 1.0.1                                 |
 | Author: Barbatos                              |
 | License: MIT                                  |
 '----------------------------------------------*/
@@ -272,7 +272,7 @@ namespace Barbatos_SSR_Lite
                 continue;
             }
             
-            if (currPos.z < sceneDepth) 
+            if (currPos.z < sceneDepth)
             {
                 prevPos = currPos;
                 float distToDepth = abs(currPos.z - sceneDepth);
@@ -304,7 +304,7 @@ namespace Barbatos_SSR_Lite
         float2 scaled_uv = uv / RenderScale;
         if (any(scaled_uv > 1.0))
         {
-            outReflection = float4(0, 0, 0, -1.0); 
+            outReflection = float4(0, 0, 0, -1.0);
             return;
         }
 
@@ -314,20 +314,20 @@ namespace Barbatos_SSR_Lite
         float checker = fmod(low_res_coord.x + low_res_coord.y, 2.0);
         if (checker != 0.0)
         {
-            outReflection = float4(0, 0, 0, -1.0); 
+            outReflection = float4(0, 0, 0, -1.0);
             return;
         }
 
         float depth = GetDepth(scaled_uv);
         if (depth >= 1.0)
         {
-            outReflection = 0; 
+            outReflection = 0;
             return;
         }
 
         float3 viewPos = UVToViewPos(scaled_uv, depth);
         float3 viewDir = -normalize(viewPos);
-        float3 normal = CalculateNormal(scaled_uv); 
+        float3 normal = CalculateNormal(scaled_uv);
 
         float fReflectFloors = 0.0, fReflectWalls = 0.0, fReflectCeilings = 0.0;
         switch (ReflectionMode)
@@ -367,7 +367,19 @@ namespace Barbatos_SSR_Lite
         r.origin = viewPos;
         r.direction = normalize(reflect(-viewDir, normal));
         r.origin += r.direction * 0.0001;
+    
         HitResult hit;
+#if __RENDERER__ == 0x9000
+        if (isWall) 
+            hit = TraceRay(r, STEPS_PER_RAY_WALLS_DX9); 
+        else 
+            hit = TraceRay(r, (Quality == 1) ? STEPS_PER_RAY_FLOOR_CEILING_PERF_DX9 : STEPS_PER_RAY_FLOOR_CEILING_BALANCED_DX9);
+#else
+        if (isWall)
+            hit = TraceRay(r, STEPS_PER_RAY_WALLS);
+        else
+            hit = TraceRay(r, (Quality == 1) ? 128 : 160);
+#endif
 
         float3 reflectionColor = 0;
         float reflectionAlpha = 0.0;
@@ -397,7 +409,7 @@ namespace Barbatos_SSR_Lite
     void PS_Reconstruct(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outRecon : SV_Target)
     {
         float4 current = GetLod(sReflection, uv);
-        if (current.a >= 0.0) 
+        if (current.a >= 0.0)
         {
             outRecon = current;
             return;
@@ -520,5 +532,4 @@ namespace Barbatos_SSR_Lite
             PixelShader = PS_Output;
         }
     }
-
 }
