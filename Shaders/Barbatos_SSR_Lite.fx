@@ -369,18 +369,6 @@ namespace Barbatos_SSR_Lite
         r.origin += r.direction * 0.0001;
         HitResult hit;
 
-#if __RENDERER__ == 0xd0900
-        // MODIFIED: Use 3-tier quality for DX9 (Hardcoded Quality 1)
-        if (isWall) 
-            hit = TraceRay(r, STEPS_PER_RAY_WALLS_DX9); 
-        else 
-            hit = TraceRay(r, STEPS_PER_RAY_FLOOR_CEILING_BALANCED_DX9); // Quality 1 == Balanced DX9
-#else
-        if (isWall)
-            hit = TraceRay(r, STEPS_PER_RAY_WALLS);
-        else
-            hit = TraceRay(r, 192);
-#endif
         float3 reflectionColor = 0;
         float reflectionAlpha = 0.0;
         if (hit.found)
@@ -532,4 +520,5 @@ namespace Barbatos_SSR_Lite
             PixelShader = PS_Output;
         }
     }
+
 }
