@@ -1,7 +1,7 @@
 /*----------------------------------------------|
-| :: Barbatos SSR  LITE                      :: |
+| ::          Barbatos SSR  LITE             :: |
 '-----------------------------------------------|
-| Version: 1.0.1                                 |
+| Version: 1.1                                  |
 | Author: Barbatos                              |
 | License: MIT                                  |
 '----------------------------------------------*/
@@ -11,35 +11,30 @@
 #include "ReShadeUI.fxh"
 #include "Blending.fxh"
 
-#define Quality 1     
-#define RenderScale 0.5
-
+#define PI 3.1415927
+#define GetColor(c) tex2Dlod(ReShade::BackBuffer, float4((c).xy, 0.0, 0.0))
+#define fmod(x, y) (frac((x)*rcp(y)) * (y))
 static const float2 LOD_MASK = float2(0.0, 1.0);
 static const float2 ZERO_LOD = float2(0.0, 0.0);
-#define PI 3.1415927
-#define FAR_PLANE RESHADE_DEPTH_LINEARIZATION_FAR_PLANE
-#define GetDepth(coords) (ReShade::GetLinearizedDepth(coords))
-#define GetColor(c) tex2Dlod(ReShade::BackBuffer, float4((c).xy, 0, 0))
 #define GetLod(s,c) tex2Dlod(s, ((c).xyyy * LOD_MASK.yyxx + ZERO_LOD.xxxy))
-#define fmod(x, y) (frac((x)*rcp(y)) * (y))
 
 //----------|
 // :: UI :: |
 //----------|
 
-uniform float ReflectionIntensity <
+uniform float Intensity <
     ui_type = "drag";
-    ui_min = 0.0; ui_max = 3.0; ui_step = 0.01;
+    ui_min = 0.0; ui_max = 4.0; ui_step = 0.01;
     ui_category = "Basic Settings";
-    ui_label = "Reflection Strength";
+    ui_label = "Strength";
     ui_tooltip = "Overall intensity of reflections";
-> = 1.1;
+> = 2.0;
 
 uniform int ReflectionMode <
     ui_type = "combo";
     ui_items = "Floors Only\0Walls Only\0Ceilings Only\0Floors & Ceilings\0All Surfaces\0";
     ui_category = "Basic Settings";
-    ui_label = "Reflection Surfaces";
+    ui_label = "Surfaces";
     ui_tooltip = "Choose which surfaces show reflections";
 > = 0;
 
@@ -51,13 +46,21 @@ uniform float FadeDistance <
     ui_tooltip = "How far away reflections start to fade out";
 > = 4.999;
 
-uniform float MetallicLook <
+uniform float Metallic <
     ui_type = "drag";
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
     ui_category = "Surface Quality";
     ui_label = "Metallic Look";
     ui_tooltip = "Make surfaces look more metallic (0=non-metal, 1=metal)";
 > = 0.2;
+
+uniform float RenderScale <
+    ui_type = "drag";
+    ui_min = 0.3; ui_max = 1.0; ui_step = 0.05;
+    ui_category = "Performance";
+    ui_label = "Render Resolution";
+    ui_tooltip = "Lower values = better performance but less details";
+> = 0.5;
 
 BLENDING_COMBO(g_BlendMode, "Blending Mode", "Select how reflections are blended with the scene.", "Color Adjustments", false, 0, 0)
 
@@ -87,7 +90,7 @@ uniform float THICKNESS_THRESHOLD <
     ui_type = "drag";
     ui_min = 0.001; ui_max = 1.0; ui_step = 0.001;
     ui_category = "Advanced";
-    ui_label = "Reflection Thickness Threshold";
+    ui_label = "Thickness Threshold";
     ui_tooltip = "Controls how 'thick' surfaces are before a ray passes through them.";
 > = 0.5;
 
@@ -99,20 +102,8 @@ uniform int DebugView <
     ui_tooltip = "Special views";
 > = 0;
 
-#define SPIntensity ReflectionIntensity
-#define FadeEnd FadeDistance
-#define Metallic MetallicLook
-#define ViewMode (DebugView == 0 ? 0 : (DebugView == 1 ? 1 : (DebugView == 2 ? 2 : (DebugView == 3 ? 3 : 0)))) 
 static const float OrientationThreshold = 0.5;
-
-#if __RENDERER__== 0x9000
-static const int STEPS_PER_RAY_WALLS_DX9 = 20;
-static const int STEPS_PER_RAY_FLOOR_CEILING_QUALITY_DX9 = 64;
-static const int STEPS_PER_RAY_FLOOR_CEILING_BALANCED_DX9 = 48;
-static const int STEPS_PER_RAY_FLOOR_CEILING_PERF_DX9 = 32;
-#else
 static const int STEPS_PER_RAY_WALLS = 32;
-#endif
 
 uniform int FRAME_COUNT < source = "framecount"; >;
 
@@ -120,14 +111,14 @@ uniform int FRAME_COUNT < source = "framecount"; >;
 // :: Textures :: |
 //----------------|
 
-namespace Barbatos_SSR_Lite
+namespace Barbatos_SSR_Lite2
 {
 
     texture Reflection
     {
         Width = BUFFER_WIDTH;
         Height = BUFFER_HEIGHT;
-        Format = RGBA16;
+        Format = RGBA8;
     };
     sampler sReflection
     {
@@ -138,7 +129,7 @@ namespace Barbatos_SSR_Lite
     {
         Width = BUFFER_WIDTH;
         Height = BUFFER_HEIGHT;
-        Format = RGBA16;
+        Format = RGBA8;
     };
     sampler sReconstructed
     {
@@ -149,7 +140,7 @@ namespace Barbatos_SSR_Lite
     {
         Width = BUFFER_WIDTH;
         Height = BUFFER_HEIGHT;
-        Format = RGBA16;
+        Format = RGBA8;
     };
     sampler sUpscaled
     {
@@ -159,6 +150,21 @@ namespace Barbatos_SSR_Lite
 //-------------|
 // :: Utility::|
 //-------------|
+
+    struct VS_OUTPUT
+    {
+        float4 vpos : SV_Position;
+        float2 uv : TEXCOORD;
+    };
+
+    struct SurfaceData
+    {
+        float3 viewPos;
+        float3 normal;
+        float3 viewDir;
+        float depth;
+        float2 uv;
+    };
 
     struct Ray
     {
@@ -172,12 +178,17 @@ namespace Barbatos_SSR_Lite
         float3 viewPos;
         float2 uv;
     };
+
+    float GetDepth(float2 uv)
+    {
+        return ReShade::GetLinearizedDepth(uv);
+    }
     
     static const float DIELECTRIC_REFLECTANCE = 0.04;
-
+    
     float3 F_Schlick(float VdotH, float3 f0)
     {
-        return f0 + (1.0.xxx - f0) * pow(1.0 - VdotH, 5.0);
+        return f0 + (float3(1.0, 1.0, 1.0) - f0) * pow(1.0 - VdotH, 5.0);
     }
 
     float GetLuminance(float3 linearColor)
@@ -229,6 +240,17 @@ namespace Barbatos_SSR_Lite
         return normalize(cross(center - offset_x, center - offset_y));
     }
     
+    SurfaceData CreateSurfaceData(float2 uv)
+    {
+        SurfaceData surface;
+        surface.uv = uv;
+        surface.depth = GetDepth(uv);
+        surface.viewPos = UVToViewPos(uv, surface.depth);
+        surface.viewDir = -normalize(surface.viewPos);
+        surface.normal = CalculateNormal(uv);
+        return surface;
+    }
+    
 //-------------------|
 // :: Ray Tracing  ::|
 //-------------------|
@@ -271,14 +293,6 @@ namespace Barbatos_SSR_Lite
                 stepSize = clamp(distToDepth * step_scale, min_step_size, max_step_size);
                 continue;
             }
-            
-            if (currPos.z < sceneDepth)
-            {
-                prevPos = currPos;
-                float distToDepth = abs(currPos.z - sceneDepth);
-                stepSize = clamp(distToDepth * step_scale, min_step_size, max_step_size);
-                continue;
-            }
 
             float3 lo = prevPos, hi = currPos;
             [unroll]
@@ -299,116 +313,106 @@ namespace Barbatos_SSR_Lite
         return result;
     }
     
-    void PS_TraceReflections(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outReflection : SV_Target)
+    void PS_TraceReflections(VS_OUTPUT input, out float4 outReflection : SV_Target)
     {
-        float2 scaled_uv = uv / RenderScale;
-        if (any(scaled_uv > 1.0))
-        {
-            outReflection = float4(0, 0, 0, -1.0);
-            return;
-        }
-
-        // Checkerboard
-        float2 low_res_dims = BUFFER_SCREEN_SIZE * RenderScale;
-        float2 low_res_coord = floor(scaled_uv * low_res_dims);
-        float checker = fmod(low_res_coord.x + low_res_coord.y, 2.0);
+        float2 full_res_coord = floor(input.uv * BUFFER_SCREEN_SIZE);
+        float checker = fmod(full_res_coord.x + full_res_coord.y, 2.0);
         if (checker != 0.0)
         {
             outReflection = float4(0, 0, 0, -1.0);
             return;
         }
-
-        float depth = GetDepth(scaled_uv);
-        if (depth >= 1.0)
+        
+        float2 scaled_uv = input.uv / RenderScale;
+        if (any(scaled_uv > 1.0))
         {
-            outReflection = 0;
+            outReflection = float4(0.0, 0.0, 0.0, -1.0);
             return;
         }
-
-        float3 viewPos = UVToViewPos(scaled_uv, depth);
-        float3 viewDir = -normalize(viewPos);
-        float3 normal = CalculateNormal(scaled_uv);
+        
+        SurfaceData surface = CreateSurfaceData(scaled_uv);
+        
+        if (surface.depth >= 1.0)
+        {
+            outReflection = float4(0.0, 0.0, 0.0, 0.0);
+            return;
+        }
 
         float fReflectFloors = 0.0, fReflectWalls = 0.0, fReflectCeilings = 0.0;
         switch (ReflectionMode)
         {
             case 0:
-                fReflectFloors = 1;
+                fReflectFloors = 1.0;
                 break;
             case 1:
-                fReflectWalls = 1;
+                fReflectWalls = 1.0;
                 break;
             case 2:
-                fReflectCeilings = 1;
+                fReflectCeilings = 1.0;
                 break;
             case 3:
-                fReflectFloors = 1;
-                fReflectCeilings = 1;
+                fReflectFloors = 1.0;
+                fReflectCeilings = 1.0;
                 break;
             case 4:
-                fReflectFloors = 1;
-                fReflectWalls = 1;
-                fReflectCeilings = 1;
+                fReflectFloors = 1.0;
+                fReflectWalls = 1.0;
+                fReflectCeilings = 1.0;
                 break;
         }
 
-        bool isFloor = normal.y > OrientationThreshold;
-        bool isCeiling = normal.y < -OrientationThreshold;
-        bool isWall = abs(normal.y) <= OrientationThreshold;
+        bool isFloor = surface.normal.y > OrientationThreshold;
+        bool isCeiling = surface.normal.y < -OrientationThreshold;
+        bool isWall = abs(surface.normal.y) <= OrientationThreshold;
         float orientationIntensity = (isFloor * fReflectFloors) + (isWall * fReflectWalls) + (isCeiling * fReflectCeilings);
 
         if (orientationIntensity <= 0.0)
         {
-            outReflection = 0;
+            outReflection = float4(0.0, 0.0, 0.0, 0.0);
             return;
         }
 
         Ray r;
-        r.origin = viewPos;
-        r.direction = normalize(reflect(-viewDir, normal));
+        r.origin = surface.viewPos;
+        r.direction = normalize(reflect(-surface.viewDir, surface.normal));
         r.origin += r.direction * 0.0001;
-    
+        
         HitResult hit;
-#if __RENDERER__ == 0x9000
-        if (isWall) 
-            hit = TraceRay(r, STEPS_PER_RAY_WALLS_DX9); 
-        else 
-            hit = TraceRay(r, (Quality == 1) ? STEPS_PER_RAY_FLOOR_CEILING_PERF_DX9 : STEPS_PER_RAY_FLOOR_CEILING_BALANCED_DX9);
-#else
         if (isWall)
             hit = TraceRay(r, STEPS_PER_RAY_WALLS);
         else
-            hit = TraceRay(r, (Quality == 1) ? 128 : 160);
-#endif
+            hit = TraceRay(r, 128);
 
-        float3 reflectionColor = 0;
+        float3 reflectionColor = float3(0.0, 0.0, 0.0);
         float reflectionAlpha = 0.0;
+        
         if (hit.found)
         {
             reflectionColor = GetColor(hit.uv).rgb;
-            float distFactor = saturate(1.0 - length(hit.viewPos - viewPos) / 10.0);
-            float fadeRange = max(FadeEnd, 0.001);
-            float depthFade = saturate((FadeEnd - depth) / fadeRange);
+            float distFactor = saturate(1.0 - length(hit.viewPos - surface.viewPos) / 10.0);
+            float fadeRange = max(FadeDistance, 0.001);
+            float depthFade = saturate((FadeDistance - surface.depth) / fadeRange);
             depthFade *= depthFade;
             reflectionAlpha = distFactor * depthFade;
         }
         else
         {
-            float adaptiveDist = min(depth * 1.2 + 0.012, 10.0);
-            float3 fbViewPos = viewPos + r.direction * adaptiveDist;
+            float adaptiveDist = min(surface.depth * 1.2 + 0.012, 10.0);
+            float3 fbViewPos = surface.viewPos + r.direction * adaptiveDist;
             float2 uvFb = saturate(ViewPosToUV(fbViewPos).xy);
             reflectionColor = GetColor(uvFb).rgb;
             float vertical_fade = pow(saturate(1.0 - scaled_uv.y), 3.0);
             reflectionAlpha = vertical_fade;
         }
-        reflectionAlpha *= pow(saturate(dot(-viewDir, r.direction)), 2.0);
+        
+        reflectionAlpha *= pow(saturate(dot(-surface.viewDir, r.direction)), 2.0);
         reflectionAlpha *= orientationIntensity;
         outReflection = float4(reflectionColor, reflectionAlpha);
     }
     
-    void PS_Reconstruct(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outRecon : SV_Target)
+    void PS_Reconstruct(VS_OUTPUT input, out float4 outRecon : SV_Target)
     {
-        float4 current = GetLod(sReflection, uv);
+        float4 current = GetLod(sReflection, input.uv);
         if (current.a >= 0.0)
         {
             outRecon = current;
@@ -416,14 +420,14 @@ namespace Barbatos_SSR_Lite
         }
 
         float2 p = ReShade::PixelSize;
-        float4 tl = GetLod(sReflection, uv + float2(-p.x, -p.y));
-        float4 tr = GetLod(sReflection, uv + float2( p.x, -p.y));
-        float4 bl = GetLod(sReflection, uv + float2(-p.x,  p.y));
-        float4 br = GetLod(sReflection, uv + float2( p.x,  p.y));
+        float4 tl = GetLod(sReflection, input.uv + float2(-p.x, -p.y));
+        float4 tr = GetLod(sReflection, input.uv + float2( p.x, -p.y));
+        float4 bl = GetLod(sReflection, input.uv + float2(-p.x,  p.y));
+        float4 br = GetLod(sReflection, input.uv + float2( p.x,  p.y));
 
-        float3 color_sum = 0;
-        float alpha_sum = 0;
-        float count = 0;
+        float3 color_sum = float3(0.0, 0.0, 0.0);
+        float alpha_sum = 0.0;
+        float count = 0.0;
 
         if (tl.a >= 0.0)
         {
@@ -453,59 +457,63 @@ namespace Barbatos_SSR_Lite
         if (count > 0.0)
             outRecon = float4(color_sum / count, alpha_sum / count);
         else
-            outRecon = 0;
+            outRecon = float4(0.0, 0.0, 0.0, 0.0);
     }
     
-    void PS_Upscale(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outUpscaled : SV_Target)
+    void PS_Upscale(VS_OUTPUT input, out float4 outUpscaled : SV_Target)
     {
-        outUpscaled = GetLod(sReconstructed, uv * RenderScale);
+        outUpscaled = GetLod(sReconstructed, input.uv * RenderScale);
     }
 
-    void PS_Output(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outColor : SV_Target)
+    void PS_Output(VS_OUTPUT input, out float4 outColor : SV_Target)
     {
-        if (ViewMode != 0)
+        if (DebugView != 0)
         {
-            switch (ViewMode)
+            switch (DebugView)
             {
                 case 1:
-                    outColor = float4(GetLod(sUpscaled, uv).rgb, 1.0);
+                    outColor = float4(GetLod(sUpscaled, input.uv).rgb, 1.0);
                     return;
                 case 2:
-                    outColor = float4(CalculateNormal(uv) * 0.5 + 0.5, 1.0);
+                    outColor = float4(CalculateNormal(input.uv) * 0.5 + 0.5, 1.0);
                     return;
                 case 3:
-                    outColor = GetDepth(uv).xxxx;
+                    outColor = float4(GetDepth(input.uv).xxx, 1.0);
                     return;
             }
         }
 
-        float3 originalColor = GetColor(uv).rgb;
-        if (GetDepth(uv) >= 1.0)
+        float3 originalColor = GetColor(input.uv).rgb;
+        float currentDepth = GetDepth(input.uv);
+        
+        if (currentDepth >= 1.0)
         {
             outColor = float4(originalColor, 1.0);
             return;
         }
 
-        float4 reflectionSample = GetLod(sUpscaled, uv);
+        float4 reflectionSample = GetLod(sUpscaled, input.uv);
         float3 reflectionColor = reflectionSample.rgb;
         float reflectionMask = reflectionSample.a;
 
         reflectionColor = AdjustContrast(reflectionColor, g_Contrast);
         reflectionColor = AdjustSaturation(reflectionColor, g_Saturation);
-
-        float3 viewDir = -normalize(UVToViewPos(uv, GetDepth(uv)));
-        float3 normal = CalculateNormal(uv);
-        float VdotN = saturate(dot(viewDir, normal));
+        SurfaceData surface = CreateSurfaceData(input.uv);
+        
+        float VdotN = saturate(dot(surface.viewDir, surface.normal));
         float3 f0 = lerp(float3(DIELECTRIC_REFLECTANCE, DIELECTRIC_REFLECTANCE, DIELECTRIC_REFLECTANCE), originalColor, Metallic);
         float3 F = F_Schlick(VdotN, f0);
 
         float blendAmount = dot(F, float3(0.333, 0.333, 0.334)) * reflectionMask;
-        float3 finalColor = ComHeaders::Blending::Blend(g_BlendMode, originalColor, reflectionColor * SPIntensity, blendAmount);
+        float3 finalColor = ComHeaders::Blending::Blend(g_BlendMode, originalColor, reflectionColor * Intensity, blendAmount);
         
         outColor = float4(finalColor, 1.0);
     }
 
     technique Barbatos_SSR_Lite
+    <
+    ui_tooltip = "Screen space reflection focused on mobile GPUs";
+    >
     {
         pass TraceReflections
         {
