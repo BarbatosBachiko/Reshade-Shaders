@@ -45,7 +45,7 @@ uniform float MotionScale <
 uniform bool UseLumaFlowConfidence <
     ui_label = "Use LumaFlow Confidence";
     ui_tooltip = "Need LumaFlow";
-> = true;
+> = false;
 
 uniform float ConfidenceScale <
     __UNIFORM_DRAG_FLOAT1
