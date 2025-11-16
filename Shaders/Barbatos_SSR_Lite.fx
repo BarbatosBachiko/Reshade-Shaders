@@ -1,7 +1,7 @@
 /*----------------------------------------------|
 | ::          Barbatos SSR  LITE             :: |
 '-----------------------------------------------|
-| Version: 1.1                                  |
+| Version: 1.2                                  |
 | Author: Barbatos                              |
 | License: MIT                                  |
 '----------------------------------------------*/
@@ -24,11 +24,11 @@ static const float2 ZERO_LOD = float2(0.0, 0.0);
 
 uniform float Intensity <
     ui_type = "drag";
-    ui_min = 0.0; ui_max = 4.0; ui_step = 0.01;
+    ui_min = 0.0; ui_max = 1.5; ui_step = 0.01;
     ui_category = "Basic Settings";
     ui_label = "Strength";
     ui_tooltip = "Overall intensity of reflections";
-> = 2.0;
+> = 1.0;
 
 uniform int ReflectionMode <
     ui_type = "combo";
@@ -113,7 +113,6 @@ uniform int FRAME_COUNT < source = "framecount"; >;
 
 namespace Barbatos_SSR_Lite2
 {
-
     texture Reflection
     {
         Width = BUFFER_WIDTH;
@@ -123,17 +122,6 @@ namespace Barbatos_SSR_Lite2
     sampler sReflection
     {
         Texture = Reflection;
-    };
-
-    texture Reconstructed
-    {
-        Width = BUFFER_WIDTH;
-        Height = BUFFER_HEIGHT;
-        Format = RGBA8;
-    };
-    sampler sReconstructed
-    {
-        Texture = Reconstructed;
     };
 
     texture Upscaled
@@ -146,7 +134,6 @@ namespace Barbatos_SSR_Lite2
     {
         Texture = Upscaled;
     };
-
 //-------------|
 // :: Utility::|
 //-------------|
@@ -250,7 +237,7 @@ namespace Barbatos_SSR_Lite2
         surface.normal = CalculateNormal(uv);
         return surface;
     }
-    
+
 //-------------------|
 // :: Ray Tracing  ::|
 //-------------------|
@@ -261,9 +248,6 @@ namespace Barbatos_SSR_Lite2
         result.found = false;
 
         float step_scale, min_step_size, max_step_size;
-        int refinement_steps;
-
-        refinement_steps = 0;
         step_scale = 0.7;
         min_step_size = 0.001;
         max_step_size = 1.0;
@@ -283,7 +267,6 @@ namespace Barbatos_SSR_Lite2
                 break;
 
             float sceneDepth = GetDepth(uvCurr);
-            
             float thickness = abs(currPos.z - sceneDepth);
 
             if (currPos.z < sceneDepth || thickness > THICKNESS_THRESHOLD)
@@ -295,16 +278,11 @@ namespace Barbatos_SSR_Lite2
             }
 
             float3 lo = prevPos, hi = currPos;
-            [unroll]
-            for (int ref_step = 0; ref_step < refinement_steps; ++ref_step)
-            {
-                float3 mid = 0.5 * (lo + hi);
-                float midDepth = GetDepth(ViewPosToUV(mid));
-                if (mid.z >= midDepth)
-                    hi = mid;
-                else
-                    lo = mid;
-            }
+            float3 mid = 0.5 * (lo + hi);
+            float midDepth = GetDepth(ViewPosToUV(mid));
+            if (mid.z >= midDepth)
+                hi = mid;
+            
             result.viewPos = hi;
             result.uv = ViewPosToUV(result.viewPos).xy;
             result.found = true;
@@ -331,7 +309,6 @@ namespace Barbatos_SSR_Lite2
         }
         
         SurfaceData surface = CreateSurfaceData(scaled_uv);
-        
         if (surface.depth >= 1.0)
         {
             outReflection = float4(0.0, 0.0, 0.0, 0.0);
@@ -409,60 +386,10 @@ namespace Barbatos_SSR_Lite2
         reflectionAlpha *= orientationIntensity;
         outReflection = float4(reflectionColor, reflectionAlpha);
     }
-    
-    void PS_Reconstruct(VS_OUTPUT input, out float4 outRecon : SV_Target)
-    {
-        float4 current = GetLod(sReflection, input.uv);
-        if (current.a >= 0.0)
-        {
-            outRecon = current;
-            return;
-        }
-
-        float2 p = ReShade::PixelSize;
-        float4 tl = GetLod(sReflection, input.uv + float2(-p.x, -p.y));
-        float4 tr = GetLod(sReflection, input.uv + float2( p.x, -p.y));
-        float4 bl = GetLod(sReflection, input.uv + float2(-p.x,  p.y));
-        float4 br = GetLod(sReflection, input.uv + float2( p.x,  p.y));
-
-        float3 color_sum = float3(0.0, 0.0, 0.0);
-        float alpha_sum = 0.0;
-        float count = 0.0;
-
-        if (tl.a >= 0.0)
-        {
-            color_sum += tl.rgb;
-            alpha_sum += tl.a;
-            count += 1.0;
-        }
-        if (tr.a >= 0.0)
-        {
-            color_sum += tr.rgb;
-            alpha_sum += tr.a;
-            count += 1.0;
-        }
-        if (bl.a >= 0.0)
-        {
-            color_sum += bl.rgb;
-            alpha_sum += bl.a;
-            count += 1.0;
-        }
-        if (br.a >= 0.0)
-        {
-            color_sum += br.rgb;
-            alpha_sum += br.a;
-            count += 1.0;
-        }
-
-        if (count > 0.0)
-            outRecon = float4(color_sum / count, alpha_sum / count);
-        else
-            outRecon = float4(0.0, 0.0, 0.0, 0.0);
-    }
-    
+        
     void PS_Upscale(VS_OUTPUT input, out float4 outUpscaled : SV_Target)
     {
-        outUpscaled = GetLod(sReconstructed, input.uv * RenderScale);
+        outUpscaled = GetLod(sReflection, input.uv * RenderScale);
     }
 
     void PS_Output(VS_OUTPUT input, out float4 outColor : SV_Target)
@@ -505,13 +432,13 @@ namespace Barbatos_SSR_Lite2
         float3 F = F_Schlick(VdotN, f0);
 
         float blendAmount = dot(F, float3(0.333, 0.333, 0.334)) * reflectionMask;
-        float3 finalColor = ComHeaders::Blending::Blend(g_BlendMode, originalColor, reflectionColor * Intensity, blendAmount);
-        
+        float3 finalColor = ComHeaders::Blending::Blend(g_BlendMode, originalColor, reflectionColor, blendAmount * Intensity);
         outColor = float4(finalColor, 1.0);
     }
 
     technique Barbatos_SSR_Lite
     <
+    ui_label = "Barbatos: SSR_Lite";
     ui_tooltip = "Screen space reflection focused on mobile GPUs";
     >
     {
@@ -521,12 +448,6 @@ namespace Barbatos_SSR_Lite2
             PixelShader = PS_TraceReflections;
             RenderTarget = Reflection;
             ClearRenderTargets = true;
-        }
-        pass Reconstruct
-        {
-            VertexShader = PostProcessVS;
-            PixelShader = PS_Reconstruct;
-            RenderTarget = Reconstructed;
         }
         pass Upscale
         {
