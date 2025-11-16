@@ -1,7 +1,7 @@
 /*----------------------------------------------|
 | :: Barbatos SSR (Screen-Space Reflections) :: |
 '-----------------------------------------------|
-| Version: 0.3.21                                |
+| Version: 0.3.22                                |
 | Author: Barbatos                              |
 | License: MIT                                  |
 '----------------------------------------------*/
@@ -22,13 +22,13 @@ static const float2 ZERO_LOD = float2(0.0, 0.0);
 // :: UI :: |
 //----------|
 
-uniform float ReflectionIntensity <
+uniform float Intensity <
     ui_type = "drag";
-    ui_min = 0.0; ui_max = 3.0; ui_step = 0.01;
+    ui_min = 0.0; ui_max = 2.0; ui_step = 0.01;
     ui_category = "Basic Settings";
     ui_label = "Reflection Strength";
     ui_tooltip = "Overall intensity of reflections";
-> = 1.1;
+> = 1.0;
 
 uniform int ReflectionMode <
     ui_type = "combo";
@@ -132,8 +132,6 @@ uniform int DebugView <
     ui_tooltip = "Special views";
 > = 0;
 
-#define SPIntensity ReflectionIntensity
-#define FadeEnd FadeDistance
 #define Roughness (1.0 - SurfaceSharpness)
 #define Metallic MetallicLook
 #define BumpIntensity SurfaceDetails
@@ -216,7 +214,7 @@ float2 SampleMotionVectors(float2 texcoord)
     }
 #endif
 
-namespace Barbatos_SSR203
+namespace Barbatos_SSR204
 {
     texture TNormal
     {
@@ -801,8 +799,8 @@ namespace Barbatos_SSR203
         {
             reflectionColor = GetGlossySample(hit.uv, scaled_uv);
             float distFactor = saturate(1.0 - length(hit.viewPos - viewPos) / 10.0);
-            float fadeRange = max(FadeEnd, 0.001);
-            float depthFade = saturate((FadeEnd - depth) / fadeRange);
+            float fadeRange = max(FadeDistance, 0.001);
+            float depthFade = saturate((FadeDistance - depth) / fadeRange);
             depthFade *= depthFade;
             reflectionAlpha = distFactor * depthFade;
         }
@@ -931,7 +929,7 @@ namespace Barbatos_SSR203
         float3 F = F_Schlick(VdotN, f0);
 
         float blendAmount = dot(F, float3(0.333, 0.333, 0.334)) * reflectionMask;
-        float3 finalColor = ComHeaders::Blending::Blend(g_BlendMode, originalColor, reflectionColor * SPIntensity, blendAmount);
+        float3 finalColor = ComHeaders::Blending::Blend(g_BlendMode, originalColor, reflectionColor, blendAmount * Intensity);
         
         outColor = float4(finalColor, 1.0);
     }
