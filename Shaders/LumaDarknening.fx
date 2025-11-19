@@ -197,10 +197,8 @@ float2 GetMotion(float2 texcoord)
 #endif
 }
 
-// Simplified Input function (Always uses Luma)
 float GetInput(float2 uv)
 {
-    // Calculates Luminance from the BackBuffer
     return dot(tex2D(ReShade::BackBuffer, uv).rgb, float3(0.2126, 0.7152, 0.0722));
 }
 
@@ -364,4 +362,5 @@ technique LumaDarkening <
         VertexShader = PostProcessVS;
         PixelShader = PS_Composite;
     }
+
 }
