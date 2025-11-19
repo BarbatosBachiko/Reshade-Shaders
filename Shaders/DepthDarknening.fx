@@ -1,7 +1,7 @@
 /*------------------------------------------------------------------------------------------------|
 | ::                                   Depth Darkening                                         :: |
 '-------------------------------------------------------------------------------------------------|
-| Version 1.2                                                                                     |
+| Version 1.0                                                                                     |
 | Author: Barbatos, Based on the paper by Thomas Luft, Carsten Colditz, and Oliver Deussen (2006).|
 | License: MIT                                                                                    |
 | About: Enhances perceptual depth by applying unsharp masking to the depth buffer.               |
@@ -389,4 +389,5 @@ technique DepthDarkening <
         VertexShader = PostProcessVS;
         PixelShader = PS_Composite;
     }
+
 }
