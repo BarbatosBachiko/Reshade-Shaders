@@ -36,10 +36,10 @@ uniform int EffectMode <
 
 uniform float Intensity <
     ui_type = "drag";
-    ui_min = 0.0; ui_max = 5.0; ui_step = 0.05;
+    ui_min = 0.0; ui_max = 5.0; ui_step = 0.001;
     ui_category = "Basic Settings";
     ui_label = "Intensity";
-> = 0.05; 
+> = 0.050; 
 
 uniform float ClampLimit <
     ui_type = "drag";
