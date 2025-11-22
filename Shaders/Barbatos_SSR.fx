@@ -1,7 +1,7 @@
 /*----------------------------------------------|
 | :: Barbatos SSR (Screen-Space Reflections) :: |
 '-----------------------------------------------|
-| Version: 0.3.22                                |
+| Version: 0.3.23                               |
 | Author: Barbatos                              |
 | License: MIT                                  |
 '----------------------------------------------*/
@@ -122,11 +122,11 @@ uniform float THICKNESS_THRESHOLD <
     ui_category = "Advanced Options";
     ui_label = "Reflection Thickness Threshold";
     ui_tooltip = "Controls how 'thick' surfaces are before a ray passes through them.";
-> = 0.009;
+> = 0.085;
 
 uniform int DebugView <
     ui_type = "combo";
-    ui_items = "Off\0Reflections Only\0Surface Normals\0Depth View\0Motion\0";
+    ui_items = "Off\0Reflections Only\0Surface Normals\0Depth View\0Motion\0Confidence\0";
     ui_category = "Debug";
     ui_label = "Debug View";
     ui_tooltip = "Special views";
@@ -138,12 +138,11 @@ uniform int DebugView <
 #define EnableTAA EnableSmoothing
 #define Quality (QualityPreset)
 #define RenderScale RenderResolution
-#define ViewMode (DebugView == 0 ? 0 : (DebugView == 1 ? 1 : (DebugView == 2 ? 2 : (DebugView == 3 ? 3 : 5))))
+#define ViewMode (DebugView == 0 ? 0 : (DebugView == 1 ? 1 : (DebugView == 2 ? 2 : (DebugView == 3 ? 3 : (DebugView == 4 ? 5 : 6)))))
 
 static const float SobelEdgeThreshold = 0.03;
 static const float Smooth_Threshold = 0.5;
 static const int GlossySamples = 10;
-static const float FeedbackFactor = 0.99;
 static const float OrientationThreshold = 0.5;
 static const float GeoCorrectionIntensity = -0.01;
 static const float VERTICAL_FOV = 37.0;
@@ -282,15 +281,15 @@ namespace Barbatos_SSR204
         Texture = History;
     };
 
-    texture Upscaled
+    texture B_PrevLuma
     {
         Width = BUFFER_WIDTH;
         Height = BUFFER_HEIGHT;
-        Format = RGBA16;
+        Format = R8;
     };
-    sampler sUpscaled
+    sampler sB_PrevLuma
     {
-        Texture = Upscaled;
+        Texture = B_PrevLuma;
     };
 
 //-------------|
@@ -614,9 +613,10 @@ namespace Barbatos_SSR204
         }
         return closest_velocity;
     }
+    
     void ComputeNeighborhoodMinMax(sampler2D color_tex, float2 texcoord, out float3 color_min, out float3 color_max)
     {
-        float2 pixel_size = ReShade::PixelSize / RenderScale;
+        float2 pixel_size = ReShade::PixelSize;
         float3 center_color = GetLod(color_tex, float4(texcoord, 0, 0)).rgb;
         color_min = center_color;
         color_max = center_color;
@@ -639,10 +639,41 @@ namespace Barbatos_SSR204
         color_min = lerp(cross_min, color_min, 0.5);
         color_max = lerp(cross_max, color_max, 0.5);
     }
+    
     float ComputeTrustFactor(float2 velocity_pixels, float low_threshold = 2.0, float high_threshold = 15.0)
     {
         float vel_mag = length(velocity_pixels);
         return saturate((high_threshold - vel_mag) / (high_threshold - low_threshold));
+    }
+
+    //Based on LumaFlow.fx from LumeniteFX CC-BY-NC-4.0
+    float Confidence(float2 uv, float2 velocity)
+    {
+        float2 prev_uv = uv + velocity;
+        if (any(prev_uv < 0.0) || any(prev_uv > 1.0))
+            return 0.0;
+
+        float curr_luma = GetLuminance(GetColor(uv).rgb);
+        float prev_luma = tex2D(sB_PrevLuma, prev_uv).r;
+        float luma_error = abs(curr_luma - prev_luma);
+
+        float flow_magnitude = length(velocity * float2(BUFFER_WIDTH, BUFFER_HEIGHT));
+        float subpixel_threshold = 1.0;
+        
+        if (flow_magnitude <= subpixel_threshold)
+            return 1.0;
+
+        float2 destination_velocity = SampleMotionVectors(prev_uv);
+        float2 diff = velocity - destination_velocity;
+        float error = length(diff);
+        float normalized_error = error / length(velocity);
+
+        float motion_penalty = flow_magnitude;
+        float length_conf = rcp(motion_penalty * 0.05 + 1.0);
+        float consistency_conf = rcp(normalized_error + 1.0);
+        float photometric_conf = exp(-luma_error * 5.0);
+
+        return (consistency_conf * length_conf * photometric_conf);
     }
 
 //--------------------|
@@ -820,32 +851,38 @@ namespace Barbatos_SSR204
     
     void PS_Accumulate(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outBlended : SV_Target)
     {
-        float4 current_reflection = GetLod(sReflection, float4(uv, 0, 0));
+        float2 packed_uv = uv * RenderScale;
+        float4 current_reflection = GetLod(sReflection, float4(packed_uv, 0, 0));
+
         if (!EnableTAA)
         {
             outBlended = current_reflection;
             return;
         }
-        float2 full_res_uv = uv / RenderScale;
-        float2 velocity = GetVelocityFromClosestFragment(full_res_uv);
-        float current_depth = GetDepth(full_res_uv);
-        float2 reprojected_uv_full = full_res_uv + velocity;
-        float history_depth = GetDepth(reprojected_uv_full);
-        float2 reprojected_uv_low = reprojected_uv_full * RenderScale;
-        bool valid_history = all(saturate(reprojected_uv_low) == reprojected_uv_low) && FRAME_COUNT > 1 && abs(history_depth - current_depth) < 0.01;
+
+        float2 velocity = GetVelocityFromClosestFragment(uv);
+        float confidence = Confidence(uv, velocity);
+
+        float2 reprojected_uv = uv + velocity;
+        float4 history_reflection = GetLod(sHistory, float4(reprojected_uv, 0, 0));
+        
+        float current_depth = GetDepth(uv);
+        float history_depth = GetDepth(reprojected_uv);
+        bool valid_history = all(saturate(reprojected_uv) == reprojected_uv) && FRAME_COUNT > 1 && abs(history_depth - current_depth) < 0.01;
+
         if (!valid_history)
         {
             outBlended = current_reflection;
             return;
         }
-        float4 history_reflection = GetLod(sHistory, float4(reprojected_uv_low, 0, 0));
+
         float3 color_min, color_max;
-        ComputeNeighborhoodMinMax(sReflection, uv, color_min, color_max);
+        ComputeNeighborhoodMinMax(sReflection, packed_uv, color_min, color_max);
         float3 clipped_history_rgb = ClipToAABB(color_min, color_max, history_reflection.rgb);
-        float rejection_factor = saturate(length(history_reflection.rgb - clipped_history_rgb) * 900.0);
-        float final_feedback = lerp(FeedbackFactor, 0.1, rejection_factor);
-        float3 temporal_rgb = lerp(current_reflection.rgb, clipped_history_rgb, final_feedback);
-        float temporal_a = lerp(current_reflection.a, history_reflection.a, final_feedback);
+
+        float3 temporal_rgb = lerp(current_reflection.rgb, clipped_history_rgb, 0.9 * confidence);
+        float temporal_a = lerp(current_reflection.a, history_reflection.a, 0.9 * confidence);
+
         float trust_factor = ComputeTrustFactor(velocity * BUFFER_SCREEN_SIZE);
         if (trust_factor < 1.0)
         {
@@ -855,7 +892,7 @@ namespace Barbatos_SSR204
             for (int i = 1; i < blur_samples; i++)
             {
                 float t = (float) i / (float) (blur_samples - 1);
-                float2 blur_coord = uv - (velocity * RenderScale) * 0.5 * t;
+                float2 blur_coord = packed_uv - (velocity * RenderScale) * 0.5 * t;
                 if (all(saturate(blur_coord) == blur_coord))
                     blurred_color += GetLod(sReflection, float4(blur_coord,0,0)).rgb;
             }
@@ -865,19 +902,10 @@ namespace Barbatos_SSR204
         outBlended = float4(temporal_rgb, temporal_a);
     }
 
-    void PS_UpdateHistory(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outHistory : SV_Target)
+    void PS_UpdateHistory(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outHistory : SV_Target0, out float outLuma : SV_Target1)
     {
         outHistory = GetLod(sTemp, float4(uv, 0, 0));
-    }
-    
-    void PS_Upscale(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outUpscaled : SV_Target)
-    {
-        if (RenderScale >= 1.0)
-        {
-            outUpscaled = GetLod(sTemp, uv);
-            return;
-        }
-        outUpscaled = GetLod(sTemp, uv * RenderScale);
+        outLuma = GetLuminance(GetColor(uv).rgb);
     }
 
     void PS_Output(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outColor : SV_Target)
@@ -887,7 +915,7 @@ namespace Barbatos_SSR204
             switch (ViewMode)
             {
                 case 1:
-                    outColor = float4(GetLod(sUpscaled, uv).rgb, 1.0);
+                    outColor = float4(GetLod(sTemp, uv).rgb, 1.0);
                     return;
                 case 2:
                     outColor = float4(SampleNormal(uv) * 0.5 + 0.5, 1.0);
@@ -905,6 +933,19 @@ namespace Barbatos_SSR204
                         outColor = float4(final_color, 1.0);
                         return;
                     }
+                case 6:{
+                        float2 full_res_uv = uv;
+                        float2 velocity = GetVelocityFromClosestFragment(full_res_uv);
+                        float conf = Confidence(full_res_uv, velocity);
+                        
+                        float3 confidenceColor;
+                        if (conf < 0.5)
+                            confidenceColor = lerp(float3(1.0, 0.0, 0.0), float3(1.0, 1.0, 0.0), conf * 2.0);
+                        else
+                            confidenceColor = lerp(float3(1.0, 1.0, 0.0), float3(0.0, 1.0, 0.0), (conf - 0.5) * 2.0);
+                        outColor = float4(confidenceColor, 1.0);
+                        return;
+                    }
             }
         }
 
@@ -915,7 +956,7 @@ namespace Barbatos_SSR204
             return;
         }
 
-        float4 reflectionSample = GetLod(sUpscaled, uv);
+        float4 reflectionSample = GetLod(sTemp, uv);
         float3 reflectionColor = reflectionSample.rgb;
         float reflectionMask = reflectionSample.a;
 
@@ -971,19 +1012,14 @@ namespace Barbatos_SSR204
         {
             VertexShader = PostProcessVS;
             PixelShader = PS_Accumulate;
-            RenderTarget = Temp;
+            RenderTarget = Temp; 
         }
         pass UpdateHistory
         {
             VertexShader = PostProcessVS;
             PixelShader = PS_UpdateHistory;
-            RenderTarget = History;
-        }
-        pass Upscale
-        {
-            VertexShader = PostProcessVS;
-            PixelShader = PS_Upscale;
-            RenderTarget = Upscaled;
+            RenderTarget0 = History; 
+            RenderTarget1 = B_PrevLuma;
         }
         pass Output
         {
