@@ -556,17 +556,17 @@ namespace Barbatos_XeGTAO
     {
         float2 p = ReShade::PixelSize;
     
-        float h00 = GetColor(texcoord + float2(-p.x, -p.y)).rgb;
-        float h10 = GetColor(texcoord + float2(0, -p.y)).rgb;
-        float h20 = GetColor(texcoord + float2(p.x, -p.y)).rgb;
+        float h00 = GetColor(texcoord + float2(-p.x, -p.y)).r;
+        float h10 = GetColor(texcoord + float2(0, -p.y)).r;
+        float h20 = GetColor(texcoord + float2(p.x, -p.y)).r;
     
-        float h01 = GetColor(texcoord + float2(-p.x, 0)).rgb;
+        float h01 = GetColor(texcoord + float2(-p.x, 0)).r;
         float h11 = GetColor(texcoord).r;
-        float h21 = GetColor(texcoord + float2(p.x, 0)).rgb;
+        float h21 = GetColor(texcoord + float2(p.x, 0)).r;
     
-        float h02 = GetColor(texcoord + float2(-p.x, p.y)).rgb;
-        float h12 = GetColor(texcoord + float2(0, p.y)).rgb;
-        float h22 = GetColor(texcoord + float2(p.x, p.y)).rgb;
+        float h02 = GetColor(texcoord + float2(-p.x, p.y)).r;
+        float h12 = GetColor(texcoord + float2(0, p.y)).r;
+        float h22 = GetColor(texcoord + float2(p.x, p.y)).r;
 
         float3 pixelWorldSize = float3(p.x, p.y, HeightmapIntensity * 0.001);
     
