@@ -16,7 +16,7 @@
 /*----------------------------------------------|
 | ::           Barbatos XeGTAO               :: |
 '-----------------------------------------------|
-| Version: 0.9.0                                |
+| Version: 0.9.1                                |
 | Author: Barbatos                              |
 '----------------------------------------------*/
 
@@ -47,12 +47,13 @@ static const float2 ZERO_LOD = float2(0.0, 0.0);
 #define PI 3.1415926535
 #define PI_HALF 1.57079632679
 #define fmod(x, y) (frac((x)*rcp(y)) * (y))
+#define BUFFER_SCREEN_SIZE float2(BUFFER_WIDTH, BUFFER_HEIGHT)
 
 #define bEnableDenoise 1
 #define c_phi 1
 #define n_phi 5
 #define p_phi 1
-
+#define EnableTemporal 1
 //----------|
 // :: UI :: |
 //----------|
@@ -79,19 +80,6 @@ uniform float4 OcclusionColor <
     ui_label = "Occlusion Color";
 > = float4(0.0, 0.0, 0.0, 1.0);
 
-uniform bool EnableDiffuse <
-    ui_category = "Diffuse / Indirect Lighting";
-    ui_label = "Enable Diffuse Mode";
-    ui_tooltip = "Enables Indirect Lighting (Bounces) calculation.";
-> = false;
-
-uniform float DiffuseIntensity <
-    ui_type = "drag";
-    ui_min = 0.0; ui_max = 5.0; ui_step = 0.01;
-    ui_category = "Diffuse / Indirect Lighting";
-    ui_label = "Diffuse Intensity";
-> = 1.0;
-
 uniform int QualityLevel <
     ui_type = "combo";
     ui_items = "Low (2 directions, 2 samples)\0Medium (3 directions, 4 samples)\0High (4 directions, 8 samples)\0Ultra (8 directions, 8 samples)\0";
@@ -99,6 +87,19 @@ uniform int QualityLevel <
     ui_label = "Quality Level";
     ui_tooltip = "Defines the number of directions and samples per direction. Higher = slower.";
 > = 0;
+
+uniform bool EnableDiffuse <
+    ui_category = "Indirect Lighting";
+    ui_label = "Enable Diffuse Mode";
+    ui_tooltip = "Enables Indirect Lighting (Bounces) calculation.";
+> = false;
+
+uniform float DiffuseIntensity <
+    ui_type = "drag";
+    ui_min = 0.0; ui_max = 5.0; ui_step = 0.01;
+    ui_category = "Indirect Lighting";
+    ui_label = "Diffuse Intensity";
+> = 1.0;
 
 uniform float RadiusMultiplier <
     ui_type = "drag";
@@ -140,12 +141,6 @@ uniform float ThinOccluderCompensation <
     ui_tooltip = "Reduces self-occlusion on thin objects.";
 > = 0.0;
 
-uniform bool EnableTemporal <
-    ui_category = "Advanced Options";
-    ui_label = "Enable Temporal Accumulation";
-    ui_tooltip = "Blends the current frame's AO with previous frames to reduce noise.";
-> = true;
-
 uniform float DepthMultiplier <
     ui_type = "drag";
     ui_min = 0.1; ui_max = 1000.0; ui_step = 10.0;
@@ -168,9 +163,33 @@ uniform float FOV <
     ui_tooltip = "Set to your game's vertical Field of View.";
 > = 60.0;
 
+uniform float HeightmapIntensity <
+    ui_category = "Heightmap Normals";
+    ui_label = "Heightmap Intensity";
+    ui_tooltip = "Controls the strength of heightmap-based normal perturbation.";
+    ui_type = "drag";
+    ui_min = 0.0; ui_max = 200.0; ui_step = 0.1;
+> = 100.0;
+
+uniform float HeightmapBlendAmount <
+    ui_category = "Heightmap Normals";
+    ui_label = "Heightmap Blend Amount";
+    ui_tooltip = "How much to blend heightmap normals with geometric normals.";
+    ui_type = "drag";
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+> = 0.0;
+
+uniform float HeightmapDepthThreshold <
+    ui_category = "Heightmap Normals";
+    ui_label = "Heightmap Depth Threshold";
+    ui_tooltip = "Limits the heightmap normals to objects closer than this value. Useful to prevent the sky from looking bumpy.";
+    ui_type = "drag";
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.001;
+> = 0.900;
+
 uniform int ViewMode <
     ui_type = "combo";
-    ui_items = "Normal\0Normals\0View-Space Depth\0Raw AO\0Denoised AO\0Temporal AO\0Edges\0Diffuse Lighting\0";
+    ui_items = "Normal\0Edges\0AO/IL\0Normals\0Depth\0";
     ui_category = "Debug";
     ui_label = "View Mode";
     ui_tooltip = "Selects the debug view mode.";
@@ -500,6 +519,60 @@ namespace Barbatos_XeGTAO
         return normalize(pixelNormal);
     }
 
+    float3 blend_normals(float3 n1, float3 n2)
+    {
+        n1 += float3(0, 0, 1);
+        n2 *= float3(-1, -1, 1);
+        return n1 * dot(n1, n2) / n1.z - n2;
+    }
+
+    float3 ComputeHeightmapNormal(float h00, float h10, float h20, float h01, float h11, float h21, float h02, float h12, float h22, const float3 pixelWorldSize)
+    {
+        h00 -= h11;
+        h10 -= h11;
+        h20 -= h11;
+        h01 -= h11;
+        h21 -= h11;
+        h02 -= h11;
+        h12 -= h11;
+        h22 -= h11;
+        
+        float Gx = h00 - h20 + 2.0 * h01 - 2.0 * h21 + h02 - h22;
+        float Gy = h00 + 2.0 * h10 + h20 - h02 - 2.0 * h12 - h22;
+        
+        float stepX = pixelWorldSize.x;
+        float stepY = pixelWorldSize.y;
+        float sizeZ = pixelWorldSize.z;
+        
+        Gx = Gx * stepY * sizeZ;
+        Gy = Gy * stepX * sizeZ;
+        
+        float Gz = stepX * stepY * 8;
+        
+        return normalize(float3(Gx, Gy, Gz));
+    }
+
+    float3 GetHeightmapNormal(float2 texcoord)
+    {
+        float2 p = ReShade::PixelSize;
+    
+        float h00 = GetColor(texcoord + float2(-p.x, -p.y)).rgb;
+        float h10 = GetColor(texcoord + float2(0, -p.y)).rgb;
+        float h20 = GetColor(texcoord + float2(p.x, -p.y)).rgb;
+    
+        float h01 = GetColor(texcoord + float2(-p.x, 0)).rgb;
+        float h11 = GetColor(texcoord).r;
+        float h21 = GetColor(texcoord + float2(p.x, 0)).rgb;
+    
+        float h02 = GetColor(texcoord + float2(-p.x, p.y)).rgb;
+        float h12 = GetColor(texcoord + float2(0, p.y)).rgb;
+        float h22 = GetColor(texcoord + float2(p.x, p.y)).rgb;
+
+        float3 pixelWorldSize = float3(p.x, p.y, HeightmapIntensity * 0.001);
+    
+        return ComputeHeightmapNormal(h00, h10, h20, h01, h11, h21, h02, h12, h22, pixelWorldSize);
+    }
+
     float3 GetViewPos(float2 uv, float view_z)
     {
         float fov_rad = FOV * (PI / 180.0);
@@ -541,7 +614,7 @@ namespace Barbatos_XeGTAO
             const float3 sample_normal = tex2Dlod(sNormalLinear, float4(uv, 0.0, 0.0)).xyz * 2.0 - 1.0;
             const float3 sample_pos = GetViewPos(uv, sample_depth);
             
-            float diff_c = distance(center_color.rgb, sample_color.rgb); 
+            float diff_c = distance(center_color.rgb, sample_color.rgb);
             float w_c = exp(-(diff_c * diff_c) / c_phi);
             float diff_n = dot(center_normal, sample_normal);
             float w_n = pow(saturate(diff_n), n_phi);
@@ -620,6 +693,18 @@ namespace Barbatos_XeGTAO
         float3 BOTTOM = XeGTAO_ComputeViewspacePosition(texcoord + float2(0, 1) * consts.ViewportPixelSize, dB, consts);
         
         float3 viewspaceNormal = XeGTAO_CalculateNormalBGI(edgesLRTB, CENTER, LEFT, RIGHT, TOP, BOTTOM);
+        
+        // Heightmap Normal Blending
+        float depth01 = getDepth(texcoord);
+        if (HeightmapBlendAmount > 0.001 && depth01 < HeightmapDepthThreshold)
+        {
+            float3 heightmapNormal = GetHeightmapNormal(texcoord);
+            float3 blended = blend_normals(heightmapNormal, viewspaceNormal);
+            float fade = 1.0 - smoothstep(HeightmapDepthThreshold - 0.05, HeightmapDepthThreshold, depth01);
+            
+            viewspaceNormal = normalize(lerp(viewspaceNormal, blended, HeightmapBlendAmount * fade));
+        }
+        
         outNormalEdges = float4(viewspaceNormal * 0.5 + 0.5, packedEdges);
     }
 
@@ -746,7 +831,7 @@ namespace Barbatos_XeGTAO
                 lpfloat falloffBase1 = length(lpfloat3(sampleDelta1.x, sampleDelta1.y, sampleDelta1.z * (1 + consts.ThinOccluderCompensation)));
                 lpfloat weight0 = saturate(falloffBase0 * falloffMul + falloffAdd);
                 lpfloat weight1 = saturate(falloffBase1 * falloffMul + falloffAdd);
-
+                
                 lpfloat shc0 = (lpfloat) dot(sampleHorizonVec0, viewVec);
                 lpfloat shc1 = (lpfloat) dot(sampleHorizonVec1, viewVec);
 
@@ -905,7 +990,7 @@ namespace Barbatos_XeGTAO
         {
             float4 n_val = GetLod(color_tex, float4(texcoord + offsets_cross[j] * pixel_size, 0, 0));
             cross_min = min(cross_min, n_val);
-            cross_max = max(cross_max, n_val);
+            cross_max = max(color_max, n_val);
         }
         color_min = lerp(cross_min, color_min, 0.5);
         color_max = lerp(cross_max, color_max, 0.5);
@@ -946,12 +1031,12 @@ namespace Barbatos_XeGTAO
     }
 
     float4 PS_DenoiseAndAccumulate(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
-    {  
+    {
         float center_depth = tex2Dlod(sViewDepthLinear, float4(uv, 0.0, 0.0)).r;
         float3 center_normal = tex2Dlod(sNormalLinear, float4(uv, 0.0, 0.0)).xyz * 2.0 - 1.0;
 
         if (center_depth / (DepthMultiplier * 10.0) >= DepthThreshold)
-            return EnableDiffuse ? float4(0, 0, 0, 1) : float4(1, 1, 1, 1); 
+            return EnableDiffuse ? float4(0, 0, 0, 1) : float4(1, 1, 1, 1);
 
         float4 spatial_result = atrous(sDenoiseTex1, uv, 2, center_depth, center_normal);
         float4 current_signal = spatial_result;
@@ -969,7 +1054,10 @@ namespace Barbatos_XeGTAO
         float current_depth = getDepth(uv);
         float history_depth = getDepth(reprojected_uv);
         
-        bool valid_history = all(saturate(reprojected_uv) == reprojected_uv) && FRAME_COUNT > 1 && abs(history_depth - current_depth) < 0.01;
+        bool valid_history = (reprojected_uv.x > 0.001 && reprojected_uv.x < 0.999 &&
+                              reprojected_uv.y > 0.001 && reprojected_uv.y < 0.999)
+                             && FRAME_COUNT > 1
+                             && abs(history_depth - current_depth) < 0.01;
 
         if (!valid_history)
             return current_signal;
@@ -983,6 +1071,7 @@ namespace Barbatos_XeGTAO
         if (trust_factor < 1.0)
         {
             float4 blurred_signal = current_signal;
+            float valid_samples = 1.0; 
             const int blur_samples = 5;
             [unroll]
             for (int i = 1; i < blur_samples; i++)
@@ -990,9 +1079,12 @@ namespace Barbatos_XeGTAO
                 float t = (float) i / (float) (blur_samples - 1);
                 float2 blur_coord = uv - velocity * 0.5 * t;
                 if (all(saturate(blur_coord) == blur_coord))
+                {
                     blurred_signal += GetLod(sDenoiseTex1, float4(blur_coord,0,0));
+                    valid_samples += 1.0;
+                }
             }
-            blurred_signal /= (float) blur_samples;
+            blurred_signal /= valid_samples;
             temporal_signal = lerp(blurred_signal, temporal_signal, trust_factor);
         }
         return temporal_signal;
@@ -1009,7 +1101,7 @@ namespace Barbatos_XeGTAO
         float depth = getDepth(uv);
         float4 aoData = GetLod(sTemp, uv);
 
-        if (ViewMode == 0) // Normal
+        if (ViewMode == 0) // Normal (Gameplay)
         {
             if (depth >= DepthThreshold || depth < 0.0001)
                 return originalColor;
@@ -1030,25 +1122,35 @@ namespace Barbatos_XeGTAO
 
             return originalColor;
         }
-        else if (ViewMode == 1)
+        else if (ViewMode == 1) // Edges
+        {
+            return float4(GetLod(sNormalEdges, uv).aaa, 1.0);
+        }
+        else if (ViewMode == 2) // AO/IL
+        {
+            half visibility = aoData.a;
+            float3 diffuseLight = aoData.rgb;
+
+            float occlusion = 1.0 - visibility;
+            occlusion = saturate(occlusion * Intensity);
+            float3 debugColor = float3(0.5, 0.5, 0.5);
+            debugColor = lerp(debugColor, OcclusionColor.rgb, occlusion);
+            if (EnableDiffuse)
+            {
+                debugColor += diffuseLight * DiffuseIntensity;
+            }
+            
+            return float4(debugColor, 1.0);
+        }
+        else if (ViewMode == 3) // Normals
+        {
             return float4(GetLod(sNormalEdges, uv).rgb, 1.0);
-        else if (ViewMode == 2)
+        }
+        else if (ViewMode == 4) // Depth
         {
             float view_depth = GetLod(sDepth, uv).r / (DepthMultiplier * 10.0);
             return float4(saturate(view_depth.rrr), 1.0);
         }
-        else if (ViewMode == 3)
-        {
-            return float4(aoData.aaa, 1.0);
-        }
-        else if (ViewMode == 4)
-            return float4(aoData.aaa, 1.0); 
-        else if (ViewMode == 5)
-            return EnableTemporal ? float4(aoData.aaa, 1.0) : float4(0, 1, 0, 1);
-        else if (ViewMode == 6)
-            return float4(GetLod(sNormalEdges, uv).aaa, 1.0);
-        else if (ViewMode == 7) 
-            return float4(aoData.rgb * DiffuseIntensity, 1.0);
 
         return originalColor;
     }
