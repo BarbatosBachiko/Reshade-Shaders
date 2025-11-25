@@ -1,7 +1,7 @@
 /*------------------------------------------------------------------------------------------------|
 | ::                                   Depth Darkening                                         :: |
 '-------------------------------------------------------------------------------------------------|
-| Version 1.0                                                                                     |
+| Version 1.0.5                                                                                   |
 | Author: Barbatos, Based on the paper by Thomas Luft, Carsten Colditz, and Oliver Deussen (2006).|
 | License: MIT                                                                                    |
 | About: Enhances perceptual depth by applying unsharp masking to the depth buffer.               |
@@ -39,7 +39,7 @@ uniform float Intensity <
     ui_min = 0.0; ui_max = 5.0; ui_step = 0.001;
     ui_category = "Basic Settings";
     ui_label = "Intensity";
-> = 0.500;
+> = 0.050;
 
 uniform float ClampLimit <
     ui_type = "drag";
@@ -55,7 +55,7 @@ uniform float Radius <
     ui_category = "Basic Settings";
     ui_label = "Spread Radius";
     ui_tooltip = "How far the effect spreads from object edges.";
-> = 1.5;
+> = 4.0;
 
 uniform float3 NearColor <
     ui_type = "color";
@@ -101,7 +101,7 @@ uniform bool ColorOnly <
 
 uniform int DebugView <
     ui_type = "combo";
-    ui_items = "None\0Spatial Importance (Delta D)\0Motion Vectors\0";
+    ui_items = "None\0Spatial Importance (Delta D)\0Motion Vectors\0Confidence Map\0";
     ui_category = "Debug";
     ui_label = "Debug View";
 > = 0;
@@ -165,6 +165,18 @@ sampler SamplerHistory
     Texture = TexHistory;
 };
 
+// Added for Temporal Confidence Check (R16F for Depth Precision)
+texture TexPrevInput
+{
+    Width = BUFFER_WIDTH;
+    Height = BUFFER_HEIGHT;
+    Format = R16F;
+};
+sampler SamplerPrevInput
+{
+    Texture = TexPrevInput;
+};
+
 #if USE_MARTY_LAUNCHPAD_MOTION
     namespace Deferred {
         texture MotionVectorsTex { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
@@ -217,6 +229,36 @@ float GetInput(float2 uv)
         return dot(tex2D(ReShade::BackBuffer, uv).rgb, float3(0.2126, 0.7152, 0.0722));
     else
         return ReShade::GetLinearizedDepth(uv);
+}
+
+float Confidence(float2 uv, float2 velocity)
+{
+    float2 prev_uv = uv + velocity;
+    
+    if (any(prev_uv < 0.0) || any(prev_uv > 1.0))
+        return 0.0;
+
+    float curr_val = GetInput(uv);
+    float prev_val = tex2D(SamplerPrevInput, prev_uv).r;
+    float val_error = abs(curr_val - prev_val);
+
+    float flow_magnitude = length(velocity * float2(BUFFER_WIDTH, BUFFER_HEIGHT));
+    float subpixel_threshold = 1.0;
+    
+    if (flow_magnitude <= subpixel_threshold)
+        return 1.0;
+
+    float2 destination_velocity = GetMotion(prev_uv);
+    float2 diff = velocity - destination_velocity;
+    float error = length(diff);
+    float normalized_error = error / (length(velocity) + 1e-6);
+
+    float motion_penalty = flow_magnitude;
+    float length_conf = rcp(motion_penalty * 0.05 + 1.0);
+    float consistency_conf = rcp(normalized_error + 1.0);
+    float value_conf = exp(-val_error * 5.0);
+
+    return (consistency_conf * length_conf * value_conf);
 }
 
 void PS_BlurH(float4 pos : SV_Position, float2 uv : TEXCOORD, out float outDepth : SV_Target)
@@ -282,18 +324,13 @@ void PS_TemporalFilter(float4 pos : SV_Position, float2 uv : TEXCOORD, out float
     float2 motion = GetMotion(uv);
     float2 prevUV = uv + motion;
 
-    bool outOfBounds = any(prevUV < 0.0) || any(prevUV > 1.0);
-    
-    float depthCur = GetInput(uv);
-    float depthPrev = GetInput(prevUV);
-    
-    float depthDiff = abs(depthCur - depthPrev);
-    bool depthMismatch = depthDiff > 0.05;
+    float conf = Confidence(uv, motion);
 
     float historyDeltaD = tex2D(SamplerHistory, prevUV).r;
 
-    float blend = TemporalStabilization;
-    if (outOfBounds || depthMismatch)
+    float blend = TemporalStabilization * conf;
+    
+    if (any(prevUV < 0.0) || any(prevUV > 1.0))
         blend = 0.0;
 
     outFiltered = lerp(currentDeltaD, historyDeltaD, blend);
@@ -302,6 +339,11 @@ void PS_TemporalFilter(float4 pos : SV_Position, float2 uv : TEXCOORD, out float
 void PS_UpdateHistory(float4 pos : SV_Position, float2 uv : TEXCOORD, out float outHistory : SV_Target)
 {
     outHistory = tex2D(SamplerFilteredDeltaD, uv).r;
+}
+
+void PS_SaveInput(float4 pos : SV_Position, float2 uv : TEXCOORD, out float outInput : SV_Target)
+{
+    outInput = GetInput(uv);
 }
 
 void PS_Composite(float4 pos : SV_Position, float2 uv : TEXCOORD, out float3 outColor : SV_Target)
@@ -324,6 +366,13 @@ void PS_Composite(float4 pos : SV_Position, float2 uv : TEXCOORD, out float3 out
     {
         float2 m = GetMotion(uv) * 100.0;
         outColor = float3(abs(m.x), abs(m.y), 0.0);
+        return;
+    }
+    else if (DebugView == 3) // View Confidence Map
+    {
+        float2 motion = GetMotion(uv);
+        float conf = Confidence(uv, motion);
+        outColor = float3(conf, conf, conf);
         return;
     }
 
@@ -384,11 +433,15 @@ technique DepthDarkening <
         PixelShader = PS_UpdateHistory;
         RenderTarget = TexHistory;
     }
+    pass P_SaveInput
+    {
+        VertexShader = PostProcessVS;
+        PixelShader = PS_SaveInput;
+        RenderTarget = TexPrevInput;
+    }
     pass P_Composite
     {
         VertexShader = PostProcessVS;
         PixelShader = PS_Composite;
     }
-
 }
-
