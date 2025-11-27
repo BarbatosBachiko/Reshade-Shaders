@@ -20,12 +20,12 @@ THE SOFTWARE.
 /*-------------------------------------------------|
 | ::                   MiAO                     :: |
 '--------------------------------------------------|
-| Version: 1.2                                     |
+| Version: 1.21                                    |
 | Author: Barbatos                                 |
 | License: MIT                                     |
 | Description: Simple ambient occlusion with repur-|
 | posed content from FidelityFX CACAO              |
-'---------------------------------------------------*/
+'-------------------------------------------------*/
 
 #include "ReShade.fxh"
 #include "ReShadeUI.fxh"
@@ -99,13 +99,11 @@ uniform float RenderScale <
     ui_tooltip = "Renders AO at a lower resolution for better performance, then upscales it.";
 > = 0.8;
 
-uniform float TemporalBlend <
-    __UNIFORM_DRAG_FLOAT1
-    ui_min = 0.0; ui_max = 0.99;ui_step = 0.01;
+uniform bool EnableTemporal <
     ui_category = "Performance & Quality";
-    ui_label = "Temporal Feedback";
-    ui_tooltip = "Controls how much of the previous frame is blended in. Higher values are smoother but can cause more ghosting.";
-> = 0.8;
+    ui_label = "Reduce Noise (TAA)";
+    ui_tooltip = "Reduces flickering and noise using temporal anti-aliasing";
+> = true;
 
 // -- Advanced Options --
 uniform bool EnableDistantRadius <
@@ -153,7 +151,7 @@ uniform int DebugView <
 > = 0;
 
 uniform int FRAME_COUNT < source = "framecount"; >;
- static const float OcclusionSensitivity = 4.0;
+
 //----------------|
 // :: Textures :: |
 //----------------|
@@ -183,6 +181,17 @@ sampler sTexMotionVectorsSampler
     AddressV = Clamp;
 };
 #endif
+
+texture texPrevLuma
+{
+    Width = BUFFER_WIDTH;
+    Height = BUFFER_HEIGHT;
+    Format = R8;
+};
+sampler sPrevLuma
+{
+    Texture = texPrevLuma;
+};
 
 texture tMotionConfidence
 {
@@ -250,7 +259,7 @@ namespace MiAO
     {
         Width = BUFFER_WIDTH;
         Height = BUFFER_HEIGHT;
-        Format = R16;
+        Format = RG16F; 
     };
     sampler sHISTORY_AO
     {
@@ -272,9 +281,91 @@ namespace MiAO
 #endif
     }
 
-    float GetConfidence(float2 texcoord)
+    float GetLuminance(float3 linearColor)
     {
-        return GetLod(sMotionConfidence, texcoord).r;
+        return dot(linearColor, float3(0.2126, 0.7152, 0.0722));
+    }
+
+    float2 GetVelocityFromClosestFragment(float2 texcoord)
+    {
+        float2 pixel_size = ReShade::PixelSize;
+        float closest_depth = 1.0;
+        float2 closest_velocity = 0;
+        const int2 offsets[9] = { int2(-1, -1), int2(0, -1), int2(1, -1), int2(-1, 0), int2(0, 0), int2(1, 0), int2(-1, 1), int2(0, 1), int2(1, 1) };
+        [unroll]
+        for (int i = 0; i < 9; i++)
+        {
+            float2 s_coord = texcoord + offsets[i] * pixel_size;
+            float s_depth = GetDepth(s_coord);
+            if (s_depth < closest_depth)
+            {
+                closest_depth = s_depth;
+                closest_velocity = GetMotion(s_coord);
+            }
+        }
+        return closest_velocity;
+    }
+
+     //Based on LumaFlow.fx from LumeniteFX CC-BY-NC-4.0
+    float Confidence(float2 uv, float2 velocity)
+    {
+        float2 prev_uv = uv + velocity;
+        if (any(prev_uv < 0.0) || any(prev_uv > 1.0))
+            return 0.0;
+
+        float curr_luma = GetLuminance(GetColor(uv).rgb);
+        float prev_luma = tex2D(sPrevLuma, prev_uv).r;
+        float luma_error = abs(curr_luma - prev_luma);
+        float flow_magnitude = length(velocity * BUFFER_DIM);
+        
+        if (flow_magnitude <= 1.0)
+            return 1.0;
+
+        float2 destination_velocity = GetMotion(prev_uv);
+        float2 diff = velocity - destination_velocity;
+        float error = length(diff);
+        float normalized_error = error / length(velocity);
+
+        float motion_penalty = flow_magnitude;
+        float length_conf = rcp(motion_penalty * 0.002 + 1.0);
+        float consistency_conf = rcp(normalized_error + 1.0);
+        float photometric_conf = exp(-luma_error * 1.0);
+
+        return (consistency_conf * length_conf * photometric_conf);
+    }
+
+    void ComputeNeighborhoodMinMax(sampler2D color_tex, float2 texcoord, out float4 color_min, out float4 color_max)
+    {
+        float2 pixel_size = ReShade::PixelSize;
+        float4 center_val = GetLod(color_tex, float4(texcoord, 0, 0));
+        color_min = center_val;
+        color_max = center_val;
+        const int2 offsets_3x3[8] = { int2(-1, -1), int2(0, -1), int2(1, -1), int2(-1, 0), int2(1, 0), int2(-1, 1), int2(0, 1), int2(1, 1) };
+        [unroll]
+        for (int i = 0; i < 8; i++)
+        {
+            float4 n_val = GetLod(color_tex, float4(texcoord + offsets_3x3[i] * pixel_size, 0, 0));
+            color_min = min(color_min, n_val);
+            color_max = max(color_max, n_val);
+        }
+        const int2 offsets_cross[4] = { int2(0, -2), int2(-2, 0), int2(2, 0), int2(0, 2) };
+        float4 cross_min = center_val;
+        float4 cross_max = center_val;
+        [unroll]
+        for (int j = 0; j < 4; j++)
+        {
+            float4 n_val = GetLod(color_tex, float4(texcoord + offsets_cross[j] * pixel_size, 0, 0));
+            cross_min = min(cross_min, n_val);
+            cross_max = max(color_max, n_val);
+        }
+        color_min = lerp(cross_min, color_min, 0.5);
+        color_max = lerp(cross_max, color_max, 0.5);
+    }
+
+    float ComputeTrustFactor(float2 velocity_pixels, float low_threshold = 10.0, float high_threshold = 80.0)
+    {
+        float vel_mag = length(velocity_pixels);
+        return saturate((high_threshold - vel_mag) / (high_threshold - low_threshold));
     }
 
     float hilbert(float2 p, int level)
@@ -550,60 +641,70 @@ namespace MiAO
             current_ao = GetLod(sAO, uv * RenderScale).r;
         }
 
-        if (FRAME_COUNT < 2)
+        if (!EnableTemporal || FRAME_COUNT < 2)
         {
             outUpscaled = float2(current_ao, current_ao * current_ao);
             return;
         }
 
-        float2 motion = GetMotion(uv);
-        float2 reprojected_uv = uv + motion;
+        float2 velocity = GetVelocityFromClosestFragment(uv);
+        float confidence = Confidence(uv, velocity);
 
-        bool reproj_out_of_bounds = any(reprojected_uv < 0.0) || any(reprojected_uv > 1.0);
-        bool large_motion = dot(motion, motion) > (1 * 1);
+        float2 reprojected_uv = uv + velocity;
 
-        float2 history_moments = GetLod(sHISTORY_AO, saturate(reprojected_uv)).rg;
-        float hist_m1 = history_moments.r;
-        float hist_m2 = history_moments.g;
+        float current_depth = GetDepth(uv);
+        float2 history_signal = GetLod(sHISTORY_AO, reprojected_uv).rg;
+        
+        bool valid_history = (reprojected_uv.x > 0.001 && reprojected_uv.x < 0.999 &&
+                              reprojected_uv.y > 0.001 && reprojected_uv.y < 0.999);
 
-        float depth_cur = GetDepth(uv);
-        float depth_prev = GetLod(sHISTORY_AO, saturate(reprojected_uv)).r;
-        bool depth_invalid = (depth_cur <= 0.0) || (depth_prev <= 0.0);
-
-        float depth_diff = abs(depth_cur - depth_prev);
-        bool depth_close = depth_diff <= 1;
-        bool valid_history = !reproj_out_of_bounds && !large_motion && !depth_invalid && depth_close;
-    
-        float blend_factor = valid_history ? TemporalBlend: 0.0; //Temporal Blend
-
-        if (blend_factor > 0.0)
+        if (!valid_history)
         {
-            float confidence = GetConfidence(uv) * 1.0;
-            if (confidence <= 0.001)
+            outUpscaled = float2(current_ao, current_ao * current_ao);
+            return;
+        }
+
+        float4 sig_min, sig_max;
+        ComputeNeighborhoodMinMax(sAO, (RenderScale >= 1.0 ? uv : uv * RenderScale), sig_min, sig_max);
+
+        float2 clipped_history = clamp(history_signal, sig_min.rg, sig_max.rg);
+        
+        float blend_factor = 0.9 * confidence;
+        float2 temporal_signal = lerp(float2(current_ao, current_ao * current_ao), clipped_history, blend_factor);
+
+        float trust_factor = ComputeTrustFactor(velocity * BUFFER_DIM);
+        if (trust_factor < 1.0)
+        {
+            float2 blurred_signal = float2(current_ao, current_ao * current_ao);
+            float valid_samples = 1.0;
+            const int blur_samples = 3; 
+            [unroll]
+            for (int i = 1; i < blur_samples; i++)
             {
-                float aoDiff = abs(current_ao - hist_m1);
-                confidence = 1.0 - saturate(aoDiff * OcclusionSensitivity);
+                float t = (float) i / (float) (blur_samples - 1);
+                float2 blur_coord = uv - velocity * 0.5 * t;
+                if (all(saturate(blur_coord) == blur_coord))
+                {
+                    float sampleAO = GetLod(sAO, (RenderScale >= 1.0 ? blur_coord : blur_coord * RenderScale)).r;
+                    blurred_signal += float2(sampleAO, sampleAO * sampleAO);
+                    valid_samples += 1.0;
+                }
             }
-            blend_factor *= saturate(confidence);
+            blurred_signal /= valid_samples;
+            temporal_signal = lerp(blurred_signal, temporal_signal, trust_factor);
         }
 
-        if (blend_factor <= 0.0)
-        {
-            outUpscaled = float2(current_ao, current_ao * current_ao);
-            return;
-        }
-    
-        float hist_m2_safe = (hist_m2 > 0.0) ? hist_m2 : (hist_m1 * hist_m1);
-
-        float new_moment1 = lerp(current_ao, hist_m1, blend_factor);
-        float new_moment2 = lerp(current_ao * current_ao, hist_m2_safe, blend_factor);
-        new_moment2 = max(new_moment2, 0.0);
-        outUpscaled = float2(new_moment1, new_moment2);
+        outUpscaled = temporal_signal;
     }
 
     void PS_UpdateHistory(float4 vpos : SV_Position, float2 uv : TEXCOORD, out float2 outHistory : SV_Target)
     {
         outHistory = GetLod(sFINAL_AO, uv).rg;
+    }
+
+    void PS_StorePrevLuma(float4 vpos : SV_Position, float2 uv : TEXCOORD, out float outLuma : SV_Target)
+    {
+        outLuma = GetLuminance(GetColor(uv).rgb);
     }
 
     float4 PS_Apply(float4 vpos : SV_Position, float2 uv : TEXCOORD) : SV_Target
@@ -661,6 +762,11 @@ namespace MiAO
             VertexShader = PostProcessVS;
             PixelShader = PS_Apply;
         }
+        pass UpdateLuma
+        {
+            VertexShader = PostProcessVS;
+            PixelShader = PS_StorePrevLuma;
+            RenderTarget = texPrevLuma;
+        }
     }
 }
-
