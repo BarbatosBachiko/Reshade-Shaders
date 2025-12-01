@@ -1,7 +1,7 @@
 /*----------------------------------------------|
 | ::          Barbatos SSR  LITE             :: |
 '-----------------------------------------------|
-| Version: 1.2                                  |
+| Version: 1.3                                  |
 | Author: Barbatos                              |
 | License: MIT                                  |
 '----------------------------------------------*/
@@ -61,6 +61,14 @@ uniform float RenderScale <
     ui_label = "Render Resolution";
     ui_tooltip = "Lower values = better performance but less details";
 > = 0.5;
+
+uniform float STEPS <
+    ui_type = "drag";
+    ui_min = 1.0; ui_max = 128.0; ui_step = 1.0;
+    ui_category = "Performance";
+    ui_label = "RT Steps";
+    ui_tooltip = "Lower values = better performance but less details";
+> = 16.0;
 
 BLENDING_COMBO(g_BlendMode, "Blending Mode", "Select how reflections are blended with the scene.", "Color Adjustments", false, 0, 0)
 
@@ -358,7 +366,7 @@ namespace Barbatos_SSR_Lite2
         if (isWall)
             hit = TraceRay(r, STEPS_PER_RAY_WALLS);
         else
-            hit = TraceRay(r, 128);
+            hit = TraceRay(r, STEPS);
 
         float3 reflectionColor = float3(0.0, 0.0, 0.0);
         float reflectionAlpha = 0.0;
@@ -427,12 +435,32 @@ namespace Barbatos_SSR_Lite2
         reflectionColor = AdjustSaturation(reflectionColor, g_Saturation);
         SurfaceData surface = CreateSurfaceData(input.uv);
         
+        //P
         float VdotN = saturate(dot(surface.viewDir, surface.normal));
         float3 f0 = lerp(float3(DIELECTRIC_REFLECTANCE, DIELECTRIC_REFLECTANCE, DIELECTRIC_REFLECTANCE), originalColor, Metallic);
         float3 F = F_Schlick(VdotN, f0);
+        
+        float3 finalColor;
+        
+        if (g_BlendMode == 0)
+        {
+            //Energy Conservation
+            float3 kS = F;
+            float3 kD = 1.0 - kS;
+            kD *= (1.0 - Metallic);
 
-        float blendAmount = dot(F, float3(0.333, 0.333, 0.334)) * reflectionMask;
-        float3 finalColor = ComHeaders::Blending::Blend(g_BlendMode, originalColor, reflectionColor, blendAmount * Intensity);
+            float3 diffuseComponent = originalColor * kD;
+            float3 specularComponent = reflectionColor * kS * Intensity;
+            
+            float3 pbr = diffuseComponent + specularComponent;
+            finalColor = lerp(originalColor, pbr, reflectionMask);
+        }
+        else
+        {
+            float blendAmount = dot(F, float3(0.333, 0.333, 0.334)) * reflectionMask;
+            finalColor = ComHeaders::Blending::Blend(g_BlendMode, originalColor, reflectionColor, blendAmount * Intensity);
+        }
+        
         outColor = float4(finalColor, 1.0);
     }
 
