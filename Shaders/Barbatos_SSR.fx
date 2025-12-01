@@ -1,7 +1,7 @@
 /*----------------------------------------------|
 | :: Barbatos SSR (Screen-Space Reflections) :: |
 '-----------------------------------------------|
-| Version: 0.3.23                               |
+| Version: 0.3.24                               |
 | Author: Barbatos                              |
 | License: MIT                                  |
 '----------------------------------------------*/
@@ -70,7 +70,7 @@ uniform float SurfaceDetails <
     ui_tooltip = "Adds small surface details to reflections";
 > = 0.1;
 
-BLENDING_COMBO(g_BlendMode, "Blending Mode", "Select how reflections are blended with the scene.", "Color Adjustments", false, 0, 0)
+BLENDING_COMBO(g_BlendMode, "Blending Mode", "Select how reflections are blended with the scene.", "Color Adjustments", false, 0, 6)
 
 uniform float g_Contrast <
     ui_type = "drag";
@@ -124,6 +124,15 @@ uniform float THICKNESS_THRESHOLD <
     ui_tooltip = "Controls how 'thick' surfaces are before a ray passes through them.";
 > = 0.085;
 
+uniform float VERTICAL_FOV <
+    __UNIFORM_DRAG_FLOAT1
+    ui_min = 15.0; ui_max = 120.0;
+    ui_step = 0.1;
+    ui_category = "Advanced";
+    ui_label = "Vertical FOV";
+> = 37.0;
+
+
 uniform int DebugView <
     ui_type = "combo";
     ui_items = "Off\0Reflections Only\0Surface Normals\0Depth View\0Motion\0Confidence\0";
@@ -145,7 +154,6 @@ static const float Smooth_Threshold = 0.5;
 static const int GlossySamples = 10;
 static const float OrientationThreshold = 0.5;
 static const float GeoCorrectionIntensity = -0.01;
-static const float VERTICAL_FOV = 37.0;
 static const bool EnableGlossy = true;
 #define SmoothMode (SmartSurfaceMode) 
 
@@ -963,14 +971,34 @@ namespace Barbatos_SSR204
         reflectionColor = AdjustContrast(reflectionColor, g_Contrast);
         reflectionColor = AdjustSaturation(reflectionColor, g_Saturation);
 
+        //P
         float3 viewDir = -normalize(UVToViewPos(uv, GetDepth(uv)));
         float3 normal = SampleNormal(uv);
         float VdotN = saturate(dot(viewDir, normal));
+        
         float3 f0 = lerp(float3(DIELECTRIC_REFLECTANCE, DIELECTRIC_REFLECTANCE, DIELECTRIC_REFLECTANCE), originalColor, Metallic);
         float3 F = F_Schlick(VdotN, f0);
 
-        float blendAmount = dot(F, float3(0.333, 0.333, 0.334)) * reflectionMask;
-        float3 finalColor = ComHeaders::Blending::Blend(g_BlendMode, originalColor, reflectionColor, blendAmount * Intensity);
+        float3 finalColor;
+
+        if (g_BlendMode == 0)
+        {
+            //Energy Conservation
+            float3 kS = F; 
+            float3 kD = 1.0 - kS;
+            kD *= (1.0 - Metallic); 
+
+            float3 diffuseComponent = originalColor * kD;
+            float3 specularComponent = reflectionColor * kS * Intensity;
+            
+            float3 pbr = diffuseComponent + specularComponent;
+            finalColor = lerp(originalColor, pbr, reflectionMask);
+        }
+        else
+        {
+            float blendAmount = dot(F, float3(0.333, 0.333, 0.334)) * reflectionMask;
+            finalColor = ComHeaders::Blending::Blend(g_BlendMode, originalColor, reflectionColor, blendAmount * Intensity);
+        }
         
         outColor = float4(finalColor, 1.0);
     }
@@ -1012,13 +1040,13 @@ namespace Barbatos_SSR204
         {
             VertexShader = PostProcessVS;
             PixelShader = PS_Accumulate;
-            RenderTarget = Temp; 
+            RenderTarget = Temp;
         }
         pass UpdateHistory
         {
             VertexShader = PostProcessVS;
             PixelShader = PS_UpdateHistory;
-            RenderTarget0 = History; 
+            RenderTarget0 = History;
             RenderTarget1 = B_PrevLuma;
         }
         pass Output
