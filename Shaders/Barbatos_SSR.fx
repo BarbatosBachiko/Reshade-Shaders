@@ -70,7 +70,7 @@ uniform float SurfaceDetails <
     ui_tooltip = "Adds small surface details to reflections";
 > = 0.1;
 
-BLENDING_COMBO(g_BlendMode, "Blending Mode", "Select how reflections are blended with the scene.", "Color Adjustments", false, 0, 6)
+BLENDING_COMBO(g_BlendMode, "Blending Mode", "Select how reflections are blended with the scene.", "Color Adjustments", false, 0, 0)
 
 uniform float g_Contrast <
     ui_type = "drag";
