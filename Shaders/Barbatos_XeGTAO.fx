@@ -16,7 +16,7 @@
 /*----------------------------------------------|
 | ::           Barbatos XeGTAO               :: |
 '-----------------------------------------------|
-| Version: 0.9.5                                |
+| Version: 0.9.6                                |
 | Author: Barbatos                              |
 '----------------------------------------------*/
 
@@ -176,6 +176,14 @@ uniform float TemporalStability <
     ui_tooltip = "Controls the accumulation strength.\nHigher values = Less noise, potential ghosting.\nLower values = More noise, less ghosting.\nDefault: 0.90";
 > = 0.90;
 
+uniform float ConfidenceSensitivity <
+    ui_type = "drag";
+    ui_min = 0.1; ui_max = 5.0; ui_step = 0.1;
+    ui_category = "Temporal Settings";
+    ui_label = "Confidence Sensitivity";
+    ui_tooltip = "Controls how aggressive the confidence rejection is.\nHigher = Stricter (less ghosting).\nLower = More relaxed.";
+> = 1.0;
+
 uniform float HeightmapIntensity <
     ui_category = "Heightmap Normals";
     ui_label = "Heightmap Intensity";
@@ -202,7 +210,7 @@ uniform float HeightmapDepthThreshold <
 
 uniform int ViewMode <
     ui_type = "combo";
-    ui_items = "Normal\0Edges\0AO/IL\0Normals\0Depth\0";
+    ui_items = "Normal\0Edges\0AO/IL\0Normals\0Depth\0Confidence Check\0";
     ui_category = "Debug";
     ui_label = "View Mode";
     ui_tooltip = "Selects the debug view mode.";
@@ -625,7 +633,7 @@ namespace Barbatos_XeGTAO
             float2(0, -1),
             float2(-1, 0),
             float2(1, 0),
-            float2(0, 1) 
+            float2(0, 1)
         };
 
         for (int i = 0; i < 4; i++)
@@ -646,8 +654,8 @@ namespace Barbatos_XeGTAO
             float3 diff_c_vec = center_color.rgb - sample_color.rgb;
             float diff_c_sq = dot(diff_c_vec, diff_c_vec);
             float3 diff_p_vec = center_pos - sample_pos;
-            float diff_p_sq = dot(diff_p_vec, diff_p_vec); 
-            float diff_n = dot(center_normal, sample_normal); 
+            float diff_p_sq = dot(diff_p_vec, diff_p_vec);
+            float diff_n = dot(center_normal, sample_normal);
             float w_c = exp(-diff_c_sq / c_phi);
             float w_p = exp(-diff_p_sq / p_phi);
             float w_n = pow(saturate(diff_n), n_phi);
@@ -702,6 +710,14 @@ namespace Barbatos_XeGTAO
     void PS_NormalsEdges(float4 pos : SV_Position, float2 texcoord : TEXCOORD, out float4 outNormalEdges : SV_Target)
     {
         GTAOConstants consts;
+        
+        float depth01 = getDepth(texcoord);
+        if (depth01 >= DepthThreshold)
+        {
+            outNormalEdges = float4(0.5, 0.5, 1.0, 0.0);
+            return;
+        }
+
         consts.ViewportSize = float2(BUFFER_WIDTH, BUFFER_HEIGHT);
         consts.ViewportPixelSize = 1.0 / consts.ViewportSize;
         float tanHalfFOV = tan(radians(FOV * 0.5));
@@ -728,7 +744,6 @@ namespace Barbatos_XeGTAO
         float3 viewspaceNormal = XeGTAO_CalculateNormalBGI(edgesLRTB, CENTER, LEFT, RIGHT, TOP, BOTTOM);
         
         // Heightmap Normal Blending
-        float depth01 = getDepth(texcoord);
         if (HeightmapBlendAmount > 0.001 && depth01 < HeightmapDepthThreshold)
         {
             float3 heightmapNormal = GetHeightmapNormal(texcoord);
@@ -743,6 +758,18 @@ namespace Barbatos_XeGTAO
 
     float4 PS_GTAO_Main(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
     {
+        float depth = getDepth(texcoord);
+        if (depth >= DepthThreshold)
+        {
+            if (EnableDiffuse)
+                return float4(0, 0, 0, 1);
+            else
+            {
+                float encoded = XeGTAO_EncodeVisibilityBentNormal(1.0, half3(0, 0, 1));
+                return ReconstructFloat4(encoded);
+            }
+        }
+
         GTAOConstants consts;
         consts.ViewportSize = float2(BUFFER_WIDTH, BUFFER_HEIGHT);
         consts.ViewportPixelSize = 1.0 / consts.ViewportSize;
@@ -940,6 +967,15 @@ namespace Barbatos_XeGTAO
 
     float4 PS_PrepareDenoise(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
+        float depth = getDepth(uv);
+        if (depth >= DepthThreshold)
+        {
+            if (EnableDiffuse)
+                return float4(0, 0, 0, 1);
+            else
+                return float4(1, 1, 1, 1);
+        }
+
         float4 rawData = GetLod(sAO, uv);
         
         if (EnableDiffuse)
@@ -958,6 +994,10 @@ namespace Barbatos_XeGTAO
     float4 PS_DenoisePass(float4 vpos : SV_Position, float2 texcoord : TEXCOORD, int level, sampler input_sampler) : SV_Target
     {
         if (!bEnableDenoise)
+            return tex2Dlod(input_sampler, float4(texcoord, 0.0, 0.0));
+
+        float rawDepth = getDepth(texcoord);
+        if (rawDepth >= DepthThreshold)
             return tex2Dlod(input_sampler, float4(texcoord, 0.0, 0.0));
 
         float depth = tex2Dlod(sViewDepthLinear, float4(texcoord, 0.0, 0.0)).r;
@@ -1064,7 +1104,7 @@ namespace Barbatos_XeGTAO
         float2 destination_velocity = SampleMotionVectors(prev_uv);
         float2 diff = velocity - destination_velocity;
         float error = length(diff);
-        float normalized_error = error / length(velocity);
+        float normalized_error = (error * ConfidenceSensitivity) / length(velocity);
 
         float motion_penalty = flow_magnitude;
         float length_conf = rcp(motion_penalty * 0.05 + 1.0);
@@ -1076,6 +1116,10 @@ namespace Barbatos_XeGTAO
 
     float4 PS_DenoiseAndAccumulate(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
+        float rawDepth = getDepth(uv);
+        if (rawDepth >= DepthThreshold)
+            return EnableDiffuse ? float4(0, 0, 0, 1) : float4(1, 1, 1, 1);
+
         float center_depth = tex2Dlod(sViewDepthLinear, float4(uv, 0.0, 0.0)).r;
         
         if (center_depth / (DepthMultiplier * 10.0) >= DepthThreshold)
@@ -1122,6 +1166,7 @@ namespace Barbatos_XeGTAO
             float3 blurred_rgb = current_signal.rgb;
             float blurred_a = current_signal.a;
             const int blur_samples = 3;
+            float valid_samples_count = 1.0;
             
             [unroll]
             for (int i = 1; i < blur_samples; i++)
@@ -1134,10 +1179,11 @@ namespace Barbatos_XeGTAO
                     float4 samp = tex2Dlod(sDenoiseTex1, float4(blur_coord, 0, 0));
                     blurred_rgb += samp.rgb;
                     blurred_a += samp.a;
+                    valid_samples_count += 1.0;
                 }
             }
-            blurred_rgb /= (float) blur_samples;
-            blurred_a /= (float) blur_samples;
+            blurred_rgb /= valid_samples_count;
+            blurred_a /= valid_samples_count;
 
             temporal_rgb = lerp(blurred_rgb, temporal_rgb, trust_factor);
             temporal_a = lerp(blurred_a, temporal_a, trust_factor);
@@ -1148,6 +1194,14 @@ namespace Barbatos_XeGTAO
     
     void PS_UpdateHistory(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outHistory : SV_Target0, out float outLuma : SV_Target1)
     {
+        float depth = getDepth(uv);
+        if (depth >= DepthThreshold)
+        {
+            outHistory = EnableDiffuse ? float4(0, 0, 0, 1) : float4(1, 1, 1, 1);
+            outLuma = GetLuminance(GetColor(uv).rgb);
+            return;
+        }
+
         outHistory = GetLod(sTemp, uv);
         outLuma = GetLuminance(GetColor(uv).rgb);
     }
@@ -1208,6 +1262,12 @@ namespace Barbatos_XeGTAO
         {
             float view_depth = GetLod(sDepth, uv).r / (DepthMultiplier * 10.0);
             return float4(saturate(view_depth.rrr), 1.0);
+        }
+        else if (ViewMode == 5) // Confidence Check
+        {
+            float2 velocity = GetVelocityFromClosestFragment(uv);
+            float conf = Confidence(uv, velocity);
+            return float4(conf, conf, conf, 1.0);
         }
 
         return originalColor;
