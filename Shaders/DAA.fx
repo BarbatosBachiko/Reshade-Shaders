@@ -1,7 +1,7 @@
 /*-------------------------------------------------|
 | ::       Directional Anti-Aliasing (DAA)      :: |
 '--------------------------------------------------|
-| Version: 1.7.1                                   |
+| Version: 1.7.2                                   |
 | Author: Barbatos                                 |
 | License: MIT                                     |
 | Description: is an edge-aware spatiotemporal     |
@@ -164,7 +164,7 @@ sampler2D sDEPTH
 struct Output
 {
     float4 Color : SV_Target0;
-    float Depth : SV_Target1;
+    float4 Depth : SV_Target1;
 };
 
 float3 RGBToYCoCg(float3 rgb)
@@ -222,7 +222,7 @@ float4 PS_Temporal(float4 pos : SV_Position, float2 t : TEXCOORD) : SV_Target
 {
     float2 jitter = JitterLUT[FRAME_COUNT % 16];
     
-#if ENABLE_JITTER
+#if ENABLE_JITTER_FOR_TAA
     float jitterVal = EnableTemporalAA ? 1.0 : 0.0;
 #else
         float jitterVal = 0.0;
@@ -283,7 +283,8 @@ Output PS_SaveHistoryDepth(float4 pos : SV_Position, float2 t : TEXCOORD)
 {
     Output outData;
     outData.Color = GetLod(sTEMP, t);
-    outData.Depth = GetDepth(t);
+    float d = GetDepth(t);
+    outData.Depth = float4(d, d, d, 1.0); 
     return outData;
 }
 
