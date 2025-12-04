@@ -16,7 +16,7 @@
 /*----------------------------------------------|
 | ::           Barbatos XeGTAO               :: |
 '-----------------------------------------------|
-| Version: 0.9.1                                |
+| Version: 0.9.5                                |
 | Author: Barbatos                              |
 '----------------------------------------------*/
 
@@ -53,7 +53,6 @@ static const float2 ZERO_LOD = float2(0.0, 0.0);
 #define c_phi 1
 #define n_phi 5
 #define p_phi 1
-#define EnableTemporal 1
 //----------|
 // :: UI :: |
 //----------|
@@ -162,6 +161,20 @@ uniform float FOV <
     ui_label = "Vertical FOV";
     ui_tooltip = "Set to your game's vertical Field of View.";
 > = 60.0;
+
+uniform bool EnableTemporal <
+    ui_category = "Temporal Settings";
+    ui_label = "Enable Temporal AA";
+    ui_tooltip = "Enables temporal accumulation to reduce noise.";
+> = true;
+
+uniform float TemporalStability <
+    ui_type = "drag";
+    ui_min = 0.1; ui_max = 0.99; ui_step = 0.01;
+    ui_category = "Temporal Settings";
+    ui_label = "Temporal Stability";
+    ui_tooltip = "Controls the accumulation strength.\nHigher values = Less noise, potential ghosting.\nLower values = More noise, less ghosting.\nDefault: 0.90";
+> = 0.90;
 
 uniform float HeightmapIntensity <
     ui_category = "Heightmap Normals";
@@ -588,44 +601,64 @@ namespace Barbatos_XeGTAO
 
     float4 atrous(sampler input_sampler, float2 texcoord, int level, float center_depth, float3 center_normal)
     {
-        float4 sum = 0.0;
-        float cum_w = 0.0;
+        float fov_rad = FOV * (PI / 180.0);
+        float tan_half_fov = tan(fov_rad * 0.5);
+        float proj_scale_y = 1.0 / tan_half_fov;
+        float aspect = float(BUFFER_WIDTH) / float(BUFFER_HEIGHT);
+        float proj_scale_x = proj_scale_y / aspect;
+        float2 inv_proj_scale = float2(1.0 / proj_scale_x, 1.0 / proj_scale_y);
+
         const float2 step_size = ReShade::PixelSize * exp2(level);
         float4 center_color = tex2Dlod(input_sampler, float4(texcoord, 0.0, 0.0));
-        float3 center_pos = GetViewPos(texcoord, center_depth);
+        
+        float2 center_clip_pos = texcoord * 2.0 - 1.0;
+        float3 center_pos;
+        center_pos.x = center_clip_pos.x * inv_proj_scale.x * center_depth;
+        center_pos.y = -center_clip_pos.y * inv_proj_scale.y * center_depth;
+        center_pos.z = center_depth;
 
-        static const float2 atrous_offsets[9] =
+        float4 sum = center_color;
+        float cum_w = 1.0;
+
+        static const float2 atrous_offsets[4] =
         {
-            float2(-1, -1), float2(0, -1), float2(1, -1),
-            float2(-1, 0), float2(0, 0), float2(1, 0),
-            float2(-1, 1), float2(0, 1), float2(1, 1)
+            float2(0, -1),
+            float2(-1, 0),
+            float2(1, 0),
+            float2(0, 1) 
         };
 
-        [loop]
-        for (int i = 0; i < 9; i++)
+        for (int i = 0; i < 4; i++)
         {
-            const float2 uv = texcoord + atrous_offsets[i] * step_size;
-            const float4 sample_color = tex2Dlod(input_sampler, float4(uv, 0.0, 0.0));
-            const float sample_depth = tex2Dlod(sViewDepthLinear, float4(uv, 0.0, 0.0)).r;
+            float2 uv = texcoord + atrous_offsets[i] * step_size;
+      
+            float4 sample_color = tex2Dlod(input_sampler, float4(uv, 0.0, 0.0));
+            float sample_depth = tex2Dlod(sViewDepthLinear, float4(uv, 0.0, 0.0)).r;
+            float3 sample_normal = tex2Dlod(sNormalLinear, float4(uv, 0.0, 0.0)).xyz * 2.0 - 1.0;
+            float is_valid_depth = step(sample_depth / (DepthMultiplier * 10.0), DepthThreshold);
 
-            if (sample_depth / (DepthMultiplier * 10.0) >= DepthThreshold)
-                continue;
+            float2 sample_clip_pos = uv * 2.0 - 1.0;
+            float3 sample_pos;
+            sample_pos.x = sample_clip_pos.x * inv_proj_scale.x * sample_depth;
+            sample_pos.y = -sample_clip_pos.y * inv_proj_scale.y * sample_depth;
+            sample_pos.z = sample_depth;
 
-            const float3 sample_normal = tex2Dlod(sNormalLinear, float4(uv, 0.0, 0.0)).xyz * 2.0 - 1.0;
-            const float3 sample_pos = GetViewPos(uv, sample_depth);
-            
-            float diff_c = distance(center_color.rgb, sample_color.rgb);
-            float w_c = exp(-(diff_c * diff_c) / c_phi);
-            float diff_n = dot(center_normal, sample_normal);
+            float3 diff_c_vec = center_color.rgb - sample_color.rgb;
+            float diff_c_sq = dot(diff_c_vec, diff_c_vec);
+            float3 diff_p_vec = center_pos - sample_pos;
+            float diff_p_sq = dot(diff_p_vec, diff_p_vec); 
+            float diff_n = dot(center_normal, sample_normal); 
+            float w_c = exp(-diff_c_sq / c_phi);
+            float w_p = exp(-diff_p_sq / p_phi);
             float w_n = pow(saturate(diff_n), n_phi);
-            float diff_p = distance(center_pos, sample_pos);
-            float w_p = exp(-(diff_p * diff_p) / p_phi);
 
-            const float weight = w_c * w_n * w_p;
+            float weight = w_c * w_n * w_p * is_valid_depth;
+
             sum += sample_color * weight;
             cum_w += weight;
         }
-        return cum_w > 1e-6 ? (sum / cum_w) : center_color;
+
+        return sum / cum_w;
     }
 
     struct GTAOConstants
@@ -948,17 +981,38 @@ namespace Barbatos_XeGTAO
 // :: TAA  :: |
 //------------|
 
+    float3 ClipToAABB(float3 aabb_min, float3 aabb_max, float3 history_sample)
+    {
+        float3 p_clip = 0.5 * (aabb_max + aabb_min);
+        float3 e_clip = 0.5 * (aabb_max - aabb_min) + 1e-6;
+        float3 v_clip = history_sample - p_clip;
+        float3 v_unit = v_clip / e_clip;
+        float3 a_unit = abs(v_unit);
+        float ma_unit = max(a_unit.x, max(a_unit.y, a_unit.z));
+
+        if (ma_unit > 1.0)
+            return p_clip + v_clip / ma_unit;
+        else
+            return history_sample;
+    }
+    
     float2 GetVelocityFromClosestFragment(float2 texcoord)
     {
         float2 pixel_size = ReShade::PixelSize;
         float closest_depth = 1.0;
-        float2 closest_velocity = 0;
-        const int2 offsets[9] = { int2(-1, -1), int2(0, -1), int2(1, -1), int2(-1, 0), int2(0, 0), int2(1, 0), int2(-1, 1), int2(0, 1), int2(1, 1) };
+        float2 closest_velocity = 0.0;
+
+        const float2 offsets[5] =
+        {
+            float2(0, 0), float2(0, -1), float2(-1, 0), float2(1, 0), float2(0, 1)
+        };
+
         [unroll]
-        for (int i = 0; i < 9; i++)
+        for (int i = 0; i < 5; i++)
         {
             float2 s_coord = texcoord + offsets[i] * pixel_size;
             float s_depth = getDepth(s_coord);
+            
             if (s_depth < closest_depth)
             {
                 closest_depth = s_depth;
@@ -968,32 +1022,19 @@ namespace Barbatos_XeGTAO
         return closest_velocity;
     }
     
-    void ComputeNeighborhoodMinMax(sampler2D color_tex, float2 texcoord, out float4 color_min, out float4 color_max)
+    void ComputeNeighborhoodMinMax(sampler2D color_tex, float2 texcoord, float3 center_color, out float3 color_min, out float3 color_max)
     {
-        float2 pixel_size = ReShade::PixelSize;
-        float4 center_val = GetLod(color_tex, float4(texcoord, 0, 0));
-        color_min = center_val;
-        color_max = center_val;
-        const int2 offsets_3x3[8] = { int2(-1, -1), int2(0, -1), int2(1, -1), int2(-1, 0), int2(1, 0), int2(-1, 1), int2(0, 1), int2(1, 1) };
-        [unroll]
-        for (int i = 0; i < 8; i++)
-        {
-            float4 n_val = GetLod(color_tex, float4(texcoord + offsets_3x3[i] * pixel_size, 0, 0));
-            color_min = min(color_min, n_val);
-            color_max = max(color_max, n_val);
-        }
-        const int2 offsets_cross[4] = { int2(0, -2), int2(-2, 0), int2(2, 0), int2(0, 2) };
-        float4 cross_min = center_val;
-        float4 cross_max = center_val;
-        [unroll]
-        for (int j = 0; j < 4; j++)
-        {
-            float4 n_val = GetLod(color_tex, float4(texcoord + offsets_cross[j] * pixel_size, 0, 0));
-            cross_min = min(cross_min, n_val);
-            cross_max = max(color_max, n_val);
-        }
-        color_min = lerp(cross_min, color_min, 0.5);
-        color_max = lerp(cross_max, color_max, 0.5);
+        float2 p = ReShade::PixelSize;
+        color_min = center_color;
+        color_max = center_color;
+
+        float3 c_up = GetLod(color_tex, float4(texcoord + float2(0, -p.y), 0, 0)).rgb;
+        float3 c_down = GetLod(color_tex, float4(texcoord + float2(0,  p.y), 0, 0)).rgb;
+        float3 c_left = GetLod(color_tex, float4(texcoord + float2(-p.x, 0), 0, 0)).rgb;
+        float3 c_right = GetLod(color_tex, float4(texcoord + float2( p.x, 0), 0, 0)).rgb;
+
+        color_min = min(color_min, min(min(c_up, c_down), min(c_left, c_right)));
+        color_max = max(color_max, max(max(c_up, c_down), max(c_left, c_right)));
     }
     
     float ComputeTrustFactor(float2 velocity_pixels, float low_threshold = 2.0, float high_threshold = 15.0)
@@ -1006,15 +1047,18 @@ namespace Barbatos_XeGTAO
     float Confidence(float2 uv, float2 velocity)
     {
         float2 prev_uv = uv + velocity;
+
         if (any(prev_uv < 0.0) || any(prev_uv > 1.0))
             return 0.0;
 
         float curr_luma = GetLuminance(GetColor(uv).rgb);
         float prev_luma = tex2D(sB_PrevLuma, prev_uv).r;
         float luma_error = abs(curr_luma - prev_luma);
+
         float flow_magnitude = length(velocity * float2(BUFFER_WIDTH, BUFFER_HEIGHT));
-        
-        if (flow_magnitude <= 1.0)
+        float subpixel_threshold = 1.0;
+
+        if (flow_magnitude <= subpixel_threshold)
             return 1.0;
 
         float2 destination_velocity = SampleMotionVectors(prev_uv);
@@ -1033,66 +1077,79 @@ namespace Barbatos_XeGTAO
     float4 PS_DenoiseAndAccumulate(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
         float center_depth = tex2Dlod(sViewDepthLinear, float4(uv, 0.0, 0.0)).r;
-        float3 center_normal = tex2Dlod(sNormalLinear, float4(uv, 0.0, 0.0)).xyz * 2.0 - 1.0;
-
+        
         if (center_depth / (DepthMultiplier * 10.0) >= DepthThreshold)
             return EnableDiffuse ? float4(0, 0, 0, 1) : float4(1, 1, 1, 1);
 
-        float4 spatial_result = atrous(sDenoiseTex1, uv, 2, center_depth, center_normal);
-        float4 current_signal = spatial_result;
-
+        float4 current_signal = atrous(sDenoiseTex1, uv, 2, center_depth, 0.0);
+        
         if (!EnableTemporal)
+        {
             return current_signal;
-        
-        float2 velocity = GetVelocityFromClosestFragment(uv);
-        float confidence = Confidence(uv, velocity);
+        }
 
+        float2 velocity = GetVelocityFromClosestFragment(uv);
         float2 reprojected_uv = uv + velocity;
-        
         float4 history_signal = GetLod(sHistory, float4(reprojected_uv, 0, 0));
-        
+
         float current_depth = getDepth(uv);
         float history_depth = getDepth(reprojected_uv);
         
-        bool valid_history = (reprojected_uv.x > 0.001 && reprojected_uv.x < 0.999 &&
-                              reprojected_uv.y > 0.001 && reprojected_uv.y < 0.999)
-                             && FRAME_COUNT > 1
-                             && abs(history_depth - current_depth) < 0.01;
+        bool inside_screen = all(saturate(reprojected_uv) == reprojected_uv);
+        bool valid_depth = abs(history_depth - current_depth) < 0.01;
 
-        if (!valid_history)
+        if (!inside_screen || FRAME_COUNT <= 1 || !valid_depth)
+        {
             return current_signal;
+        }
 
-        float4 sig_min, sig_max;
-        ComputeNeighborhoodMinMax(sDenoiseTex1, uv, sig_min, sig_max);
-        float4 clipped_history = clamp(history_signal, sig_min, sig_max);
-        float4 temporal_signal = lerp(current_signal, clipped_history, 0.9 * confidence);
+        float confidence = Confidence(uv, velocity);
 
+        float3 color_min, color_max;
+        ComputeNeighborhoodMinMax(sDenoiseTex1, uv, current_signal.rgb, color_min, color_max);
+        
+        float3 clipped_history_rgb = ClipToAABB(color_min, color_max, history_signal.rgb);
+        float blendFactor = TemporalStability * confidence;
+        
+        float3 temporal_rgb = lerp(current_signal.rgb, clipped_history_rgb, blendFactor);
+        float temporal_a = lerp(current_signal.a, history_signal.a, blendFactor);
+        
         float trust_factor = ComputeTrustFactor(velocity * BUFFER_SCREEN_SIZE);
+
+        [branch] 
         if (trust_factor < 1.0)
         {
-            float4 blurred_signal = current_signal;
-            float valid_samples = 1.0; 
-            const int blur_samples = 5;
+            float3 blurred_rgb = current_signal.rgb;
+            float blurred_a = current_signal.a;
+            const int blur_samples = 3;
+            
             [unroll]
             for (int i = 1; i < blur_samples; i++)
             {
                 float t = (float) i / (float) (blur_samples - 1);
                 float2 blur_coord = uv - velocity * 0.5 * t;
+
                 if (all(saturate(blur_coord) == blur_coord))
                 {
-                    blurred_signal += GetLod(sDenoiseTex1, float4(blur_coord,0,0));
-                    valid_samples += 1.0;
+                    float4 samp = tex2Dlod(sDenoiseTex1, float4(blur_coord, 0, 0));
+                    blurred_rgb += samp.rgb;
+                    blurred_a += samp.a;
                 }
             }
-            blurred_signal /= valid_samples;
-            temporal_signal = lerp(blurred_signal, temporal_signal, trust_factor);
+            blurred_rgb /= (float) blur_samples;
+            blurred_a /= (float) blur_samples;
+
+            temporal_rgb = lerp(blurred_rgb, temporal_rgb, trust_factor);
+            temporal_a = lerp(blurred_a, temporal_a, trust_factor);
         }
-        return temporal_signal;
+
+        return float4(temporal_rgb, temporal_a);
     }
     
-    void PS_UpdateHistory(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outHistory : SV_Target)
+    void PS_UpdateHistory(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outHistory : SV_Target0, out float outLuma : SV_Target1)
     {
         outHistory = GetLod(sTemp, uv);
+        outLuma = GetLuminance(GetColor(uv).rgb);
     }
 
     float4 PS_Output(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
@@ -1105,7 +1162,7 @@ namespace Barbatos_XeGTAO
         {
             if (depth >= DepthThreshold || depth < 0.0001)
                 return originalColor;
-            
+
             half visibility = aoData.a;
             float3 diffuseLight = aoData.rgb;
 
@@ -1135,6 +1192,7 @@ namespace Barbatos_XeGTAO
             occlusion = saturate(occlusion * Intensity);
             float3 debugColor = float3(0.5, 0.5, 0.5);
             debugColor = lerp(debugColor, OcclusionColor.rgb, occlusion);
+
             if (EnableDiffuse)
             {
                 debugColor += diffuseLight * DiffuseIntensity;
@@ -1154,7 +1212,7 @@ namespace Barbatos_XeGTAO
 
         return originalColor;
     }
-
+    
     technique Barbatos_XeGTAO
     {
         pass ViewDepth
@@ -1209,7 +1267,8 @@ namespace Barbatos_XeGTAO
         {
             VertexShader = PostProcessVS;
             PixelShader = PS_UpdateHistory;
-            RenderTarget = HistoryT;
+            RenderTarget0 = HistoryT;
+            RenderTarget1 = B_PrevLuma;
             ClearRenderTargets = true;
         }
         pass Output
