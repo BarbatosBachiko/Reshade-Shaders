@@ -68,7 +68,7 @@ uniform float STEPS <
     ui_category = "Performance";
     ui_label = "RT Steps";
     ui_tooltip = "Lower values = better performance but less details";
-> = 16.0;
+> = 20.0;
 
 BLENDING_COMBO(g_BlendMode, "Blending Mode", "Select how reflections are blended with the scene.", "Color Adjustments", false, 0, 0)
 
@@ -490,3 +490,4 @@ namespace Barbatos_SSR_Lite2
         }
     }
 }
+
