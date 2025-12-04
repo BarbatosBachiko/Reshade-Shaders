@@ -790,12 +790,12 @@ namespace Barbatos_XeGTAO
         float4 normalEdges = tex2D(sNormalEdges, texcoord);
         lpfloat3 viewspaceNormal = (lpfloat3) (normalEdges.xyz * 2.0 - 1.0);
         viewspaceZ *= 0.99920;
-
         const float3 pixCenterPos = XeGTAO_ComputeViewspacePosition(texcoord, viewspaceZ, consts);
         const lpfloat3 viewVec = (lpfloat3) normalize(-pixCenterPos);
 
         lpfloat sliceCount;
         lpfloat stepsPerSlice;
+        
         if (QualityLevel == 0)
         {
             sliceCount = 2;
@@ -825,19 +825,16 @@ namespace Barbatos_XeGTAO
         const lpfloat falloffFrom = effectRadius * ((lpfloat) 1 - (lpfloat) consts.EffectFalloffRange);
         const lpfloat falloffMul = (lpfloat) -1.0 / (falloffRange);
         const lpfloat falloffAdd = falloffFrom / (falloffRange) + (lpfloat) 1.0;
-
         lpfloat visibility = 0;
         lpfloat3 bentNormal = 0;
         lpfloat3 accumDiffuse = 0;
         lpfloat totalDiffuseWeight = 0;
-
         const lpfloat pixelTooCloseThreshold = 1.3;
         const float2 pixelDirRBViewspaceSizeAtCenterZ = viewspaceZ.xx * consts.NDCToViewMul_x_PixelSize;
         lpfloat screenspaceRadius = effectRadius / (lpfloat) pixelDirRBViewspaceSizeAtCenterZ.x;
-
         visibility += saturate((10 - screenspaceRadius) / 100) * 0.5;
         const lpfloat minS = (lpfloat) pixelTooCloseThreshold / screenspaceRadius;
-
+        
         for (lpfloat slice = 0; slice < sliceCount; slice++)
         {
             lpfloat sliceK = (slice + localNoise.x) / sliceCount;
@@ -853,32 +850,30 @@ namespace Barbatos_XeGTAO
             lpfloat projectedNormalVecLength = length(projectedNormalVec);
             lpfloat cosNorm = (lpfloat) saturate(dot(projectedNormalVec, viewVec) / projectedNormalVecLength);
             lpfloat n = signNorm * XeGTAO_FastACos(cosNorm);
-
             const lpfloat lowHorizonCos0 = cos(n + XE_GTAO_PI_HALF);
             const lpfloat lowHorizonCos1 = cos(n - XE_GTAO_PI_HALF);
             lpfloat horizonCos0 = lowHorizonCos0;
             lpfloat horizonCos1 = lowHorizonCos1;
 
-            [unroll]
             for (lpfloat step = 0; step < stepsPerSlice; step++)
             {
                 const lpfloat stepBaseNoise = lpfloat(slice + step * stepsPerSlice) * 0.6180339887498948482;
                 lpfloat stepNoise = frac(localNoise.y + stepBaseNoise);
                 lpfloat s = (step + stepNoise) / (stepsPerSlice);
-                s = (lpfloat) pow(s, (lpfloat) consts.SampleDistributionPower);
+                
+                s = (lpfloat) pow(abs(s), (lpfloat) consts.SampleDistributionPower);
                 s += minS;
 
                 lpfloat2 sampleOffset = s * omega;
                 sampleOffset = round(sampleOffset) * (lpfloat2) consts.ViewportPixelSize;
-
                 float2 sampleScreenPos0 = texcoord + sampleOffset;
-                float SZ0 = tex2D(sDepth, sampleScreenPos0).r;
+                
+                float SZ0 = tex2Dlod(sDepth, float4(sampleScreenPos0, 0, 0)).r;
                 float3 samplePos0 = XeGTAO_ComputeViewspacePosition(sampleScreenPos0, SZ0, consts);
-
                 float2 sampleScreenPos1 = texcoord - sampleOffset;
-                float SZ1 = tex2D(sDepth, sampleScreenPos1).r;
+                float SZ1 = tex2Dlod(sDepth, float4(sampleScreenPos1, 0, 0)).r;
+                
                 float3 samplePos1 = XeGTAO_ComputeViewspacePosition(sampleScreenPos1, SZ1, consts);
-
                 float3 sampleDelta0 = (samplePos0 - float3(pixCenterPos));
                 float3 sampleDelta1 = (samplePos1 - float3(pixCenterPos));
                 lpfloat sampleDist0 = (lpfloat) length(sampleDelta0);
@@ -886,12 +881,10 @@ namespace Barbatos_XeGTAO
 
                 lpfloat3 sampleHorizonVec0 = (lpfloat3) (sampleDelta0 / sampleDist0);
                 lpfloat3 sampleHorizonVec1 = (lpfloat3) (sampleDelta1 / sampleDist1);
-
                 lpfloat falloffBase0 = length(lpfloat3(sampleDelta0.x, sampleDelta0.y, sampleDelta0.z * (1 + consts.ThinOccluderCompensation)));
                 lpfloat falloffBase1 = length(lpfloat3(sampleDelta1.x, sampleDelta1.y, sampleDelta1.z * (1 + consts.ThinOccluderCompensation)));
                 lpfloat weight0 = saturate(falloffBase0 * falloffMul + falloffAdd);
                 lpfloat weight1 = saturate(falloffBase1 * falloffMul + falloffAdd);
-                
                 lpfloat shc0 = (lpfloat) dot(sampleHorizonVec0, viewVec);
                 lpfloat shc1 = (lpfloat) dot(sampleHorizonVec1, viewVec);
 
@@ -900,19 +893,17 @@ namespace Barbatos_XeGTAO
 
                 horizonCos0 = max(horizonCos0, shc0);
                 horizonCos1 = max(horizonCos1, shc1);
-
+                
                 if (EnableDiffuse)
                 {
                     float3 col0 = GetColor(sampleScreenPos0).rgb;
                     float3 col1 = GetColor(sampleScreenPos1).rgb;
                     
-                    // Cosine Theta term: N dot L
                     float3 L0 = normalize(sampleDelta0);
                     float3 L1 = normalize(sampleDelta1);
                     
                     float NdotL0 = saturate(dot(viewspaceNormal, L0));
                     float NdotL1 = saturate(dot(viewspaceNormal, L1));
-                    
                     accumDiffuse += col0 * NdotL0 * weight0;
                     accumDiffuse += col1 * NdotL1 * weight1;
                     totalDiffuseWeight += (weight0 + weight1);
@@ -926,7 +917,6 @@ namespace Barbatos_XeGTAO
             lpfloat iarc1 = ((lpfloat) cosNorm + (lpfloat) 2 * (lpfloat) h1 * (lpfloat) sin(n) - (lpfloat) cos((lpfloat) 2 * (lpfloat) h1 - n)) / (lpfloat) 4;
             lpfloat localVisibility = (lpfloat) projectedNormalVecLength * (lpfloat) (iarc0 + iarc1);
             visibility += localVisibility;
-
             if (ComputeBentNormals && !EnableDiffuse)
             {
                 lpfloat t0 = (6 * sin(h0 - n) - sin(3 * h0 - n) + 6 * sin(h1 - n) - sin(3 * h1 - n) + 16 * sin(n) - 3 * (sin(h0 + n) + sin(h1 + n))) / 12;
@@ -938,7 +928,7 @@ namespace Barbatos_XeGTAO
         }
 
         visibility /= (lpfloat) sliceCount;
-        visibility = pow(visibility, (lpfloat) consts.FinalValuePower);
+        visibility = pow(max(1e-5, visibility), (lpfloat) consts.FinalValuePower);
         visibility = max((lpfloat) 0.03, visibility);
         
         float3 finalDiffuse = 0;
@@ -948,7 +938,6 @@ namespace Barbatos_XeGTAO
         }
 
         visibility = saturate(visibility);
-        
         if (EnableDiffuse)
         {
             return float4(finalDiffuse, visibility);
@@ -959,7 +948,6 @@ namespace Barbatos_XeGTAO
                 bentNormal = normalize(bentNormal + half3(0, 0, 1e-6));
             else
                 bentNormal = half3(0, 0, 1);
-            
             float encoded = XeGTAO_EncodeVisibilityBentNormal(visibility, bentNormal);
             return ReconstructFloat4(encoded);
         }
