@@ -990,10 +990,11 @@ namespace Barbatos_SSR225
         float3 finalColor;
         if (g_BlendMode == 0)
         {
-            // Energy Conservation
             float3 kS = F;
-            float3 kD = 1.0 - kS;
-            kD *= (1.0 - Metallic);
+            float effectiveIntensity = saturate(Intensity);
+            
+            float3 kD = 1.0 - (kS * effectiveIntensity);
+            kD *= (1.0 - (Metallic * effectiveIntensity));
 
             float3 diffuseComponent = originalColor * kD;
             float3 specularComponent = reflectionColor * kS * Intensity;
