@@ -1,7 +1,7 @@
 /*----------------------------------------------|
 | :: Barbatos SSR (Screen-Space Reflections) :: |
 '-----------------------------------------------|
-| Version: 0.4                                  |
+| Version: 0.4.1                                |
 | Author: Barbatos                              |
 | License: MIT                                  |
 '----------------------------------------------*/
@@ -23,7 +23,8 @@ static const float2 ZERO_LOD = float2(0.0, 0.0);
 
 uniform float Intensity <
     ui_type = "drag";
-    ui_min = 0.0; ui_max = 2.0; ui_step = 0.01;
+    ui_min = 0.0;
+    ui_max = 2.0; ui_step = 0.01;
     ui_category = "Basic Settings";
     ui_label = "Reflection Strength";
     ui_tooltip = "Overall intensity of reflections";
@@ -55,7 +56,8 @@ uniform float SurfaceSharpness <
 
 uniform float MetallicLook <
     ui_type = "drag";
-    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+    ui_min = 0.0; ui_max = 1.0;
+    ui_step = 0.01;
     ui_category = "Surface Quality";
     ui_label = "Metallic Look";
     ui_tooltip = "Make surfaces look more metallic (0=non-metal, 1=metal)";
@@ -95,7 +97,8 @@ uniform int QualityPreset <
 
 uniform float RenderResolution <
     ui_type = "drag";
-    ui_min = 0.3; ui_max = 1.0; ui_step = 0.05;
+    ui_min = 0.3; ui_max = 1.0;
+    ui_step = 0.05;
     ui_category = "Performance";
     ui_label = "Render Resolution";
     ui_tooltip = "Lower values = better performance but less details";
@@ -130,7 +133,6 @@ uniform float VERTICAL_FOV <
     ui_category = "Advanced";
     ui_label = "Vertical FOV";
 > = 37.0;
-
 
 uniform int ViewMode <
     ui_type = "combo";
@@ -210,14 +212,14 @@ float2 SampleMotionVectors(float2 texcoord)
 #elif USE_MARTY_LAUNCHPAD_MOTION
     float2 SampleMotionVectors(float2 texcoord) {
         return GetLod(Deferred::sMotionVectorsTex, texcoord).rg;
-    }
+}
 #elif USE_VORT_MOTION
     float2 SampleMotionVectors(float2 texcoord) {
         return GetLod(sMotVectTexVort, texcoord).rg;
-    }
+}
 #endif
 
-namespace Barbatos_SSR225
+namespace Barbatos_SSR227
 {
     texture TNormal
     {
@@ -300,6 +302,12 @@ namespace Barbatos_SSR225
 // :: Utility::|
 //-------------|
 
+    struct VS_OUTPUT
+    {
+        float4 vpos : SV_Position;
+        float2 uv : TEXCOORD;
+    };
+
     struct Ray
     {
         float3 origin;
@@ -319,7 +327,6 @@ namespace Barbatos_SSR225
     }
     
     static const float DIELECTRIC_REFLECTANCE = 0.04;
-
     float3 F_Schlick(float VdotH, float3 f0)
     {
         return f0 + (1.0.xxx - f0) * pow(1.0 - VdotH, 5.0);
@@ -348,7 +355,6 @@ namespace Barbatos_SSR225
         float b = 2.0 * u.y - 1.0;
 
         float r, phi;
-
         if ((a * a) > (b * b))
         {
             r = a;
@@ -382,6 +388,11 @@ namespace Barbatos_SSR225
     {
         float lum = GetLuminance(color);
         return lerp(lum.xxx, color, saturation);
+    }
+
+    float GetSpatialTemporalNoise(float2 pos)
+    {
+        return frac(52.9829189 * frac(0.06711056 * pos.x + 0.00583715 * pos.y + 0.006237 * (float) (FRAME_COUNT % 64)));
     }
     
 //------------------------------------|
@@ -425,17 +436,13 @@ namespace Barbatos_SSR225
     {
         if (BumpIntensity == 0.0)
             return normal;
-
         float l00 = GetColor(texcoord + ReShade::PixelSize * float2(-1, -1)).g, l10 = GetColor(texcoord + ReShade::PixelSize * float2( 0, -1)).g, l20 = GetColor(texcoord + ReShade::PixelSize * float2( 1, -1)).g;
         float l01 = GetColor(texcoord + ReShade::PixelSize * float2(-1,  0)).g, l21 = GetColor(texcoord + ReShade::PixelSize * float2( 1,  0)).g;
         float l02 = GetColor(texcoord + ReShade::PixelSize * float2(-1,  1)).g, l12 = GetColor(texcoord + ReShade::PixelSize * float2( 0,  1)).g, l22 = GetColor(texcoord + ReShade::PixelSize * float2( 1,  1)).g;
-
         float Gx = (l20 + 2.0 * l21 + l22) - (l00 + 2.0 * l01 + l02);
         float Gy = (l02 + 2.0 * l12 + l22) - (l00 + 2.0 * l10 + l20);
-
         if (length(float2(Gx, Gy)) < SobelEdgeThreshold)
             return normal;
-
         float2 slope = float2(Gx, Gy) * BumpIntensity;
         float3 up = abs(normal.y) < 0.99 ? float3(0, 1, 0) : float3(1, 0, 0);
         float3 T = normalize(cross(up, normal));
@@ -469,10 +476,11 @@ namespace Barbatos_SSR225
     {
         HitResult result;
         result.found = false;
+        result.viewPos = 0.0;
+        result.uv = 0.0;
 
         float step_scale, min_step_size, max_step_size;
         int refinement_steps;
-
         if (Quality == 1) // Performance
         {
             refinement_steps = 5;
@@ -504,16 +512,13 @@ namespace Barbatos_SSR225
 
             if (totalDist > 10.0) 
                 break;
-
             float2 uvCurr = ViewPosToUV(currPos);
             if (any(uvCurr < 0.0) || any(uvCurr > 1.0))
                 break;
-
             float sceneDepth = GetDepth(uvCurr);
             float thickness = abs(currPos.z - sceneDepth);
 
             float adaptiveThickness = THICKNESS_THRESHOLD * (1.0 + totalDist * 0.1);
-
             if (currPos.z < sceneDepth || thickness > adaptiveThickness)
             {
                 prevPos = currPos;
@@ -569,32 +574,32 @@ namespace Barbatos_SSR225
     {
         if (!EnableGlossy || Roughness <= 0.0)
             return GetColor(float4(sample_uv, 0, 0)).rgb;
-
         float gloss = 1.0 - Roughness;
         float specularPower = pow(2.0, 10.0 * gloss + 1.0);
         float coneTheta = specularPowerToConeAngle(specularPower) * 0.5;
 
         if (coneTheta <= 0.001)
             return GetColor(float4(sample_uv, 0, 0)).rgb;
-
         float2 deltaP = (sample_uv - pixel_uv) * BUFFER_SCREEN_SIZE;
         float adjacentLength = length(deltaP);
-
         if (adjacentLength <= 1.0)
             return GetColor(float4(sample_uv, 0, 0)).rgb;
-
         float oppositeLength = isoscelesTriangleOpposite(adjacentLength, coneTheta);
         float incircleSize = isoscelesTriangleInRadius(oppositeLength, adjacentLength);
         float blurRadiusUV = incircleSize * ReShade::PixelSize.x;
 
         float3 reflectionColor = 0.0.xxx;
         int adaptedSamples = (Roughness > 0.5) ? max(1, GlossySamples / 2) : GlossySamples;
-
+        float noise = GetSpatialTemporalNoise(pixel_uv * BUFFER_SCREEN_SIZE);
         [loop]
         for (int i = 0; i < adaptedSamples; ++i)
         {
-            float2 random_seed = pixel_uv * BUFFER_SCREEN_SIZE + float2(i, i * 2.0) + float2(float(FRAME_COUNT % 100), float(FRAME_COUNT % 50));
-            float2 u = frac(sin(float2(dot(random_seed, float2(12.9898, 78.233)), dot(random_seed, float2(39.345, 41.123)))) * 43758.5453);
+            // R2 + Temporal Noise Jitter
+            float2 u = float2(
+                frac(noise + float(i) * 0.75487766621), // 1/1.3247179
+                frac(noise + float(i) * 0.56984029099) // 1/1.7548776
+            );
+
             float2 offset = ConcentricSquareMapping(u) * blurRadiusUV;
             reflectionColor += GetColor(float4(sample_uv + offset, 0, 0)).rgb;
         }
@@ -629,7 +634,6 @@ namespace Barbatos_SSR225
         {
             float2(0, 0), float2(0, -1), float2(-1, 0), float2(1, 0), float2(0, 1)
         };
-
         [unroll]
         for (int i = 0; i < 5; i++)
         {
@@ -648,7 +652,6 @@ namespace Barbatos_SSR225
     void ComputeNeighborhoodMinMax(sampler2D color_tex, float2 texcoord, float3 center_color, out float3 color_min, out float3 color_max)
     {
         float2 p = ReShade::PixelSize;
-        
         color_min = center_color;
         color_max = center_color;
 
@@ -673,22 +676,17 @@ namespace Barbatos_SSR225
         float2 prev_uv = uv + velocity;
         if (any(prev_uv < 0.0) || any(prev_uv > 1.0))
             return 0.0;
-
         float curr_luma = GetLuminance(GetColor(uv).rgb);
         float prev_luma = tex2D(sB_PrevLuma, prev_uv).r;
         float luma_error = abs(curr_luma - prev_luma);
-
         float flow_magnitude = length(velocity * float2(BUFFER_WIDTH, BUFFER_HEIGHT));
         float subpixel_threshold = 1.0;
-        
         if (flow_magnitude <= subpixel_threshold)
             return 1.0;
-
         float2 destination_velocity = SampleMotionVectors(prev_uv);
         float2 diff = velocity - destination_velocity;
         float error = length(diff);
         float normalized_error = error / length(velocity);
-
         float motion_penalty = flow_magnitude;
         float length_conf = rcp(motion_penalty * 0.05 + 1.0);
         float consistency_conf = rcp(normalized_error + 1.0);
@@ -701,15 +699,27 @@ namespace Barbatos_SSR225
 // :: Pixel Shaders ::|
 //--------------------|
 
-    void PS_GBuffer_Gen(float4 vpos : SV_Position, float2 uv : TEXCOORD, out float4 outNormal : SV_Target)
+    void PS_GBuffer_Gen(VS_OUTPUT input, out float4 outNormal : SV_Target)
     {
-        outNormal.rgb = CalculateNormal(uv.xy);
-        outNormal.a = GetDepth(uv.xy);
+        if (GetDepth(input.uv) >= 1.0)
+        {
+            outNormal = float4(0.5, 0.5, 1.0, 1.0);
+            return;
+        }
+
+        outNormal.rgb = CalculateNormal(input.uv);
+        outNormal.a = GetDepth(input.uv);
     }
 
-    void PS_SmoothNormals_H(float4 vpos : SV_Position, float2 uv : TEXCOORD, out float4 outNormal : SV_Target)
+    void PS_SmoothNormals_H(VS_OUTPUT input, out float4 outNormal : SV_Target)
     {
-        float4 color = GetLod(sNormTex_Pass1, uv);
+        if (GetDepth(input.uv) >= 1.0)
+        {
+            outNormal = float4(0.5, 0.5, 1.0, 1.0);
+            return;
+        }
+
+        float4 color = GetLod(sNormTex_Pass1, input.uv);
         float4 s = 0.0, s1 = 0.0;
         float sc = 0.0;
         
@@ -718,10 +728,9 @@ namespace Barbatos_SSR225
 
         float2 p = ReShade::PixelSize * SNWidth;
         float T = rcp(max(Smooth_Threshold * saturate(2 * (1 - color.a)), 0.0001));
-
         for (int x = -SNSamples; x <= SNSamples; x++)
         {
-            s = GetLod(sNormTex_Pass1, uv.xy + float2(x * p.x, 0));
+            s = GetLod(sNormTex_Pass1, input.uv + float2(x * p.x, 0));
             float diff = dot(0.333, abs(s.rgb - color.rgb)) + abs(s.a - color.a) * (FAR_PLANE * Smooth_Threshold);
             diff = 1 - saturate(diff * T);
             s1 += s * diff;
@@ -730,9 +739,15 @@ namespace Barbatos_SSR225
         outNormal = s1.rgba / sc;
     }
     
-    void PS_SmoothNormals_V(float4 vpos : SV_Position, float2 uv : TEXCOORD, out float4 outNormal : SV_Target)
+    void PS_SmoothNormals_V(VS_OUTPUT input, out float4 outNormal : SV_Target)
     {
-        float4 color = GetLod(sNormTex_Pass2, uv);
+        if (GetDepth(input.uv) >= 1.0)
+        {
+            outNormal = float4(0.5, 0.5, 1.0, 1.0);
+            return;
+        }
+
+        float4 color = GetLod(sNormTex_Pass2, input.uv);
         float4 s = 0.0, s1 = 0.0;
         float sc = 0.0;
 
@@ -741,10 +756,9 @@ namespace Barbatos_SSR225
 
         float2 p = ReShade::PixelSize * SNWidth;
         float T = rcp(max(Smooth_Threshold * saturate(2 * (1 - color.a)), 0.0001));
-
         for (int x = -SNSamples; x <= SNSamples; x++)
         {
-            s = GetLod(sNormTex_Pass2, uv + float2(0, x * p.y));
+            s = GetLod(sNormTex_Pass2, input.uv + float2(0, x * p.y));
             float diff = dot(0.333, abs(s.rgb - color.rgb)) + abs(s.a - color.a) * (FAR_PLANE * Smooth_Threshold);
             diff = 1 - saturate(diff * T * 2);
             s1 += s * diff;
@@ -752,30 +766,34 @@ namespace Barbatos_SSR225
         }
         
         s1.rgba = s1.rgba / sc;
-        
         float3 finalNormal = s1.rgb;
-        finalNormal = ApplyBumpMapping(uv, finalNormal);
-        finalNormal = GeometryCorrection(uv, finalNormal);
+        finalNormal = ApplyBumpMapping(input.uv, finalNormal);
+        finalNormal = GeometryCorrection(input.uv, finalNormal);
         outNormal = float4(finalNormal * 0.5 + 0.5, s1.a);
     }
     
-    void PS_TraceReflections(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outReflection : SV_Target)
+    void PS_TraceReflections(VS_OUTPUT input, out float4 outReflection : SV_Target)
     {
-        float2 scaled_uv = uv / RenderResolution;
+        float2 scaled_uv = input.uv / RenderResolution;
         
-        float4 gbuffer = SampleGBuffer(scaled_uv);
-        float depth = gbuffer.a;
-        float3 normal = normalize(gbuffer.rgb);
-
-        if (depth >= 1.0)
+        if (any(scaled_uv > 1.0))
         {
             outReflection = 0;
             return;
         }
 
+        if (GetDepth(scaled_uv) >= 1.0)
+        {
+            outReflection = 0.0;
+            return;
+        }
+        
+        float4 gbuffer = SampleGBuffer(scaled_uv);
+        float depth = gbuffer.a;
+        float3 normal = normalize(gbuffer.rgb);
+
         float3 viewPos = UVToViewPos(scaled_uv, depth);
         float3 viewDir = -normalize(viewPos);
-
         float fReflectFloors = 0.0, fReflectWalls = 0.0, fReflectCeilings = 0.0;
         switch (ReflectionMode)
         {
@@ -803,7 +821,6 @@ namespace Barbatos_SSR225
         bool isCeiling = normal.y < -OrientationThreshold;
         bool isWall = abs(normal.y) <= OrientationThreshold;
         float orientationIntensity = (isFloor * fReflectFloors) + (isWall * fReflectWalls) + (isCeiling * fReflectCeilings);
-        
         if (orientationIntensity <= 0.0)
         {
             outReflection = 0;
@@ -831,10 +848,9 @@ namespace Barbatos_SSR225
 
         float3 reflectionColor = 0;
         float reflectionAlpha = 0.0;
-        
         if (hit.found)
         {
-            reflectionColor = GetGlossySample(hit.uv, scaled_uv);
+            reflectionColor = GetGlossySample(hit.uv, input.uv);
             float distFactor = saturate(1.0 - length(hit.viewPos - viewPos) / 10.0);
             float fadeRange = max(FadeDistance, 0.001);
             float depthFade = saturate((FadeDistance - depth) / fadeRange);
@@ -846,7 +862,7 @@ namespace Barbatos_SSR225
             float adaptiveDist = min(depth * 1.2 + 0.012, 10.0);
             float3 fbViewPos = viewPos + r.direction * adaptiveDist;
             float2 uvFb = saturate(ViewPosToUV(fbViewPos).xy);
-            reflectionColor = GetGlossySample(uvFb, scaled_uv);
+            reflectionColor = GetGlossySample(uvFb, input.uv);
             float vertical_fade = pow(saturate(1.0 - scaled_uv.y), 3.0);
             reflectionAlpha = vertical_fade;
         }
@@ -855,9 +871,15 @@ namespace Barbatos_SSR225
         outReflection = float4(reflectionColor, reflectionAlpha);
     }
     
-    void PS_Accumulate(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outBlended : SV_Target)
+    void PS_Accumulate(VS_OUTPUT input, out float4 outBlended : SV_Target)
     {
-        float2 packed_uv = uv * RenderResolution;
+        if (GetDepth(input.uv) >= 1.0)
+        {
+            outBlended = 0.0;
+            return;
+        }
+
+        float2 packed_uv = input.uv * RenderResolution;
         float4 current_reflection = GetLod(sReflection, float4(packed_uv, 0, 0));
 
         if (!EnableTAA)
@@ -866,24 +888,22 @@ namespace Barbatos_SSR225
             return;
         }
 
-        float2 velocity = GetVelocityFromClosestFragment(uv);
+        float2 velocity = GetVelocityFromClosestFragment(input.uv);
         
-        float2 reprojected_uv = uv + velocity;
+        float2 reprojected_uv = input.uv + velocity;
         float4 history_reflection = GetLod(sHistory, float4(reprojected_uv, 0, 0));
 
-        float current_depth = GetDepth(uv);
+        float current_depth = GetDepth(input.uv);
         float history_depth = GetDepth(reprojected_uv);
-        
         bool inside_screen = all(saturate(reprojected_uv) == reprojected_uv);
         bool valid_depth = abs(history_depth - current_depth) < 0.01;
-        
         if (!inside_screen || FRAME_COUNT <= 1 || !valid_depth)
         {
             outBlended = current_reflection;
             return;
         }
 
-        float confidence = Confidence(uv, velocity);
+        float confidence = Confidence(input.uv, velocity);
 
         float3 color_min, color_max;
         ComputeNeighborhoodMinMax(sReflection, packed_uv, current_reflection.rgb, color_min, color_max);
@@ -893,7 +913,6 @@ namespace Barbatos_SSR225
         float3 temporal_rgb = lerp(current_reflection.rgb, clipped_history_rgb, 0.9 * confidence);
         float temporal_a = lerp(current_reflection.a, history_reflection.a, 0.9 * confidence);
         float trust_factor = ComputeTrustFactor(velocity * BUFFER_SCREEN_SIZE);
-        
         [branch] 
         if (trust_factor < 1.0)
         {
@@ -915,29 +934,36 @@ namespace Barbatos_SSR225
         outBlended = float4(temporal_rgb, temporal_a);
     }
 
-    void PS_UpdateHistory(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outHistory : SV_Target0, out float outLuma : SV_Target1)
+    void PS_UpdateHistory(VS_OUTPUT input, out float4 outHistory : SV_Target0, out float outLuma : SV_Target1)
     {
-        outHistory = GetLod(sTemp, float4(uv, 0, 0));
-        outLuma = GetLuminance(GetColor(uv).rgb);
+        if (GetDepth(input.uv) >= 1.0)
+        {
+            outHistory = 0.0;
+            outLuma = GetLuminance(GetColor(input.uv).rgb);
+            return;
+        }
+
+        outHistory = GetLod(sTemp, float4(input.uv, 0, 0));
+        outLuma = GetLuminance(GetColor(input.uv).rgb);
     }
 
-    void PS_Output(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outColor : SV_Target)
+    void PS_Output(VS_OUTPUT input, out float4 outColor : SV_Target)
     {
         if (ViewMode != 0)
         {
             switch (ViewMode)
             {
                 case 1:
-                    outColor = float4(GetLod(sTemp, uv).rgb, 1.0);
+                    outColor = float4(GetLod(sTemp, input.uv).rgb, 1.0);
                     return;
                 case 2:
-                    outColor = float4(SampleGBuffer(uv).rgb * 0.5 + 0.5, 1.0);
+                    outColor = float4(SampleGBuffer(input.uv).rgb * 0.5 + 0.5, 1.0);
                     return;
                 case 3:
-                    outColor = SampleGBuffer(uv).aaaa;
+                    outColor = SampleGBuffer(input.uv).aaaa;
                     return;
                 case 5:{    
-                        float2 m = GetMotionVectors(uv);
+                        float2 m = GetMotionVectors(input.uv);
                         float v_mag = length(m) * 100.0;
                         float a = atan2(m.y, m.x);
                         float3 hsv_color = HSVToRGB(float3((a / (2.0 * PI)) + 0.5, 1.0, 1.0));
@@ -947,7 +973,7 @@ namespace Barbatos_SSR225
                         return;
                     }
                 case 6:{
-                        float2 full_res_uv = uv;
+                        float2 full_res_uv = input.uv;
                         float2 velocity = GetVelocityFromClosestFragment(full_res_uv);
                         float conf = Confidence(full_res_uv, velocity);
                         float3 confidenceColor;
@@ -961,29 +987,25 @@ namespace Barbatos_SSR225
             }
         }
 
-        float3 originalColor = GetColor(uv).rgb;
-        
-        float4 gbuffer = SampleGBuffer(uv);
+        float3 originalColor = GetColor(input.uv).rgb;
+        float4 gbuffer = SampleGBuffer(input.uv);
         float depth = gbuffer.a;
         float3 normal = gbuffer.rgb;
-
         if (depth >= 1.0)
         {
             outColor = float4(originalColor, 1.0);
             return;
         }
 
-        float4 reflectionSample = GetLod(sTemp, uv);
+        float4 reflectionSample = GetLod(sTemp, input.uv);
         float3 reflectionColor = reflectionSample.rgb;
         float reflectionMask = reflectionSample.a;
 
         reflectionColor = AdjustContrast(reflectionColor, g_Contrast);
         reflectionColor = AdjustSaturation(reflectionColor, g_Saturation);
-
         // PBR
-        float3 viewDir = -normalize(UVToViewPos(uv, depth));
+        float3 viewDir = -normalize(UVToViewPos(input.uv, depth));
         float VdotN = saturate(dot(viewDir, normal));
-        
         float3 f0 = lerp(float3(DIELECTRIC_REFLECTANCE, DIELECTRIC_REFLECTANCE, DIELECTRIC_REFLECTANCE), originalColor, Metallic);
         float3 F = F_Schlick(VdotN, f0);
 
@@ -995,7 +1017,6 @@ namespace Barbatos_SSR225
             
             float3 kD = 1.0 - (kS * effectiveIntensity);
             kD *= (1.0 - (Metallic * effectiveIntensity));
-
             float3 diffuseComponent = originalColor * kD;
             float3 specularComponent = reflectionColor * kS * Intensity;
             
