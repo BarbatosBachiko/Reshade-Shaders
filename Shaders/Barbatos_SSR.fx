@@ -1,7 +1,7 @@
 /*----------------------------------------------|
 | :: Barbatos SSR (Screen-Space Reflections) :: |
 '-----------------------------------------------|
-| Version: 0.4.2                                |
+| Version: 0.4.3                                |
 | Author: Barbatos                              |
 | License: MIT                                  |
 '----------------------------------------------*/
@@ -26,17 +26,17 @@ uniform float Intensity <
     ui_min = 0.0;
     ui_max = 2.0; ui_step = 0.01;
     ui_category = "Basic Settings";
-    ui_label = "Reflection Strength";
+    ui_label = "Intensity";
     ui_tooltip = "Overall intensity of reflections";
 > = 1.0;
 
-uniform int ReflectionMode <
-    ui_type = "combo";
-    ui_items = "Floors Only\0Walls Only\0Ceilings Only\0Floors & Ceilings\0All Surfaces\0";
+uniform float THICKNESS_THRESHOLD <
+    ui_type = "drag";
+    ui_min = 0.001; ui_max = 0.6; ui_step = 0.001;
     ui_category = "Basic Settings";
-    ui_label = "Reflection Surfaces";
-    ui_tooltip = "Choose which surfaces show reflections";
-> = 4;
+    ui_label = "Thickness";
+    ui_tooltip = "Controls how 'thick' surfaces are before a ray passes through them.";
+> = 0.600;
 
 uniform float FadeDistance <
     ui_type = "drag";
@@ -45,6 +45,14 @@ uniform float FadeDistance <
     ui_label = "Fade Distance";
     ui_tooltip = "How far away reflections start to fade out";
 > = 4.999;
+
+uniform int ReflectionMode <
+    ui_type = "combo";
+    ui_items = "Floors Only\0Walls Only\0Ceilings Only\0Floors & Ceilings\0All Surfaces\0";
+    ui_category = "Surface Quality";
+    ui_label = "Reflection Surfaces";
+    ui_tooltip = "Choose which surfaces show reflections";
+> = 4;
 
 uniform float SurfaceSharpness <
     ui_type = "drag";
@@ -117,14 +125,6 @@ uniform int SmartSurfaceMode <
     ui_label = "Smart Surface Detection";
     ui_tooltip = "Quality of the normal smoothing filter.";
 > = 0;
-
-uniform float THICKNESS_THRESHOLD <
-    ui_type = "drag";
-    ui_min = 0.001; ui_max = 0.5; ui_step = 0.001;
-    ui_category = "Advanced Options";
-    ui_label = "Reflection Thickness Threshold";
-    ui_tooltip = "Controls how 'thick' surfaces are before a ray passes through them.";
-> = 0.085;
 
 uniform float VERTICAL_FOV <
     __UNIFORM_DRAG_FLOAT1
@@ -500,7 +500,7 @@ namespace Barbatos_SSR228
         float stepSize = min_step_size;
         float totalDist = 0.0;
         float3 prevPos = r.origin + (r.direction * stepSize * jitter);
-
+    
         [loop]
         for (int i = 0; i < num_steps; ++i)
         {
@@ -511,15 +511,15 @@ namespace Barbatos_SSR228
                 break;
             
             float2 uvCurr = ViewPosToUV(currPos, pScale);
-        
+    
             if (any(uvCurr < 0.0) || any(uvCurr > 1.0))
                 break;
             
             float sceneDepth = GetDepth(uvCurr);
             float thickness = abs(currPos.z - sceneDepth);
+            float max_threshold = THICKNESS_THRESHOLD * (1.0 + totalDist * 0.1);
+            float adaptiveThickness = clamp(stepSize * 1.5, 0.001, max_threshold);
 
-            float adaptiveThickness = THICKNESS_THRESHOLD * (1.0 + totalDist * 0.1);
-        
             if (currPos.z < sceneDepth || thickness > adaptiveThickness)
             {
                 prevPos = currPos;
@@ -530,6 +530,7 @@ namespace Barbatos_SSR228
 
             // Binary Search Refinement
             float3 lo = prevPos, hi = currPos;
+        
             [unroll]
             for (int ref_step = 0; ref_step < refinement_steps; ++ref_step)
             {
@@ -806,6 +807,13 @@ namespace Barbatos_SSR228
         r.origin = viewPos;
         r.direction = normalize(reflect(-viewDir, normal));
         r.origin += r.direction * 0.0001;
+        
+        float VdotN = dot(viewDir, normal);
+        if (VdotN > 0.9 || r.direction.z < 0.0)
+        {
+            outReflection = 0.0;
+            return;
+        }
 
         HitResult hit;
 
