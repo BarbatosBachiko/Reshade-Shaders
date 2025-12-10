@@ -1,7 +1,7 @@
 /*----------------------------------------------|
 | :: Barbatos SSR (Screen-Space Reflections) :: |
 '-----------------------------------------------|
-| Version: 0.4.3                                |
+| Version: 0.4.4                                |
 | Author: Barbatos                              |
 | License: MIT                                  |
 '----------------------------------------------*/
@@ -154,6 +154,7 @@ static const int GlossySamples = 10;
 static const float OrientationThreshold = 0.5;
 static const float GeoCorrectionIntensity = -0.01;
 static const bool EnableGlossy = true;
+static const float EDGE_MASK_THRESHOLD = 0.2;
 
 #if __RENDERER__== 0x9000
 static const int STEPS_PER_RAY_WALLS_DX9 = 20;
@@ -745,7 +746,7 @@ namespace Barbatos_SSR228
         outNormal = float4(finalNormal * 0.5 + 0.5, s1.a);
     }
     
-    void PS_TraceReflections(VS_OUTPUT input, out float4 outReflection : SV_Target)
+       void PS_TraceReflections(VS_OUTPUT input, out float4 outReflection : SV_Target)
     {
         float2 scaled_uv = input.uv / RenderResolution;
         if (any(scaled_uv > 1.0))
@@ -842,6 +843,11 @@ namespace Barbatos_SSR228
             float depthFade = saturate((FadeDistance - depth) / fadeRange);
             depthFade *= depthFade;
             reflectionAlpha = distFactor * depthFade;
+
+            float3 nR = SampleGBuffer(scaled_uv + float2(ReShade::PixelSize.x, 0)).rgb;
+            float3 nD = SampleGBuffer(scaled_uv + float2(0, ReShade::PixelSize.y)).rgb;
+            float edgeDelta = length(normal - nR) + length(normal - nD);
+            reflectionAlpha *= smoothstep(EDGE_MASK_THRESHOLD, 0.05, edgeDelta);
         }
         else
         {
