@@ -132,7 +132,7 @@ uniform float VERTICAL_FOV <
     ui_step = 0.1;
     ui_category = "Advanced";
     ui_label = "Vertical FOV";
-> = 37.0;
+> = 75.0;
 
 uniform int ViewMode <
     ui_type = "combo";
