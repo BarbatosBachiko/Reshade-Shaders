@@ -132,7 +132,7 @@ uniform float VERTICAL_FOV <
     ui_step = 0.1;
     ui_category = "Advanced";
     ui_label = "Vertical FOV";
-> = 70.0;
+> = 50.0;
 
 uniform int ViewMode <
     ui_type = "combo";
@@ -746,7 +746,7 @@ namespace Barbatos_SSR228
         outNormal = float4(finalNormal * 0.5 + 0.5, s1.a);
     }
     
-    void PS_TraceReflections(VS_OUTPUT input, out float4 outReflection : SV_Target)
+       void PS_TraceReflections(VS_OUTPUT input, out float4 outReflection : SV_Target)
     {
         float2 scaled_uv = input.uv / RenderResolution;
         if (any(scaled_uv > 1.0))
@@ -855,7 +855,8 @@ namespace Barbatos_SSR228
             float3 fbViewPos = viewPos + r.direction * adaptiveDist;
             float2 uvFb = saturate(ViewPosToUV(fbViewPos, pScale).xy);
             reflectionColor = GetGlossySample(uvFb, input.uv);
-            reflectionAlpha = smoothstep(0.0, 0.2, 1.0 - scaled_uv.y);
+            float vertical_fade = pow(saturate(1.0 - scaled_uv.y), 3.0);
+            reflectionAlpha = vertical_fade;
         }
         reflectionAlpha *= pow(saturate(dot(-viewDir, r.direction)), 2.0);
         reflectionAlpha *= orientationIntensity;
