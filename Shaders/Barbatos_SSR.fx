@@ -132,7 +132,7 @@ uniform float VERTICAL_FOV <
     ui_step = 0.1;
     ui_category = "Advanced";
     ui_label = "Vertical FOV";
-> = 50.0;
+> = 60.0;
 
 uniform int ViewMode <
     ui_type = "combo";
@@ -390,7 +390,6 @@ namespace Barbatos_SSR228
         return frac(52.9829189 * frac(0.06711056 * pos.x + 0.00583715 * pos.y));
     }
 
-    
 //------------------------------------|
 // :: View Space & Normal Functions ::|
 //------------------------------------|
@@ -456,6 +455,33 @@ namespace Barbatos_SSR228
         float lumDown = GetLuminance(GetColor(texcoord + ReShade::PixelSize * int2(0, 1)).rgb);
         float3 bumpNormal = normalize(float3(lumRight - lumCenter, lumDown - lumCenter, 1.0));
         return normalize(normal + bumpNormal * GeoCorrectionIntensity);
+    }
+    
+    float4 ComputeSmoothedNormal(float2 uv, float2 direction, sampler sInput)
+    {
+        float4 color = GetLod(sInput, uv);
+        float4 s = 0.0, s1 = 0.0;
+        float sc = 0.0;
+
+        float SNWidth = (SmartSurfaceMode == 0) ? 5.5 : (SmartSurfaceMode == 1) ? 2.5 : 1.0;
+        int SNSamples = (SmartSurfaceMode == 0) ? 1 : (SmartSurfaceMode == 1) ? 3 : 30;
+
+        float2 p = ReShade::PixelSize * SNWidth * direction;
+    
+        float T = rcp(max(Smooth_Threshold * saturate(2 * (1 - color.a)), 0.0001));
+
+        [loop]
+        for (int x = -SNSamples; x <= SNSamples; x++)
+        {
+            s = GetLod(sInput, uv + (p * x));
+        
+            float diff = dot(0.333, abs(s.rgb - color.rgb)) + abs(s.a - color.a) * (FAR_PLANE * Smooth_Threshold);
+            diff = 1 - saturate(diff * T);
+            s1 += s * diff;
+            sc += diff;
+        }
+    
+        return s1 / sc;
     }
     
     float4 SampleGBuffer(float2 uv)
@@ -692,27 +718,10 @@ namespace Barbatos_SSR228
             outNormal = float4(0.5, 0.5, 1.0, 1.0);
             return;
         }
-
-        float4 color = GetLod(sNormTex_Pass1, input.uv);
-        float4 s = 0.0, s1 = 0.0;
-        float sc = 0.0;
-        
-        float SNWidth = (SmartSurfaceMode == 0) ? 5.5 : (SmartSurfaceMode == 1) ? 2.5 : 1.0;
-        int SNSamples = (SmartSurfaceMode == 0) ? 1 : (SmartSurfaceMode == 1) ? 3 : 30;
-
-        float2 p = ReShade::PixelSize * SNWidth;
-        float T = rcp(max(Smooth_Threshold * saturate(2 * (1 - color.a)), 0.0001));
-        for (int x = -SNSamples; x <= SNSamples; x++)
-        {
-            s = GetLod(sNormTex_Pass1, input.uv + float2(x * p.x, 0));
-            float diff = dot(0.333, abs(s.rgb - color.rgb)) + abs(s.a - color.a) * (FAR_PLANE * Smooth_Threshold);
-            diff = 1 - saturate(diff * T);
-            s1 += s * diff;
-            sc += diff;
-        }
-        outNormal = s1.rgba / sc;
-    }
     
+        outNormal = ComputeSmoothedNormal(input.uv, float2(1, 0), sNormTex_Pass1);
+    }
+
     void PS_SmoothNormals_V(VS_OUTPUT input, out float4 outNormal : SV_Target)
     {
         if (GetDepth(input.uv) >= 1.0)
@@ -721,32 +730,14 @@ namespace Barbatos_SSR228
             return;
         }
 
-        float4 color = GetLod(sNormTex_Pass2, input.uv);
-        float4 s = 0.0, s1 = 0.0;
-        float sc = 0.0;
-
-        float SNWidth = (SmartSurfaceMode == 0) ? 5.5 : (SmartSurfaceMode == 1) ? 2.5 : 1.0;
-        int SNSamples = (SmartSurfaceMode == 0) ? 1 : (SmartSurfaceMode == 1) ? 3 : 30;
-
-        float2 p = ReShade::PixelSize * SNWidth;
-        float T = rcp(max(Smooth_Threshold * saturate(2 * (1 - color.a)), 0.0001));
-        for (int x = -SNSamples; x <= SNSamples; x++)
-        {
-            s = GetLod(sNormTex_Pass2, input.uv + float2(0, x * p.y));
-            float diff = dot(0.333, abs(s.rgb - color.rgb)) + abs(s.a - color.a) * (FAR_PLANE * Smooth_Threshold);
-            diff = 1 - saturate(diff * T * 2);
-            s1 += s * diff;
-            sc += diff;
-        }
-        
-        s1.rgba = s1.rgba / sc;
-        float3 finalNormal = s1.rgb;
+        float4 smoothed = ComputeSmoothedNormal(input.uv, float2(0, 1), sNormTex_Pass2);
+        float3 finalNormal = smoothed.rgb;
         finalNormal = ApplyBumpMapping(input.uv, finalNormal);
         finalNormal = GeometryCorrection(input.uv, finalNormal);
-        outNormal = float4(finalNormal * 0.5 + 0.5, s1.a);
+        outNormal = float4(finalNormal * 0.5 + 0.5, smoothed.a);
     }
     
-       void PS_TraceReflections(VS_OUTPUT input, out float4 outReflection : SV_Target)
+    void PS_TraceReflections(VS_OUTPUT input, out float4 outReflection : SV_Target)
     {
         float2 scaled_uv = input.uv / RenderResolution;
         if (any(scaled_uv > 1.0))
@@ -855,8 +846,7 @@ namespace Barbatos_SSR228
             float3 fbViewPos = viewPos + r.direction * adaptiveDist;
             float2 uvFb = saturate(ViewPosToUV(fbViewPos, pScale).xy);
             reflectionColor = GetGlossySample(uvFb, input.uv);
-            float vertical_fade = pow(saturate(1.0 - scaled_uv.y), 3.0);
-            reflectionAlpha = vertical_fade;
+            reflectionAlpha = smoothstep(0.0, 0.2, 1.0 - scaled_uv.y);
         }
         reflectionAlpha *= pow(saturate(dot(-viewDir, r.direction)), 2.0);
         reflectionAlpha *= orientationIntensity;
