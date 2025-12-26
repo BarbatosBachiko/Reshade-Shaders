@@ -1,7 +1,7 @@
 /*----------------------------------------------.
 | ::             NeoSSAO 2                   :: |
 |-----------------------------------------------|
-| Version: 0.9                                  |
+| Version: 0.9.1                                |
 | Author: Barbatos                              |
 | License: MIT                                  |
 '----------------------------------------------*/
@@ -25,7 +25,6 @@
 
 #define GetColor(c) tex2Dlod(ReShade::BackBuffer, float4((c).xy, 0, 0))
 #define GetLod(s,c) tex2Dlod(s, float4((c).xy, 0, 0))
-#define getDepth(coords) (ReShade::GetLinearizedDepth(coords))
 
 uniform float Intensity <
     ui_category = "Occlusion Settings";
@@ -55,6 +54,13 @@ uniform int RaySteps <
     ui_min = 3; ui_max = 32;
 > = 3;
 
+uniform int SampleCount <
+    ui_type = "slider";
+    ui_category = "Ray Marching";
+    ui_label = "SampleCount";
+    ui_min = 1; ui_max = 16;
+> = 8;
+
 uniform float FadeStart <
     ui_category = "Fade";
     ui_type = "slider";
@@ -75,12 +81,18 @@ uniform bool EnableTemporal <
     ui_label = "Enable TAA";
 > = false;
 
+uniform bool EnableDepthMultiplier <
+    ui_category = "Depth & Normals";
+    ui_type = "checkbox";
+    ui_label = "DepthMultiplier";
+> = false;
+
 uniform float DepthMultiplier <
-    ui_type = "slider";
+    ui_type = "drag";
     ui_category = "Depth & Normals";
     ui_label = "Depth Multiplier";
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
-> = 0.18;
+> = 1.0;
     
 uniform float DepthThreshold <
     ui_type = "slider";
@@ -110,7 +122,6 @@ uniform int ViewMode <
 > = 0;
 
 uniform int FRAME_COUNT < source = "framecount"; >;
-static const int SampleCount = 12;
 
 #if USE_MARTY_LAUNCHPAD_MOTION
     namespace Deferred 
@@ -198,6 +209,11 @@ namespace NEOSPACEAO
         float2 pScale : TEXCOORD1;
     };
 
+    float GetDepth(float2 xy)
+    {
+        return ReShade::GetLinearizedDepth(xy);
+    }
+    
     void VS_NeoSSAO(in uint id : SV_VertexID, out VS_OUTPUT outStruct)
     {
         outStruct.uv.x = (id == 2) ? 2.0 : 0.0;
@@ -217,7 +233,7 @@ namespace NEOSPACEAO
     
     float3 GVPFUV(float2 uv, float2 pScale, float depthMult)
     {
-        float depth = getDepth(uv);
+        float depth = GetDepth(uv);
         return UVToViewPos(uv, depth * FAR_PLANE, pScale, depthMult);
     }
 
@@ -286,7 +302,7 @@ namespace NEOSPACEAO
         for (int i = 0; i < 5; i++)
         {
             float2 s_coord = texcoord + offsets[i] * pixel_size;
-            float s_depth = getDepth(s_coord);
+            float s_depth = GetDepth(s_coord);
             if (s_depth < closest_depth)
             {
                 closest_depth = s_depth;
@@ -330,8 +346,8 @@ namespace NEOSPACEAO
             return current_ao;
             
         float history_ao = tex2Dlod(sHistoryParams, float4(reprojected_uv, 0, 0)).r;
-        float current_depth = getDepth(input.uv);
-        float history_depth = getDepth(reprojected_uv);
+        float current_depth = GetDepth(input.uv);
+        float history_depth = GetDepth(reprojected_uv);
 
         if (abs(history_depth - current_depth) > 0.01)
             return current_ao;
@@ -352,22 +368,27 @@ namespace NEOSPACEAO
 
     float4 PS_GenNormals(VS_OUTPUT input) : SV_Target
     {
-        float depth = getDepth(input.uv);
+        float depth = GetDepth(input.uv);
         if (depth >= DepthThreshold)
             return float4(0, 0, 1, 1);
 
-        float realDepthMult = lerp(0.1, 5.0, DepthMultiplier);
+        float realDepthMult = 1.0;
+        if (EnableDepthMultiplier)
+            realDepthMult = lerp(0.1, 5.0, DepthMultiplier);
+
         float3 normal = CalculateNormal(input.uv, input.pScale, realDepthMult);
         return float4(normal, 1.0);
     }
 
     float4 PS_SSAO(VS_OUTPUT input) : SV_Target
     {
-        float center_depth = getDepth(input.uv);
+        float center_depth = GetDepth(input.uv);
         if (center_depth >= DepthThreshold)
             return 1.0;
 
-        float realDepthMult = lerp(0.1, 5.0, DepthMultiplier);
+        float realDepthMult = 1.0;
+        if (EnableDepthMultiplier)
+            realDepthMult = lerp(0.1, 5.0, DepthMultiplier);
         
         float2 invPScale = 1.0 / input.pScale;
 
@@ -378,7 +399,7 @@ namespace NEOSPACEAO
         float occlusion = 0.0;
         float realRadius = lerp(0.1, 5.0, AORadius);
 
-        [unroll]
+   
         for (int i = 0; i < SampleCount; i++)
         {
             float2 sequence = float2((i + 0.5) / SampleCount, frac((i * 0.61803398875) + random_angle / (2.0 * PI)));
@@ -398,14 +419,14 @@ namespace NEOSPACEAO
                     
                     float2 sample_uv;
                     sample_uv.x = projected.x * 0.5 + 0.5;
-                    sample_uv.y = -projected.y * 0.5 + 0.5; 
+                    sample_uv.y = -projected.y * 0.5 + 0.5;
 
                     if (all(saturate(sample_uv) == sample_uv))
                     {
-                        float scene_depth = getDepth(sample_uv);
+                        float scene_depth = GetDepth(sample_uv);
                         float scene_z = scene_depth * FAR_PLANE * realDepthMult;
                         
-                        if (scene_z < sample_pos.z - 0.005) 
+                        if (scene_z < sample_pos.z - 0.005)
                         {
                             float falloff = 1.0 - smoothstep(0.0, 1.0, ray_dist / realRadius);
                             ray_occlusion = max(ray_occlusion, falloff);
@@ -420,7 +441,7 @@ namespace NEOSPACEAO
         
         float realIntensity = Intensity * 2.0;
         float realPower = lerp(0.5, 8.0, Power);
-        occlusion = pow(saturate(occlusion * realIntensity), realPower); 
+        occlusion = pow(saturate(occlusion * realIntensity), realPower);
 
         float realFadeEnd = FadeEnd * 2.0;
         float fade = smoothstep(realFadeEnd, FadeStart, center_depth);
@@ -457,7 +478,7 @@ namespace NEOSPACEAO
             case 1:
                 return 1.0 - (1.0 - occlusion);
             case 2:
-                return getDepth(input.uv);
+                return GetDepth(input.uv);
             case 3:
                 return float4(getNormalFromTex(input.uv) * 0.5 + 0.5, 1.0);
             case 4:
