@@ -1,42 +1,30 @@
 /*-------------------------------------------------|
 | ::                 uFakeHDR                   :: |
-'--------------------------------------------------|
-| Version: 1.9                                     |
+| Version: 2.0                                     |
 | Author: Barbatos                                 |
 | License: CC0                                     |
-'---------------------------------------------------*/
+'-------------------------------------------------*/
 
 #include "ReShade.fxh"
 
-uniform float HDRPower <
+static const float3 LUMA = float3(0.2126, 0.7152, 0.0722);
+
+uniform float INTENSITY <
     ui_type = "slider";
-    ui_label = "HDR Power";
-    ui_min = 0.1; ui_max = 4.0;
-> = 1.4;
+    ui_label = "Intensity";
+    ui_tooltip = "Adjusts the strength of the HDR effect.";
+    ui_min = 0.0; ui_max = 2.0;
+> = 1.0;
 
-uniform int HDRExtraMode <
-    ui_type = "combo";
-    ui_label = "Extra Mode";
-    ui_items = "None\0Multiple Exposures\0";
-> = 0;
-
-float4 FHDR(float4 pos : SV_Position, float2 uv : TexCoord) : SV_Target
+float4 FHDR(float4 vpos : SV_Position, float2 uv : TexCoord) : SV_Target
 {
     float3 color = tex2D(ReShade::BackBuffer, uv).rgb;
-    float lum = dot(color, float3(0.2126, 0.7152, 0.0722));
-    float sceneLum = lum * 0.5;
+    float lum = dot(color, LUMA);
+    float adjust = 0.5 * (1.0 + min(rcp(lum + 0.002), 2.0));
+    float3 hdrColor = pow(abs(color), 1.4) * adjust; 
+    color = lerp(color, hdrColor, INTENSITY);
 
-    float3 c = pow(color, HDRPower);
-
-    float adjust = lerp(1.0, clamp(0.5 / (sceneLum + 0.001), 0.5, 2.0), 0.5);
-    c = saturate(c * adjust);
-
-    if (HDRExtraMode == 1)
-    {
-        c = sqrt(c);
-    }
-        
-    return float4(saturate(c), 1.0);
+    return float4(saturate(color), 1.0);
 }
 
 technique UFakeHDR
