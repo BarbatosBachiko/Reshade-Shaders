@@ -1,7 +1,8 @@
+
 /*----------------------------------------------|
 | :: Barbatos SSR (Screen-Space Reflections) :: |
 |-----------------------------------------------|
-| Version: 0.5.1                                |
+| Version: 0.5.2                                |
 | Author: Barbatos                              |
 | License: MIT                                  |
 '----------------------------------------------*/
@@ -268,7 +269,6 @@ namespace Barbatos_SSR312
         Texture = History1;
     };
 
-    
     texture TexColorCopy
     {
         Width = BUFFER_WIDTH;
@@ -801,7 +801,8 @@ namespace Barbatos_SSR312
     void PS_TraceReflections(VS_OUTPUT input, out float4 outReflection : SV_Target)
     {
         float2 scaled_uv = input.uv / RenderResolution;
-        if (any(scaled_uv > 1.0))
+        
+        if (any(scaled_uv < 0.001) || any(scaled_uv > 0.999))
         {
             outReflection = 0;
             return;
@@ -809,7 +810,6 @@ namespace Barbatos_SSR312
 
         float4 gbuffer = SampleGBuffer(scaled_uv);
         float depth = gbuffer.a;
-        
         if (depth >= 1.0)
         {
             outReflection = 0.0;
@@ -820,9 +820,8 @@ namespace Barbatos_SSR312
         float3 normal = normalize(gbuffer.rgb);
         float3 viewPos = UVToViewPos(scaled_uv, depth, pScale);
         float3 viewDir = -normalize(viewPos);
-
-        float fReflectFloors = 0.0, fReflectWalls = 0.0, fReflectCeilings = 0.0;
         
+        float fReflectFloors = 0.0, fReflectWalls = 0.0, fReflectCeilings = 0.0;
         switch (ReflectionMode)
         {
             case 0:
@@ -848,8 +847,8 @@ namespace Barbatos_SSR312
         bool isFloor = normal.y > OrientationThreshold;
         bool isCeiling = normal.y < -OrientationThreshold;
         bool isWall = abs(normal.y) <= OrientationThreshold;
-        
         float orientationIntensity = (isFloor * fReflectFloors) + (isWall * fReflectWalls) + (isCeiling * fReflectCeilings);
+        
         if (orientationIntensity <= 0.0)
         {
             outReflection = 0;
@@ -859,7 +858,7 @@ namespace Barbatos_SSR312
         Ray r;
         r.origin = viewPos;
         r.direction = normalize(reflect(-viewDir, normal));
-        r.origin += r.direction * 0.0001;
+        r.origin += r.direction * 0.002;
         
         float VdotN = dot(viewDir, normal);
         if (VdotN > 0.9 || r.direction.z < 0.0)
@@ -889,32 +888,33 @@ namespace Barbatos_SSR312
         if (hit.found)
         {
             reflectionColor = GetGlossySample(hit.uv, input.uv);
+            
+            //Distance Fading
             float distFactor = saturate(1.0 - length(hit.viewPos - viewPos) / 10.0);
             float fadeRange = max(FadeDistance, 0.001);
             float depthFade = saturate((FadeDistance - depth) / fadeRange);
             depthFade *= depthFade;
-            reflectionAlpha = distFactor * depthFade;
             
+            //Screen Edge Fade
+            float2 edgeDist = min(hit.uv, 1.0 - hit.uv);
+            float screenFade = smoothstep(0.0, 0.10, min(edgeDist.x, edgeDist.y));
+            
+            reflectionAlpha = distFactor * depthFade * screenFade;
+            
+            //Geometry Masking
             float3 nR = SampleGBuffer(scaled_uv + float2(ReShade::PixelSize.x, 0)).rgb;
             float3 nD = SampleGBuffer(scaled_uv + float2(0, ReShade::PixelSize.y)).rgb;
             float edgeDelta = length(normal - nR) + length(normal - nD);
-            
-            reflectionAlpha *= smoothstep(EDGE_MASK_THRESHOLD, 0.05, edgeDelta);
-        }
-        else
-        {
-            float adaptiveDist = min(depth * 1.2 + 0.012, 10.0);
-            float3 fbViewPos = viewPos + r.direction * adaptiveDist;
-            float2 uvFb = saturate(ViewPosToUV(fbViewPos, pScale).xy);
-            reflectionColor = GetGlossySample(uvFb, input.uv);
-            reflectionAlpha = smoothstep(0.0, 0.2, 1.0 - scaled_uv.y);
+            float geoMask = 1.0 - smoothstep(0.05, EDGE_MASK_THRESHOLD, edgeDelta);
+            reflectionAlpha *= geoMask;
         }
         
         reflectionAlpha *= pow(saturate(dot(-viewDir, r.direction)), 2.0);
         reflectionAlpha *= orientationIntensity;
+        
         outReflection = float4(reflectionColor, reflectionAlpha);
     }
-
+    
     void PS_Accumulate0(VS_OUTPUT input, out float4 outBlended : SV_Target)
     {
         if (FRAME_COUNT % 2 != 0)
