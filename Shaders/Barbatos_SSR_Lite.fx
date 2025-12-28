@@ -1,11 +1,10 @@
 /*----------------------------------------------|
 | ::          Barbatos SSR  LITE             :: |
 '-----------------------------------------------|
-| Version: 1.3.1                                |
+| Version: 1.3.2                                |
 | Author: Barbatos                              |
 | License: MIT                                  |
 '----------------------------------------------*/
-//Contains AI-assisted content.
 
 #include "ReShade.fxh"
 #include "ReShadeUI.fxh"
@@ -13,12 +12,7 @@
 
 #define PI 3.1415927
 #define GetColor(c) tex2Dlod(ReShade::BackBuffer, float4((c).xy, 0.0, 0.0))
-#define fmod(x, y) (frac((x)*rcp(y)) * (y))
-
-static const float2 LOD_MASK = float2(0.0, 1.0);
-static const float2 ZERO_LOD = float2(0.0, 0.0);
-#define GetLod(s,c) tex2Dlod(s, ((c).xyyy * LOD_MASK.yyxx + ZERO_LOD.xxxy))
-
+#define GetLod(s,c) tex2Dlod(s, float4((c).xy, 0, 0))
 //----------|
 // :: UI :: |
 //----------|
@@ -115,13 +109,12 @@ uniform int DebugView <
 > = 0;
 
 static const float OrientationThreshold = 0.5;
-static const int STEPS_PER_RAY_WALLS = 32;
+static const int STEPS_PER_RAY_WALLS = 20; 
 
 //----------------|
 // :: Textures :: |
 //----------------|
-
-namespace Barbatos_SSR_Lite2
+namespace Barbatos_SSR_Lite34
 {
     texture Reflection
     {
@@ -186,7 +179,7 @@ namespace Barbatos_SSR_Lite2
 
     float3 F_Schlick(float VdotH, float3 f0)
     {
-        return f0 + (float3(1.0, 1.0, 1.0) - f0) * pow(1.0 - VdotH, 5.0);
+        return f0 + (1.0 - f0) * pow(1.0 - VdotH, 5.0);
     }
 
     float GetLuminance(float3 linearColor)
@@ -213,7 +206,7 @@ namespace Barbatos_SSR_Lite2
     //------------------------------------|
     // :: View Space & Normal Functions ::|
     //------------------------------------|
-
+    
     float2 GetProjectionScale()
     {
         float fov_rad = VERTICAL_FOV * (PI / 180.0);
@@ -270,7 +263,7 @@ namespace Barbatos_SSR_Lite2
         result.uv = 0.0;
 
         int refinement_steps = 4;
-        float step_scale = 0.7; 
+        float step_scale = 0.7;
         float min_step_size = 0.001;
         float max_step_size = 1.0;
 
@@ -311,7 +304,6 @@ namespace Barbatos_SSR_Lite2
 
             // Binary Search Refinement
             float3 lo = prevPos, hi = currPos;
-            
             [unroll]
             for (int ref_step = 0; ref_step < refinement_steps; ++ref_step)
             {
@@ -334,12 +326,6 @@ namespace Barbatos_SSR_Lite2
     void PS_TraceReflections(VS_OUTPUT input, out float4 outReflection : SV_Target)
     {
         float2 full_res_coord = floor(input.uv * BUFFER_SCREEN_SIZE);
-        float checker = fmod(full_res_coord.x + full_res_coord.y, 2.0);
-        if (checker != 0.0)
-        {
-            outReflection = float4(0, 0, 0, -1.0);
-            return;
-        }
         
         float2 scaled_uv = input.uv / RenderScale;
         if (any(scaled_uv > 1.0))
@@ -371,7 +357,7 @@ namespace Barbatos_SSR_Lite2
         bool isCeiling = surface.normal.y < -OrientationThreshold;
         bool isWall = abs(surface.normal.y) <= OrientationThreshold;
         float orientationIntensity = (isFloor * fReflectFloors) + (isWall * fReflectWalls) + (isCeiling * fReflectCeilings);
-        
+
         if (orientationIntensity <= 0.0)
         {
             outReflection = float4(0.0, 0.0, 0.0, 0.0);
@@ -381,10 +367,9 @@ namespace Barbatos_SSR_Lite2
         Ray r;
         r.origin = surface.viewPos;
         r.direction = normalize(reflect(-surface.viewDir, surface.normal));
-        r.origin += r.direction * 0.0001;
+        r.origin += r.direction * 0.002; 
         
         float VdotN = dot(surface.viewDir, surface.normal);
-        
         if (VdotN > 0.9 || r.direction.z < 0.0) 
         {
              outReflection = float4(0.0, 0.0, 0.0, 0.0);
@@ -401,28 +386,27 @@ namespace Barbatos_SSR_Lite2
 
         float3 reflectionColor = float3(0.0, 0.0, 0.0);
         float reflectionAlpha = 0.0;
-        
+
         if (hit.found)
         {
             reflectionColor = GetColor(hit.uv).rgb;
+
+            // Distance Fading
             float distFactor = saturate(1.0 - length(hit.viewPos - surface.viewPos) / 10.0);
             float fadeRange = max(FadeDistance, 0.001);
             float depthFade = saturate((FadeDistance - surface.depth) / fadeRange);
             depthFade *= depthFade;
-            reflectionAlpha = distFactor * depthFade;
-        }
-        else
-        {
-            float adaptiveDist = min(surface.depth * 1.2 + 0.012, 10.0);
-            float3 fbViewPos = surface.viewPos + r.direction * adaptiveDist;
-            float2 uvFb = saturate(ViewPosToUV(fbViewPos, pScale).xy);
-            reflectionColor = GetColor(uvFb).rgb;
-            float vertical_fade = pow(saturate(1.0 - scaled_uv.y), 3.0);
-            reflectionAlpha = vertical_fade;
+
+            // Screen Edge Fade
+            float2 edgeDist = min(hit.uv, 1.0 - hit.uv);
+            float screenFade = smoothstep(0.0, 0.10, min(edgeDist.x, edgeDist.y));
+
+            reflectionAlpha = distFactor * depthFade * screenFade;
         }
         
         reflectionAlpha *= pow(saturate(dot(-surface.viewDir, r.direction)), 2.0);
         reflectionAlpha *= orientationIntensity;
+
         outReflection = float4(reflectionColor, reflectionAlpha);
     }
         
@@ -468,13 +452,14 @@ namespace Barbatos_SSR_Lite2
         reflectionColor = AdjustSaturation(reflectionColor, g_Saturation);
         
         SurfaceData surface = CreateSurfaceData(input.uv, pScale);
-        
+
         // PBR 
         float VdotN = saturate(dot(surface.viewDir, surface.normal));
         float3 f0 = lerp(float3(DIELECTRIC_REFLECTANCE, DIELECTRIC_REFLECTANCE, DIELECTRIC_REFLECTANCE), originalColor, Metallic);
         float3 F = F_Schlick(VdotN, f0);
         
         float3 finalColor;
+
         if (g_BlendMode == 0)
         {
             float3 kS = F;
