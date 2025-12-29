@@ -453,7 +453,7 @@ namespace Barbatos_NeoSSAO2
         return originalColor;
     }
 
-    technique NeoSSAOPB
+    technique NeoSSAO
     {
         pass GenNormals
         {
