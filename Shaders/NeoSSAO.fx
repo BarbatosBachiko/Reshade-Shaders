@@ -20,7 +20,7 @@ uniform float Intensity <
     ui_tooltip = "Strength of the ambient occlusion effect.";
     ui_min = 0.0;
     ui_max = 2.0; ui_step = 0.01;
-> = 0.8;
+> = 0.5;
 
 uniform float Power <
     ui_type = "drag";
