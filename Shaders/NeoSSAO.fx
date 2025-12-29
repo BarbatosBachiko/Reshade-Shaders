@@ -571,7 +571,7 @@ namespace Barbatos_NeoSSAO
         return originalColor;
     }
 
-    technique Barbatos_NeoSSAO
+    technique NeoSSAO
     {
         pass GenNormals
         {
