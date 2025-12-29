@@ -1,7 +1,7 @@
 /*----------------------------------------------|
 | ::                NeoSSAO                  :: |
 |-----------------------------------------------|
-| Version: 2.0                                  |
+| Version: 2.1                                  |
 | Author: Barbatos                              |
 | License: MIT                                  |
 |----------------------------------------------*/
@@ -16,55 +16,47 @@
 uniform float Intensity <
     ui_type = "drag";
     ui_category = "Basic Settings";
-    ui_label = "AO Intensity";
-    ui_tooltip = "Strength of the ambient occlusion effect.";
-    ui_min = 0.0;
-    ui_max = 2.0; ui_step = 0.01;
-> = 0.5;
+    ui_label = "Intensity";
+    ui_min = 0.0; ui_max = 5.0; ui_step = 0.01;
+> = 1.0;
 
-uniform float Power <
+uniform float Thickness <
     ui_type = "drag";
     ui_category = "Basic Settings";
-    ui_label = "AO Power";
-    ui_tooltip = "Controls the contrast/curve of the occlusion.";
-    ui_min = 0.1;
-    ui_max = 5.0; ui_step = 0.01;
-> = 1.5;
+    ui_label = "Thickness";
+    ui_tooltip = "Assumed thickness of objects. Allows light to pass behind thin surfaces.";
+    ui_min = 0.1; ui_max = 5.0;
+    ui_step = 0.01;
+> = 0.5;
 
 uniform float AORadius <
     ui_type = "drag";
-    ui_category = "Ray Marching";
-    ui_label = "AO Radius";
-    ui_tooltip = "Size of the occlusion radius (Screen Space).";
-    ui_min = 0.0;
-    ui_max = 2.0; ui_step = 0.001;
+    ui_category = "Basic Settings";
+    ui_label = "Radius";
+    ui_min = 0.0; ui_max = 4.0; ui_step = 0.01;
 > = 1.0;
 
-uniform float RadiusDistanceScale <
+uniform float RenderScale <
     ui_type = "drag";
-    ui_category = "Ray Marching";
-    ui_label = "Radius Distance Scale";
-    ui_tooltip = "Scales the radius based on depth.";
-    ui_min = 0.0;
-    ui_max = 10.0; ui_step = 0.01;
-> = 0.0;
+    ui_category = "Performance";
+    ui_label = "Render Resolution";
+    ui_min = 0.1; ui_max = 1.0; ui_step = 0.01;
+> = 1.0;
 
 uniform int RaySteps <
     ui_type = "slider";
-    ui_category = "Ray Marching";
+    ui_category = "Performance";
     ui_label = "Ray Steps";
-    ui_tooltip = "Number of steps per ray. Higher = better quality/lower performance.";
-    ui_min = 3; ui_max = 32;
+    ui_min = 3;
+    ui_max = 32;
 > = 8;
 
 uniform int SampleCount <
     ui_type = "slider";
-    ui_category = "Ray Marching";
-    ui_label = "Sample Count";
-    ui_tooltip = "Number of rays per pixel.";
-    ui_min = 1;
-    ui_max = 16;
-> = 8;
+    ui_category = "Performance";
+    ui_label = "Slice Count";
+    ui_min = 1; ui_max = 16;
+> = 4;
 
 uniform float FadeStart <
     ui_type = "slider";
@@ -80,18 +72,12 @@ uniform float FadeEnd <
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
 > = 0.5;
 
-uniform bool EnableTemporal <
-    ui_type = "checkbox";
-    ui_category = "Temporal Filter";
-    ui_label = "Enable TAA";
-    ui_tooltip = "Reduces noise using temporal accumulation.";
-> = false;
-
-uniform float RenderScale <
+uniform float BlurSharpness <
     ui_type = "drag";
-    ui_category = "Performance";
-    ui_label = "Render Resolution";
-    ui_min = 0.1; ui_max = 1.0; ui_step = 0.01;
+    ui_category = "Denoising";
+    ui_label = "Blur Sharpness";
+    ui_tooltip = "Higher values preserve more edges but reduce blur strength.";
+    ui_min = 0.0; ui_max = 5.0; ui_step = 0.1;
 > = 1.0;
 
 uniform bool EnableDepthMultiplier <
@@ -131,62 +117,22 @@ uniform int ViewMode <
     ui_type = "combo";
     ui_category = "Debug & Style";
     ui_label = "View Mode";
-    ui_items = "None\0AO Only\0Depth\0Normals\0Motion Vectors\0";
+    ui_items = "None\0AO Only\0Depth\0Normals\0";
 > = 0;
 
 // Defines
 #define PI 3.1415926535
+#define HALF_PI 1.57079632679
 #define FAR_PLANE RESHADE_DEPTH_LINEARIZATION_FAR_PLANE
-
-#define GetColor(c) tex2Dlod(ReShade::BackBuffer, float4((c).xy, 0, 0))
+#define SECTOR_COUNT 32 
 #define GetLod(s,c) tex2Dlod(s, float4((c).xy, 0, 0))
-
-uniform int FRAME_COUNT < source = "framecount"; >;
-
+#define GetColor(c) tex2Dlod(ReShade::BackBuffer, float4((c).xy, 0, 0))
+static const int BlurRadius = 2;
 //----------------|
 // :: Textures :: |
 //----------------|
-#ifndef USE_MARTY_LAUNCHPAD_MOTION
-#define USE_MARTY_LAUNCHPAD_MOTION 0
-#endif
-#ifndef USE_VORT_MOTION
-#define USE_VORT_MOTION 0
-#endif
 
-#if USE_MARTY_LAUNCHPAD_MOTION
-    namespace Deferred 
-    {
-        texture MotionVectorsTex { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
-        sampler sMotionVectorsTex { Texture = MotionVectorsTex; };
-    }
-    float2 GetMV(float2 texcoord) { return tex2D(Deferred::sMotionVectorsTex, texcoord).rg; }
-#elif USE_VORT_MOTION
-    texture2D MotVectTexVort { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
-    sampler2D sMotVectTexVort { Texture = MotVectTexVort; MagFilter=POINT;MinFilter=POINT;MipFilter=POINT;AddressU=Clamp;AddressV=Clamp; };
-    float2 GetMV(float2 texcoord) { return tex2D(sMotVectTexVort, texcoord).rg; }
-#else
-texture texMotionVectors
-{
-    Width = BUFFER_WIDTH;
-    Height = BUFFER_HEIGHT;
-    Format = RG16F;
-};
-sampler sTexMotionVectorsSampler
-{
-    Texture = texMotionVectors;
-    MagFilter = POINT;
-    MinFilter = POINT;
-    MipFilter = POINT;
-    AddressU = Clamp;
-    AddressV = Clamp;
-};
-float2 GetMV(float2 texcoord)
-{
-    return tex2D(sTexMotionVectorsSampler, texcoord).rg;
-}
-#endif
-
-namespace Barbatos_NeoSSAO
+namespace Barbatos_NeoSSAO2
 {
     texture2D normalTex
     {
@@ -209,27 +155,16 @@ namespace Barbatos_NeoSSAO
     {
         Texture = AO;
     };
-
-    texture History0
+    
+    texture2D AOBlur
     {
         Width = BUFFER_WIDTH;
         Height = BUFFER_HEIGHT;
         Format = R8;
     };
-    sampler sHistory0
+    sampler2D sAOBlur
     {
-        Texture = History0;
-    };
-
-    texture History1
-    {
-        Width = BUFFER_WIDTH;
-        Height = BUFFER_HEIGHT;
-        Format = R8;
-    };
-    sampler sHistory1
-    {
-        Texture = History1;
+        Texture = AOBlur;
     };
 
     //-------------|
@@ -280,13 +215,11 @@ namespace Barbatos_NeoSSAO
         pixRPos = normalize(pixRPos - pixCenterPos);
         pixTPos = normalize(pixTPos - pixCenterPos);
         pixBPos = normalize(pixBPos - pixCenterPos);
-
         float3 pixelNormal = float3(0, 0, -0.0005);
         pixelNormal += (acceptedNormals.x) * cross(pixLPos, pixTPos);
         pixelNormal += (acceptedNormals.y) * cross(pixTPos, pixRPos);
         pixelNormal += (acceptedNormals.z) * cross(pixRPos, pixBPos);
         pixelNormal += (acceptedNormals.w) * cross(pixBPos, pixLPos);
-        
         return normalize(pixelNormal);
     }
 
@@ -304,140 +237,44 @@ namespace Barbatos_NeoSSAO
             12, 44, 4, 36, 14, 46, 6, 38, 60, 28, 52, 20, 62, 30, 54, 22,
              3, 35, 11, 43, 1, 33, 9, 41, 51, 19, 59, 27, 49, 17, 57, 25,
       
-             15, 47, 7, 39, 13, 45, 5, 37, 63, 31, 55, 23, 61, 29, 53, 21
+            15, 47, 7, 39, 13, 45, 5, 37, 63, 31, 55, 23, 61, 29, 53, 21
         };
         return float(bayer[(pixelPos.x % 8) + (pixelPos.y % 8) * 8]) * (1.0 / 64.0);
     }
 
-    float3 getHemisphereSample(float3 normal, float2 random_uv)
+    float GTAOFastAcos(float x)
     {
-        float cos_theta = sqrt(1.0 - random_uv.x);
-        float sin_theta = sqrt(random_uv.x);
-        float phi = 2.0 * PI * random_uv.y;
-        float3 sample_dir = float3(cos(phi) * sin_theta, sin(phi) * sin_theta, cos_theta);
-        
-        float3 up = abs(normal.z) < 0.999 ? float3(0, 0, 1) : float3(1, 0, 0);
-        float3 tangent = normalize(cross(up, normal));
-        float3 bitangent = cross(normal, tangent);
-        return sample_dir.x * tangent + sample_dir.y * bitangent + sample_dir.z * normal;
+        float res = -0.156583 * abs(x) + HALF_PI;
+        res *= sqrt(1.0 - abs(x));
+        return x >= 0 ? res : PI - res;
+    }
+    
+    float2 GTAOFastAcos(float2 x)
+    {
+        float2 res = -0.156583 * abs(x) + HALF_PI;
+        res *= sqrt(1.0 - abs(x));
+        return x >= 0 ? res : PI - res;
     }
 
-    //------------|
-    // :: TAA  :: |
-    //------------|
-
-    float GetActiveHistory(float2 uv)
+    uint UpdateSectors(float minHorizon, float maxHorizon, uint globalOccludedBitfield)
     {
-        return (FRAME_COUNT % 2 == 0) ? tex2Dlod(sHistory0, float4(uv, 0, 0)).r : tex2Dlod(sHistory1, float4(uv, 0, 0)).r;
-    }
-
-    float ClipToAABB(float aabb_min, float aabb_max, float history_sample)
-    {
-        float p_clip = 0.5 * (aabb_max + aabb_min);
-        float e_clip = 0.5 * (aabb_max - aabb_min) + 1e-6;
-        float v_clip = history_sample - p_clip;
-        float v_unit = v_clip / e_clip;
-        float a_unit = abs(v_unit);
-        float ma_unit = a_unit;
-        return (ma_unit > 1.0) ? (p_clip + v_clip / ma_unit) : history_sample;
-    }
-
-    float2 GetVelocityFromClosestFragment(float2 texcoord)
-    {
-        float2 pixel_size = ReShade::PixelSize;
-        float closest_depth = 1.0;
-        float2 closest_velocity = 0.0;
-        
-        [unroll]
-        for (int i = 0; i < 5; i++)
-        {
-            float2 offset;
-            if (i == 0)
-                offset = float2(0, 0);
-            else if (i == 1)
-                offset = float2(0, -1);
-            else if (i == 2)
-                offset = float2(-1, 0);
-            else if (i == 3)
-                offset = float2(1, 0);
-            else
-                offset = float2(0, 1);
-            float2 s_coord = texcoord + offset * pixel_size;
-            float s_depth = GetDepth(s_coord);
-            if (s_depth < closest_depth)
-            {
-                closest_depth = s_depth;
-                closest_velocity = GetMV(s_coord);
-            }
-        }
-        return closest_velocity;
-    }
-
-    void ComputeNeighborhoodMinMax(sampler2D color_tex, float2 texcoord, float center_val, out float val_min, out float val_max)
-    {
-        float min_v = center_val;
-        float max_v = center_val;
-        float2 pixel_size = ReShade::PixelSize;
-
-        [unroll]
-        for (int x = -1; x <= 1; x++)
-        {
-            [unroll]
-            for (int y = -1; y <= 1; y++)
-            {
-                if (x == 0 && y == 0)
-                    continue;
-
-                float s = tex2Dlod(color_tex, float4(texcoord + float2(x, y) * pixel_size, 0, 0)).r;
-                min_v = min(min_v, s);
-                max_v = max(max_v, s);
-            }
-        }
-        val_min = min_v;
-        val_max = max_v;
-    }
-
-    float ComputeTAA(VS_OUTPUT input, sampler sHistoryParams)
-    {
-        float current_ao = tex2Dlod(sAO, float4(input.uv, 0, 0)).r;
-        if (!EnableTemporal)
-            return current_ao;
-
-        float2 velocity = GetVelocityFromClosestFragment(input.uv);
-        float2 reprojected_uv = input.uv + velocity;
-        
-        if (any(saturate(reprojected_uv) != reprojected_uv) || FRAME_COUNT <= 1)
-            return current_ao;
-        float history_ao = tex2Dlod(sHistoryParams, float4(reprojected_uv, 0, 0)).r;
-        float current_depth = GetDepth(input.uv);
-        float history_depth = GetDepth(reprojected_uv);
-        if (abs(history_depth - current_depth) > 0.01)
-            return current_ao;
-        float ao_min, ao_max;
-        ComputeNeighborhoodMinMax(sAO, input.uv, current_ao, ao_min, ao_max);
-        float clipped_history = ClipToAABB(ao_min, ao_max, history_ao);
-
-        float diff = abs(current_ao - clipped_history);
-        float velocity_weight = saturate(1.0 - length(velocity * float2(BUFFER_WIDTH, BUFFER_HEIGHT) * 100.0));
-        float raw_confidence = (1.0 - saturate(diff * 8.0)) * velocity_weight;
-        
-        float compressed_confidence = saturate(raw_confidence + log2(2.0 - raw_confidence) * 0.5);
-        float feedback = compressed_confidence * 0.95;
-        
-        return lerp(current_ao, clipped_history, feedback);
+        uint startHorizonInt = minHorizon * SECTOR_COUNT;
+        uint angleHorizonInt = ceil((maxHorizon - minHorizon) * SECTOR_COUNT);
+        uint angleHorizonBitfield = angleHorizonInt > 0 ?
+            (0xFFFFFFFF >> (SECTOR_COUNT - angleHorizonInt)) : 0;
+        uint currentOccludedBitfield = angleHorizonBitfield << startHorizonInt;
+        return globalOccludedBitfield | currentOccludedBitfield;
     }
 
     //--------------------|
     // :: Pixel Shaders ::|
     //--------------------|
-
     float4 PS_GenNormals(VS_OUTPUT input) : SV_Target
     {
         float depth = GetDepth(input.uv);
         if (depth >= DepthThreshold)
             return float4(0, 0, 1, 1);
         float realDepthMult = EnableDepthMultiplier ? lerp(0.1, 5.0, DepthMultiplier) : 1.0;
-        
         float2 p = ReShade::PixelSize;
         float3 p_c = UVToViewPos(input.uv, depth * FAR_PLANE, input.pScale, realDepthMult);
 
@@ -464,95 +301,142 @@ namespace Barbatos_NeoSSAO
 
     float4 PS_SSAO(VS_OUTPUT input) : SV_Target
     {
-        float center_depth = GetDepth(input.uv);
+        float2 scaled_uv = input.uv / RenderScale;
+        if (any(scaled_uv > 1.0))
+            discard;
+
+        float center_depth = GetDepth(scaled_uv);
         if (center_depth >= DepthThreshold)
             return 1.0;
         float realDepthMult = EnableDepthMultiplier ? lerp(0.1, 5.0, DepthMultiplier) : 1.0;
         float2 invPScale = 1.0 / input.pScale;
-        float3 center_pos = UVToViewPos(input.uv, center_depth * FAR_PLANE, input.pScale, realDepthMult);
-        float3 normal = getNormalFromTex(input.uv);
+        float3 positionVS = UVToViewPos(scaled_uv, center_depth * FAR_PLANE, input.pScale, realDepthMult);
+        float3 normalVS = getNormalFromTex(scaled_uv);
         
-        center_pos += normal * (0.02 * realDepthMult);
-        float random_angle = GetBayer8x8(input.uv) * 2.0 * PI;
-        float occlusion = 0.0;
+        positionVS += normalVS * (0.005 * realDepthMult);
+        float3 V = normalize(-positionVS);
+
+        float random_val = GetBayer8x8(input.uv);
+        float stepDist = (max(AORadius, 0.01)) / float(RaySteps);
         
-        float realRadius = lerp(0.01, 2.5, AORadius);
-        realRadius *= (1.0 + (center_depth * RadiusDistanceScale * 10));
-
-        float invRaySteps = 1.0 / float(RaySteps);
-        float stepDist = realRadius * invRaySteps;
-
-        float rayStepPhi = 0.61803398875;
-        float randomPart = random_angle * (1.0 / (2.0 * PI));
+        float totalVisibility = 0.0;
         [loop]
         for (int i = 0; i < SampleCount; i++)
         {
-            float2 sequence = float2((float(i) + 0.5) / float(SampleCount), frac((float(i) * rayStepPhi) + randomPart));
-            float3 ray_dir = getHemisphereSample(normal, sequence);
-            float ray_occlusion = 0.0;
-
-            float3 stepVec = ray_dir * stepDist;
-            float3 sample_pos = center_pos + stepVec;
-            float currentDist = stepDist;
-            [loop]
-            for (int j = 1; j <= RaySteps; j++)
+            float angle = (float(i) + random_val) * (PI / float(SampleCount));
+            float2 dir = float2(cos(angle), sin(angle));
+            
+            float3 sliceN = normalize(cross(float3(dir, 0.0), V));
+            float3 projN = normalVS - sliceN * dot(normalVS, sliceN);
+            float projNLen = length(projN);
+            float cosN = dot(projN / (projNLen + 1e-6), V);
+            float3 T = cross(V, sliceN);
+            float N_angle = -sign(dot(projN, T)) * GTAOFastAcos(cosN);
+            
+            uint globalOccludedBitfield = 0;
+            [unroll]
+            for (int side = -1; side <= 1; side += 2)
             {
-                if (sample_pos.z > 1e-6)
+                float currentDist = stepDist * (random_val + 0.1);
+                float2 rayDir = dir * float(side);
+                
+                [loop]
+                for (int j = 0; j < RaySteps; j++)
                 {
-                    float invZ = 1.0 / sample_pos.z;
-                    float2 projected = sample_pos.xy * invZ * invPScale;
+                    float3 samplePosRay = positionVS + (float3(rayDir, 0) * currentDist);
+                    float invZ = 1.0 / (samplePosRay.z + 1e-6);
+                    float2 projected = samplePosRay.xy * invZ * invPScale;
                     float2 sample_uv = projected * float2(0.5, -0.5) + 0.5;
+
                     if (all(saturate(sample_uv) == sample_uv))
                     {
-                        float scene_depth = GetDepth(sample_uv);
-                        float scene_z = scene_depth * FAR_PLANE * realDepthMult;
+                        float sampleDepth = GetDepth(sample_uv);
+                        float3 samplePosVS = UVToViewPos(sample_uv, sampleDepth * FAR_PLANE, input.pScale, realDepthMult);
                         
-                        if (scene_z < sample_pos.z - 0.005)
-                        {
-                            float distRatio = currentDist / realRadius;
-                            float falloff = saturate(1.0 - distRatio);
-                            falloff = falloff * falloff;
-                            
-                            ray_occlusion = max(ray_occlusion, falloff);
-                        }
+                        float3 deltaPos = samplePosVS - positionVS;
+                        float3 deltaPosBackface = deltaPos - V * Thickness;
+
+                        float2 frontBackHorizon = float2(dot(normalize(deltaPos), V), dot(normalize(deltaPosBackface), V));
+                        frontBackHorizon = GTAOFastAcos(frontBackHorizon);
+                        float2 horizonAngles = (float(side) * -frontBackHorizon - N_angle + HALF_PI) / PI;
+                        horizonAngles = saturate(horizonAngles);
+
+                        float minH = min(horizonAngles.x, horizonAngles.y);
+                        float maxH = max(horizonAngles.x, horizonAngles.y);
+                        
+                        globalOccludedBitfield = UpdateSectors(minH, maxH, globalOccludedBitfield);
                     }
+                    currentDist += stepDist;
                 }
-                sample_pos += stepVec;
-                currentDist += stepDist;
             }
-            occlusion += ray_occlusion;
+            
+            float occludedCount = countbits(globalOccludedBitfield);
+            totalVisibility += 1.0 - (occludedCount / float(SECTOR_COUNT));
         }
 
-        occlusion /= float(SampleCount);
+        float visibility = totalVisibility / float(SampleCount);
+        float occlusion = 1.0 - visibility;
+        occlusion = pow(saturate(occlusion * Intensity), 2.0);
         
-        float realIntensity = Intensity * 2.0;
-        occlusion = pow(saturate(occlusion * realIntensity), Power);
-
-        float realFadeEnd = FadeEnd * 2.0;
-        float fade = smoothstep(realFadeEnd, FadeStart, center_depth);
+        float fade = smoothstep(FadeEnd * 2.0, FadeStart, center_depth);
         occlusion *= fade;
 
         return 1.0 - saturate(occlusion);
     }
-
-    float4 PS_Accumulate0(VS_OUTPUT input) : SV_Target
+    
+    float4 PS_BilateralBlur(VS_OUTPUT input) : SV_Target
     {
-        if (FRAME_COUNT % 2 != 0)
+        float2 scaled_uv = input.uv / RenderScale;
+        if (any(scaled_uv > 1.0))
             discard;
-        return ComputeTAA(input, sHistory1);
-    }
 
-    float4 PS_Accumulate1(VS_OUTPUT input) : SV_Target
-    {
-        if (FRAME_COUNT % 2 == 0)
-            discard;
-        return ComputeTAA(input, sHistory0);
+        float2 texelSize = ReShade::PixelSize * 1.5; 
+        float centerDepth = GetDepth(scaled_uv);
+        
+        float totalWeight = 1.0;
+        float totalAO = tex2D(sAO, input.uv).r; 
+
+        const int2 offsets[14] =
+        {
+            int2(0, 1), int2(0, -1), 
+            int2(0, 2), int2(0, -2),
+            int2(1, 0), int2(-1, 0),
+            int2(1, 1), int2(1, -1), int2(-1, 1), int2(-1, -1), 
+            int2(1, 2), int2(1, -2), int2(-1, 2), int2(-1, -2) 
+        };
+
+        const float spatialWeights[14] =
+        {
+            0.8825, 0.8825, // w1
+            0.6065, 0.6065, // w3
+            0.8825, 0.8825, // w1
+            0.7788, 0.7788, 0.7788, 0.7788, // w2
+            0.5353, 0.5353, 0.5353, 0.5353 // w4
+        };
+
+        float sharpnessMult = 1000.0 * BlurSharpness;
+
+        [unroll]
+        for (int k = 0; k < 14; k++)
+        {
+            float2 sampleUV = input.uv + (float2(offsets[k]) * texelSize);
+            float sampleDepth = GetDepth(sampleUV / RenderScale);
+            float sampleAO = tex2D(sAO, sampleUV).r;
+
+            float depthDiff = abs(centerDepth - sampleDepth);
+            float weight = spatialWeights[k] * exp(-depthDiff * sharpnessMult);
+
+            totalAO += sampleAO * weight;
+            totalWeight += weight;
+        }
+        
+        return totalAO / totalWeight;
     }
 
     float4 PS_Output(VS_OUTPUT input) : SV_Target
     {
         float4 originalColor = GetColor(input.uv);
-        float occlusion = GetActiveHistory(input.uv);
+        float occlusion = tex2D(sAOBlur, input.uv * RenderScale).r;
 
         if (ViewMode == 0) // Normal
         {
@@ -566,12 +450,10 @@ namespace Barbatos_NeoSSAO
             return GetDepth(input.uv);
         else if (ViewMode == 3) // Normals
             return float4(getNormalFromTex(input.uv) * 0.5 + 0.5, 1.0);
-        else if (ViewMode == 4) // Motion
-            return float4(GetMV(input.uv) * 100.0 + 0.5, 0.0, 1.0);
         return originalColor;
     }
 
-    technique NeoSSAO
+    technique NeoSSAOPB
     {
         pass GenNormals
         {
@@ -585,17 +467,11 @@ namespace Barbatos_NeoSSAO
             PixelShader = PS_SSAO;
             RenderTarget = AO;
         }
-        pass Accumulate0
+        pass DenoisePass
         {
             VertexShader = VS_NeoSSAO;
-            PixelShader = PS_Accumulate0;
-            RenderTarget = History0;
-        }
-        pass Accumulate1
-        {
-            VertexShader = VS_NeoSSAO;
-            PixelShader = PS_Accumulate1;
-            RenderTarget = History1;
+            PixelShader = PS_BilateralBlur;
+            RenderTarget = AOBlur;
         }
         pass OutputPass
         {
