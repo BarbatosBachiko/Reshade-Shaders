@@ -85,7 +85,7 @@ uniform bool EnableTemporal <
     ui_category = "Temporal Filter";
     ui_label = "Enable TAA";
     ui_tooltip = "Reduces noise using temporal accumulation.";
-> = true;
+> = false;
 
 uniform float RenderScale <
     ui_type = "drag";
