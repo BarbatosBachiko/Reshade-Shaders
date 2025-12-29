@@ -1,7 +1,7 @@
 /*-------------------------------------------------|
 | ::       Directional Anti-Aliasing (DAA)      :: |
 '--------------------------------------------------|
-| Version: 1.7.2                                   |
+| Version: 1.8                                     |
 | Author: Barbatos                                 |
 | License: MIT                                     |
 | Description: is an edge-aware spatiotemporal     |
@@ -16,6 +16,7 @@
 #define ENABLE_JITTER_FOR_TAA 1
 #endif
 
+// Constants
 #define BASE_BLEND_ALPHA 0.12 
 #define DEPTH_THRESHOLD 0.01
 #define MOTION_REJECTION 0.2
@@ -28,12 +29,10 @@
 #define USE_VORT_MOTION 0
 #endif
 
-// Utility macros
-static const float2 LOD_MASK = float2(0.0, 1.0);
-static const float2 ZERO_LOD = float2(0.0, 0.0);
+// Utility macros 
 #define GetDepth(coords) (ReShade::GetLinearizedDepth(coords))
-#define GetColor(c) tex2Dlod(ReShade::BackBuffer, float4((c).xy, 0, 0))
-#define GetLod(s,c) tex2Dlod(s, ((c).xyyy * LOD_MASK.yyxx + ZERO_LOD.xxxy))
+#define GetColor(c) tex2Dlod(ReShade::BackBuffer, float4((c).xy, 0.0, 0.0))
+#define GetLod(s, c) tex2Dlod(s, float4((c).xy, 0.0, 0.0))
 
 //----------|
 // :: UI :: |
@@ -50,7 +49,8 @@ uniform float DirectionalStrength <
 uniform float EdgeThreshold <
     ui_type = "drag";
     ui_label = "Edge Threshold";
-    ui_min = 0.0; ui_max = 0.5; ui_step = 0.001;
+    ui_min = 0.0; ui_max = 0.5;
+    ui_step = 0.001;
     ui_category = "Edge Detection";
 > = 0.100;
 
@@ -91,18 +91,17 @@ static const float2 JitterLUT[16] =
 
 #if USE_MARTY_LAUNCHPAD_MOTION
     namespace Deferred {
-        texture MotionVectorsTex { Width = BUFFER_WIDTH;
-        Height = BUFFER_HEIGHT; Format = RG16F; };
+        texture MotionVectorsTex { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
         sampler sMotionVectorsTex { Texture = MotionVectorsTex; };
     }
     float2 SampleMotionVectors(float2 texcoord) {
-        return GetLod(Deferred::sMotionVectorsTex, float4(texcoord, 0, 0)).rg;
+        return GetLod(Deferred::sMotionVectorsTex, texcoord).rg;
     }
 #elif USE_VORT_MOTION
     texture2D MotVectTexVort { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
     sampler2D sMotVectTexVort { Texture = MotVectTexVort; MagFilter=POINT;MinFilter=POINT;MipFilter=POINT;AddressU=Clamp;AddressV=Clamp; };
     float2 SampleMotionVectors(float2 texcoord) {
-        return GetLod(sMotVectTexVort, float4(texcoord, 0, 0)).rg;
+        return GetLod(sMotVectTexVort, texcoord).rg;
     }
 #else
 texture texMotionVectors
@@ -122,7 +121,7 @@ sampler sTexMotionVectorsSampler
 };
 float2 SampleMotionVectors(float2 texcoord)
 {
-    return GetLod(sTexMotionVectorsSampler, float4(texcoord, 0, 0)).rg;
+    return GetLod(sTexMotionVectorsSampler, texcoord).rg;
 }
 #endif
 
@@ -144,6 +143,7 @@ texture2D DEPTH
     Height = BUFFER_HEIGHT;
     Format = R32F;
 };
+
 sampler2D sTEMP
 {
     Texture = TEMP;
@@ -167,18 +167,27 @@ struct Output
     float4 Depth : SV_Target1;
 };
 
+static const float3 CoefLuma = float3(0.299, 0.587, 0.114);
+static const float3 CoefChromaBlue = float3(-0.169, -0.331, 0.500);
+static const float3 CoefChromaRed = float3(0.500, -0.419, -0.081);
+static const float ChromaBias = 0.5019608; 
+
 float3 RGBToYCoCg(float3 rgb)
 {
-    float Y = dot(rgb, float3(0.299, 0.587, 0.114));
-    float Cb = dot(rgb, float3(-0.169, -0.331, 0.500));
-    float Cr = dot(rgb, float3(0.500, -0.419, -0.081));
-    return float3(Y, Cb + 0.5019608, Cr + 0.5019608);
+    float Y = dot(rgb, CoefLuma);
+    float Cb = dot(rgb, CoefChromaBlue);
+    float Cr = dot(rgb, CoefChromaRed);
+    return float3(Y, Cb + ChromaBias, Cr + ChromaBias);
 }
 
 float3 YCoCgToRGB(float3 ycc)
 {
-    float3 c = ycc - float3(0.0, 0.5019608, 0.5019608);
-    return float3(c.x + 1.400 * c.z, c.x - 0.343 * c.y - 0.711 * c.z, c.x + 1.765 * c.y);
+    float3 c = ycc - float3(0.0, ChromaBias, ChromaBias);
+    return float3(
+        c.x + 1.400 * c.z,
+        c.x - 0.343 * c.y - 0.711 * c.z,
+        c.x + 1.765 * c.y
+    );
 }
 
 float lum(float3 color)
@@ -195,26 +204,58 @@ float2 computeGradient(float2 t)
     return float2(l_right - l_left, l_down - l_up);
 }
 
+float GetLum(float2 uv)
+{
+    return lum(GetColor(uv).rgb);
+}
+
 float4 DAA(float2 base_uv, float2 jitter_uv)
 {
     float4 original = GetColor(jitter_uv);
     float2 gradient = computeGradient(base_uv);
-    float edgeStrength = length(gradient);
+    float gradLen = length(gradient);
+    
+    if (gradLen < 0.0001) 
+        return float4(original.rgb, 0.0);
+
+    // Second Order Analysis
+    float2 dir = gradient / gradLen;
+    
+    // Sample along the gradient direction to check linearity vs curvature.
+    float2 offset = dir * ReShade::PixelSize.xy;
+    float l_center = GetLum(base_uv);
+    float l_fwd = GetLum(base_uv + offset);
+    float l_bwd = GetLum(base_uv - offset);
+
+    // Calculate Second Derivative magnitude (Directional Laplacian)
+    // Formula: f''(x) approx f(x+h) - 2f(x) + f(x-h)
+    float edgeStrength = abs(l_fwd + l_bwd - 2.0 * l_center);
+
     float weight = smoothstep(EdgeThreshold, EdgeThreshold + max(EdgeFalloff, 0.0001), edgeStrength);
 
     if (weight > 0.001)
     {
-        float2 blurDir = normalize(float2(-gradient.y, gradient.x));
+        // Directional Blur 
+        // We blur along the TANGENT (perpendicular to gradient)
+        // Rotate gradient 90 degrees: (-y, x)
+        float2 blurDir = float2(-dir.y, dir.x);
+        
         float2 pixelStep = ReShade::PixelSize.xy * DirectionalStrength;
-        float2 offset1 = blurDir * pixelStep * 0.5;
         float2 offset2 = blurDir * pixelStep;
-        float4 color = (GetColor(jitter_uv + offset1) +
-                        GetColor(jitter_uv - offset1) +
-                        GetColor(jitter_uv + offset2) * 0.5 +
-                        GetColor(jitter_uv - offset2) * 0.5);
-        color /= 3.0;
+        float2 offset1 = offset2 * 0.5;
+
+        // Sample taps
+        float4 t1 = GetColor(jitter_uv + offset1);
+        float4 t2 = GetColor(jitter_uv - offset1);
+        float4 t3 = GetColor(jitter_uv + offset2);
+        float4 t4 = GetColor(jitter_uv - offset2);
+
+        float4 color = t1 + t2 + (t3 * 0.5) + (t4 * 0.5);
+        color *= 0.3333333; 
+
         return float4(lerp(original.rgb, color.rgb, weight), weight);
     }
+
     return float4(original.rgb, 0.0);
 }
 
@@ -225,10 +266,11 @@ float4 PS_Temporal(float4 pos : SV_Position, float2 t : TEXCOORD) : SV_Target
 #if ENABLE_JITTER_FOR_TAA
     float jitterVal = EnableTemporalAA ? 1.0 : 0.0;
 #else
-        float jitterVal = 0.0;
+    float jitterVal = 0.0;
 #endif
     
     float2 jittered_uv = t + (jitter * ReShade::PixelSize * jitterVal);
+    
     float4 current = DAA(t, jittered_uv);
 
     if (!EnableTemporalAA)
@@ -238,16 +280,25 @@ float4 PS_Temporal(float4 pos : SV_Position, float2 t : TEXCOORD) : SV_Target
     float2 motion = SampleMotionVectors(t);
     float2 reprojected_uv = t + motion;
     
-    bool validHistory = all(saturate(reprojected_uv) == reprojected_uv) && FRAME_COUNT > 1;
-
-    if (abs(GetDepth(t) - GetLod(sDEPTH, reprojected_uv).r) > DEPTH_THRESHOLD)
-        validHistory = false;
+    // History Validation
+    bool validHistory = all(saturate(reprojected_uv) == reprojected_uv) && (FRAME_COUNT > 1);
+    
+    if (validHistory)
+    {
+        // Depth rejection
+        float currentDepth = GetDepth(t);
+        float historyDepth = GetLod(sDEPTH, reprojected_uv).r;
+        
+        if (abs(currentDepth - historyDepth) > DEPTH_THRESHOLD)
+            validHistory = false;
+    }
 
     if (validHistory)
     {
         float3 sumColor = 0.0;
         float3 sumColorSq = 0.0;
         
+        // Neighborhood clamping
         [unroll]
         for (int y = -1; y <= 1; ++y)
         {
@@ -260,8 +311,10 @@ float4 PS_Temporal(float4 pos : SV_Position, float2 t : TEXCOORD) : SV_Target
             }
         }
 
-        float3 mean = sumColor / 9.0;
-        float3 std_dev = sqrt(abs(sumColorSq / 9.0 - mean * mean));
+        float3 mean = sumColor * 0.111111; 
+        float3 variance = abs((sumColorSq * 0.111111) - (mean * mean));
+        float3 std_dev = sqrt(variance);
+        
         float3 clampMin = mean - VARIANCE_GAMMA * std_dev;
         float3 clampMax = mean + VARIANCE_GAMMA * std_dev;
 
@@ -269,8 +322,8 @@ float4 PS_Temporal(float4 pos : SV_Position, float2 t : TEXCOORD) : SV_Target
         historyYCoCg = clamp(historyYCoCg, clampMin, clampMax);
         
         float alpha = (FRAME_COUNT < 8) ? (1.0 / float(FRAME_COUNT)) : BASE_BLEND_ALPHA;
-        
         float motionLength = length(motion * ReShade::ScreenSize);
+        
         alpha = saturate(alpha + smoothstep(0.0, MOTION_REJECTION * 100.0, motionLength));
 
         currentYCoCg = lerp(historyYCoCg, currentYCoCg, alpha);
@@ -284,28 +337,30 @@ Output PS_SaveHistoryDepth(float4 pos : SV_Position, float2 t : TEXCOORD)
     Output outData;
     outData.Color = GetLod(sTEMP, t);
     float d = GetDepth(t);
-    outData.Depth = float4(d, d, d, 1.0); 
+    outData.Depth = float4(d, d, d, 1.0);
     return outData;
 }
 
 float4 OutPut(float4 pos : SV_Position, float2 t : TEXCOORD) : SV_Target
 {
     float4 daaResult = GetLod(sTEMP, t);
+    
     switch (View_Mode)
     {
-        case 2:
+        case 2: // Edge Mask
             return float4(daaResult.aaa, 1.0);
-        case 1:
+        case 1: // Edge Mask Overlay
             return float4(lerp(GetColor(t).rgb, float3(1.0, 0.2, 0.2), daaResult.a * 0.7), 1.0);
-        case 3:
+        case 3: // Gradient Direction
             return float4(normalize(computeGradient(t)) * 0.5 + 0.5, 0.0, 1.0);
-        default:
+        default: // Output
             return float4(daaResult.rgb, 1.0);
     }
 }
 
 technique DAA
 <
+    ui_label = "Directional Anti-Aliasing.";
     ui_tooltip = "Directional SpatioTemporal Anti-Aliasing.";
 >
 {
