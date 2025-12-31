@@ -1,7 +1,7 @@
 /*----------------------------------------------|
 | :: Barbatos SSR (Screen-Space Reflections) :: |
 |-----------------------------------------------|
-| Version: 0.5.5                                |
+| Version: 0.5.6                                |
 | Author: Barbatos                              |
 | License: MIT                                  |
 '----------------------------------------------*/
@@ -64,7 +64,8 @@ uniform float RoughnessSensitivity <
 
 uniform float MetallicLook <
     ui_type = "drag";
-    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+    ui_min = 0.0; ui_max = 1.0;
+    ui_step = 0.01;
     ui_category = "Surface Quality";
     ui_label = "Metallic Look";
     ui_tooltip = "Make surfaces look more metallic (0=non-metal, 1=metal)";
@@ -145,6 +146,7 @@ uniform int ViewMode <
 #define FAR_PLANE RESHADE_DEPTH_LINEARIZATION_FAR_PLANE
 #define GetColor(c) tex2Dlod(ReShade::BackBuffer, float4((c).xy, 0, 0))
 #define GetLod(s,c) tex2Dlod(s, float4((c).xy, 0, 0))
+#define fmod(x, y) (frac((x)*rcp(y)) * (y))
 
 static const float DEG2RAD = 0.017453292; // PI / 180.0
 static const float SobelEdgeThreshold = 0.03;
@@ -154,15 +156,7 @@ static const float OrientationThreshold = 0.5;
 static const float GeoCorrectionIntensity = -0.01;
 static const float EDGE_MASK_THRESHOLD = 0.2;
 static const float DIELECTRIC_REFLECTANCE = 0.04;
-
-#if __RENDERER__ == 0x9000
-    static const int STEPS_PER_RAY_WALLS_DX9 = 20;
-    static const int STEPS_PER_RAY_FLOOR_CEILING_QUALITY_DX9 = 64;
-    static const int STEPS_PER_RAY_FLOOR_CEILING_BALANCED_DX9 = 48;
-    static const int STEPS_PER_RAY_FLOOR_CEILING_PERF_DX9 = 32;
-#else
 static const int STEPS_PER_RAY_WALLS = 32;
-#endif
 
 uniform int FRAME_COUNT < source = "framecount"; >;
 
@@ -376,7 +370,8 @@ namespace Barbatos_SSR312
 
     float GetSpatialTemporalNoise(float2 pos)
     {
-        return frac(52.9829189 * frac(0.06711056 * pos.x + 0.00583715 * pos.y + 0.006237 * (float) (FRAME_COUNT & 63)));
+        float time = fmod((float) FRAME_COUNT, 64.0);
+        return frac(52.9829189 * frac(0.06711056 * pos.x + 0.00583715 * pos.y + 0.006237 * time));
     }
     
     float GetSpatialNoise(float2 pos)
@@ -387,7 +382,6 @@ namespace Barbatos_SSR312
     //------------------------------------|
     // :: View Space & Normal Functions ::|
     //------------------------------------|
-
     float3 UVToViewPos(float2 uv, float view_z, float2 pScale)
     {
         float2 ndc = uv * 2.0 - 1.0;
@@ -396,6 +390,9 @@ namespace Barbatos_SSR312
 
     float2 ViewPosToUV(float3 view_pos, float2 pScale)
     {
+        if (abs(view_pos.z) < 1e-6)
+            return 0.5;
+
         float2 ndc = view_pos.xy / (view_pos.z * pScale);
         return float2(ndc.x, -ndc.y) * 0.5 + 0.5;
     }
@@ -418,12 +415,10 @@ namespace Barbatos_SSR312
     {
         if (SurfaceDetails == 0.0 && GeoCorrectionIntensity == 0.0)
             return normal;
-
         float4 pTL = tex2DgatherG(ReShade::BackBuffer, texcoord - ReShade::PixelSize * 0.5);
         float4 pTR = tex2DgatherG(ReShade::BackBuffer, texcoord + float2(ReShade::PixelSize.x, -ReShade::PixelSize.y) * 0.5);
         float4 pBL = tex2DgatherG(ReShade::BackBuffer, texcoord + float2(-ReShade::PixelSize.x, ReShade::PixelSize.y) * 0.5);
         float4 pBR = tex2DgatherG(ReShade::BackBuffer, texcoord + ReShade::PixelSize * 0.5);
-
         float Gx = (pTR.z + 2.0 * pBR.z + pBR.y) - (pTL.w + 2.0 * pTL.x + pBL.x);
         float Gy = (pBL.x + 2.0 * pBR.w + pBR.y) - (pTL.w + 2.0 * pTL.z + pTR.z);
         float3 finalNormal = normal;
@@ -449,13 +444,10 @@ namespace Barbatos_SSR312
     float4 ComputeSmoothedNormal(float2 uv, float2 direction, sampler sInput)
     {
         float4 color = GetLod(sInput, uv);
-        
         float SNWidth = (SmartSurfaceMode == 0) ? 5.5 : ((SmartSurfaceMode == 1) ? 2.5 : 1.0);
         int SNSamples = (SmartSurfaceMode == 0) ? 1 : ((SmartSurfaceMode == 1) ? 3 : 30);
-
         float2 p = ReShade::PixelSize * SNWidth * direction;
         float T = rcp(max(Smooth_Threshold * saturate(2 * (1 - color.a)), 0.0001));
-        
         float4 s1 = 0.0;
         float sc = 0.0;
         
@@ -468,7 +460,7 @@ namespace Barbatos_SSR312
             s1 += s * diff;
             sc += diff;
         }
-        return s1 / sc;
+        return (sc > 0.0001) ? (s1 / sc) : color;
     }
     
     float4 SampleGBuffer(float2 uv)
@@ -479,7 +471,6 @@ namespace Barbatos_SSR312
     //-------------------|
     // :: Ray Tracing  ::|
     //-------------------|
-
     HitResult TraceRay(Ray r, int num_steps, float2 pScale, float jitter)
     {
         HitResult result;
@@ -489,7 +480,6 @@ namespace Barbatos_SSR312
 
         float step_scale, min_step_size, max_step_size;
         int refinement_steps;
-        
         if (QualityPreset == 1) // Performance
         {
             refinement_steps = 4;
@@ -509,11 +499,9 @@ namespace Barbatos_SSR312
         float z2 = z_factor * z_factor;
         step_scale = lerp(step_scale, step_scale * 1.2, z2);
         max_step_size = lerp(max_step_size, max_step_size * 4.0, z_factor);
-
         float stepSize = min_step_size;
         float totalDist = 0.0;
         float3 prevPos = r.origin + (r.direction * stepSize * jitter);
-        
         [loop]
         for (int i = 0; i < num_steps; ++i)
         {
@@ -522,12 +510,10 @@ namespace Barbatos_SSR312
 
             if (totalDist > 10.0)
                 break;
-            
             float2 uvCurr = ViewPosToUV(currPos, pScale);
     
             if (any(uvCurr < 0.0) || any(uvCurr > 1.0))
                 break;
-
             float sceneDepth = GetDepth(uvCurr);
             float thickness = abs(currPos.z - sceneDepth);
             float max_threshold = THICKNESS_THRESHOLD * (1.0 + totalDist * 0.1);
@@ -576,9 +562,7 @@ namespace Barbatos_SSR312
         float lumaS = GetLuminance(GetLod(ReShade::BackBuffer, float4(uv - float2(p.x, 0), 0, 0)).rgb);
         float lumaE = GetLuminance(GetLod(ReShade::BackBuffer, float4(uv + float2(0, p.y), 0, 0)).rgb);
         float lumaW = GetLuminance(GetLod(ReShade::BackBuffer, float4(uv - float2(0, p.y), 0, 0)).rgb);
-    
         float variance = abs(lumaN - lumaC) + abs(lumaS - lumaC) + abs(lumaE - lumaC) + abs(lumaW - lumaC);
-    
         return saturate(variance * 10.0);
     }
     
@@ -587,7 +571,7 @@ namespace Barbatos_SSR312
         if (specularPower >= 4096.0) // exp2(12.0)
             return 0.0;
         float exponent = rcp(specularPower + 1.0);
-        return acos(pow(0.244, exponent));
+        return acos(clamp(pow(0.244, exponent), -1.0, 1.0));
     }
     
     float isoscelesTriangleOpposite(float adjacentLength, float coneTheta)
@@ -599,19 +583,16 @@ namespace Barbatos_SSR312
     {
         float a2 = a * a;
         float fh2 = 4.0 * h * h;
-        return (a * (sqrt(a2 + fh2) - a)) / (4.0 * h);
+        return (a * (sqrt(a2 + fh2) - a)) / max(4.0 * h, 1e-6);
     }
 
     float3 GetGlossySample(float2 sample_uv, float2 pixel_uv, float local_roughness)
     {
         float netRoughness = saturate((1.0 - SurfaceSharpness) + (local_roughness * RoughnessSensitivity));
-
         if (netRoughness <= 0.001)
             return tex2Dlod(sTexColorCopy, float4(sample_uv, 0, 0)).rgb;
-
         float specularPower = pow(2.0, 10.0 * (1.0 - netRoughness) + 1.0);
         float coneTheta = specularPowerToConeAngle(specularPower) * 0.5;
-
         float2 deltaP = (sample_uv - pixel_uv) * BUFFER_SCREEN_SIZE;
         float adjacentLength = length(deltaP);
         float oppositeLength = isoscelesTriangleOpposite(adjacentLength, coneTheta);
@@ -619,13 +600,11 @@ namespace Barbatos_SSR312
 
         float rawMip = log2(max(1.0, incircleSize));
         float mipLevel = clamp(rawMip - 1.5, 0.0, 4.0);
-
         int adaptedSamples = (mipLevel > 1.0) ? max(6, GlossySamples / 2) : GlossySamples;
 
         float3 reflectionColor = 0.0;
         float noise = GetSpatialTemporalNoise(pixel_uv * BUFFER_SCREEN_SIZE * RenderResolution);
         float blurRadiusUV = incircleSize * ReShade::PixelSize.x;
-
         [loop]
         for (int i = 0; i < adaptedSamples; ++i)
         {
@@ -643,10 +622,10 @@ namespace Barbatos_SSR312
     //------------|
     // :: TAA  :: |
     //------------|
-
     float4 GetActiveHistory(float2 uv)
     {
-        return ((FRAME_COUNT & 1) == 0) ? GetLod(sHistory0, float4(uv, 0, 0)) : GetLod(sHistory1, float4(uv, 0, 0));
+        return (fmod((float) FRAME_COUNT, 2.0) < 0.5) ?
+            GetLod(sHistory0, float4(uv, 0, 0)) : GetLod(sHistory1, float4(uv, 0, 0));
     }
 
     float3 ClipToAABB(float3 aabb_min, float3 aabb_max, float3 history_sample)
@@ -667,7 +646,6 @@ namespace Barbatos_SSR312
         float2 closest_velocity = 0.0;
 
         static const float2 offsets[5] = { float2(0, 0), float2(0, -1), float2(-1, 0), float2(1, 0), float2(0, 1) };
-        
         [unroll]
         for (int i = 0; i < 5; i++)
         {
@@ -705,27 +683,21 @@ namespace Barbatos_SSR312
         float depth = GetDepth(input.uv);
         if (depth >= 1.0)
             return 0.0;
-
         float2 packed_uv = input.uv * RenderResolution;
         float4 current_reflection = GetLod(sReflection, float4(packed_uv, 0, 0));
-
         if (!EnableSmoothing)
             return current_reflection;
-
         // Reprojection
         float2 velocity = GetVelocityFromClosestFragment(input.uv);
         float2 reprojected_uv = input.uv + velocity;
-
         if (any(saturate(reprojected_uv) != reprojected_uv) || FRAME_COUNT <= 1)
             return current_reflection;
-
         float4 history_reflection = GetLod(sHistoryParams, float4(reprojected_uv, 0, 0));
 
         // Depth Check
         float history_depth = GetDepth(reprojected_uv);
         if (abs(history_depth - depth) > 0.005)
             return current_reflection;
-
         // AABB Clip
         float3 color_min, color_max;
         ComputeNeighborhoodMinMax(sReflection, packed_uv, current_reflection.rgb, color_min, color_max);
@@ -738,10 +710,8 @@ namespace Barbatos_SSR312
 
         float velocity_weight = saturate(1.0 - length(velocity * RenderResolution * 100.0));
         float raw_confidence = (1.0 - saturate(luma_diff * 8.0)) * velocity_weight;
-
         // Confidence Tonemapping
         float compressed_confidence = saturate(raw_confidence + log2(2.0 - raw_confidence) * 0.5);
-
         // Feedback 
         float feedback = compressed_confidence * 0.95;
         float3 temporal_rgb = lerp(current_reflection.rgb, clipped_history_rgb, feedback);
@@ -753,7 +723,6 @@ namespace Barbatos_SSR312
     //--------------------|
     // :: Pixel Shaders ::|
     //--------------------|
-
     void PS_CopyColor(VS_OUTPUT input, out float4 outColor : SV_Target)
     {
         float3 color = tex2D(ReShade::BackBuffer, input.uv).rgb;
@@ -798,7 +767,6 @@ namespace Barbatos_SSR312
     void PS_TraceReflections(VS_OUTPUT input, out float4 outReflection : SV_Target)
     {
         float2 scaled_uv = input.uv / RenderResolution;
-
         if (any(scaled_uv < 0.001) || any(scaled_uv > 0.999))
         {
             outReflection = 0;
@@ -817,7 +785,6 @@ namespace Barbatos_SSR312
         float3 normal = normalize(gbuffer.rgb);
         float3 viewPos = UVToViewPos(scaled_uv, depth, pScale);
         float3 viewDir = -normalize(viewPos);
-
         bool showFloor = (ReflectionMode == 0 || ReflectionMode == 3 || ReflectionMode == 4);
         bool showWall = (ReflectionMode == 1 || ReflectionMode == 4);
         bool showCeil = (ReflectionMode == 2 || ReflectionMode == 3 || ReflectionMode == 4);
@@ -825,7 +792,6 @@ namespace Barbatos_SSR312
         bool isFloor = normal.y > OrientationThreshold;
         bool isCeiling = normal.y < -OrientationThreshold;
         bool isWall = abs(normal.y) <= OrientationThreshold;
-
         float orientationIntensity = (isFloor * (float) showFloor) + (isWall * (float) showWall) + (isCeiling * (float) showCeil);
         if (orientationIntensity <= 0.0)
         {
@@ -848,17 +814,10 @@ namespace Barbatos_SSR312
         HitResult hit;
         float jitter = GetSpatialNoise(scaled_uv * BUFFER_SCREEN_SIZE);
 
-#if __RENDERER__ == 0x9000
-        if (isWall) 
-            hit = TraceRay(r, STEPS_PER_RAY_WALLS_DX9, pScale, jitter);
-        else 
-            hit = TraceRay(r, (QualityPreset == 1) ? STEPS_PER_RAY_FLOOR_CEILING_QUALITY_DX9 : STEPS_PER_RAY_FLOOR_CEILING_BALANCED_DX9, pScale, jitter);
-#else
         if (isWall)
             hit = TraceRay(r, STEPS_PER_RAY_WALLS, pScale, jitter);
         else
             hit = TraceRay(r, (QualityPreset == 1) ? 128 : 160, pScale, jitter);
-#endif
 
         float3 reflectionColor = 0;
         float reflectionAlpha = 0.0;
@@ -867,18 +826,15 @@ namespace Barbatos_SSR312
         if (hit.found)
         {
             reflectionColor = GetGlossySample(hit.uv, scaled_uv, estimatedRoughness);
-            
             // Distance Fading
             float distFactor = saturate(1.0 - length(hit.viewPos - viewPos) / 10.0);
             float fadeRange = max(FadeDistance, 0.001);
             float depthFade = saturate((FadeDistance - depth) / fadeRange);
             depthFade *= depthFade;
-
             // Screen Edge Fade
             float2 edgeDist = min(hit.uv, 1.0 - hit.uv);
-            float screenFade = smoothstep(0.0, 0.00, min(edgeDist.x, edgeDist.y));
+            float screenFade = smoothstep(0.0, 0.0, min(edgeDist.x, edgeDist.y));
             reflectionAlpha = distFactor * depthFade * screenFade;
-
             // Geometry Masking
             float3 nR = SampleGBuffer(scaled_uv + float2(ReShade::PixelSize.x, 0)).rgb;
             float3 nD = SampleGBuffer(scaled_uv + float2(0, ReShade::PixelSize.y)).rgb;
@@ -897,20 +853,20 @@ namespace Barbatos_SSR312
         }
         
         reflectionAlpha *= pow(saturate(dot(-viewDir, r.direction)), 2.0);
-        reflectionAlpha *= orientationIntensity; 
+        reflectionAlpha *= orientationIntensity;
         outReflection = float4(reflectionColor, reflectionAlpha);
     }
     
     void PS_Accumulate0(VS_OUTPUT input, out float4 outBlended : SV_Target)
     {
-        if ((FRAME_COUNT & 1) != 0)
+        if (fmod((float) FRAME_COUNT, 2.0) > 0.5)
             discard;
         outBlended = ComputeTAA(input, sHistory1);
     }
 
     void PS_Accumulate1(VS_OUTPUT input, out float4 outBlended : SV_Target)
     {
-        if ((FRAME_COUNT & 1) == 0)
+        if (fmod((float) FRAME_COUNT, 2.0) < 0.5)
             discard;
         outBlended = ComputeTAA(input, sHistory0);
     }
@@ -958,11 +914,9 @@ namespace Barbatos_SSR312
 
         float3 reflectionColor = reflectionSample.rgb;
         float reflectionMask = reflectionSample.a;
-
         // Colors Adjust
         reflectionColor = AdjustContrast(reflectionColor, g_Contrast);
         reflectionColor = AdjustSaturation(reflectionColor, g_Saturation);
-
         // PBR
         float2 pScale = input.pScale;
         float3 viewDir = -normalize(UVToViewPos(input.uv, depth, pScale));
@@ -979,7 +933,6 @@ namespace Barbatos_SSR312
             float3 kD = (1.0 - kS * effectiveIntensity) * (1.0 - MetallicLook * effectiveIntensity);
             float3 diffuseComponent = color * kD;
             float3 specularComponent = reflectionColor * kS * Intensity;
-            
             finalColor = lerp(color, diffuseComponent + specularComponent, reflectionMask);
         }
         else // Blending.fxh
