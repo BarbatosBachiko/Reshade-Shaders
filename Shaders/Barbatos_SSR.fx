@@ -833,7 +833,7 @@ namespace Barbatos_SSR312
             depthFade *= depthFade;
             // Screen Edge Fade
             float2 edgeDist = min(hit.uv, 1.0 - hit.uv);
-            float screenFade = smoothstep(0.0, 0.0, min(edgeDist.x, edgeDist.y));
+            float screenFade = smoothstep(0.0, 0.001, min(edgeDist.x, edgeDist.y));
             reflectionAlpha = distFactor * depthFade * screenFade;
             // Geometry Masking
             float3 nR = SampleGBuffer(scaled_uv + float2(ReShade::PixelSize.x, 0)).rgb;
