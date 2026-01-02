@@ -1,7 +1,7 @@
 /*----------------------------------------------|
 | :: Barbatos SSR (Screen-Space Reflections) :: |
 |-----------------------------------------------|
-| Version: 0.5.6                                |
+| Version: 0.5.61                               |
 | Author: Barbatos                              |
 | License: MIT                                  |
 '----------------------------------------------*/
@@ -41,40 +41,40 @@ uniform float FadeDistance <
 uniform int ReflectionMode <
     ui_type = "combo";
     ui_items = "Floors Only\0Walls Only\0Ceilings Only\0Floors & Ceilings\0All Surfaces\0";
-    ui_category = "Surface Quality";
-    ui_label = "Reflection Surfaces";
+    ui_category = "Basic Settings";
+    ui_label = "Surfaces";
     ui_tooltip = "Choose which surfaces show reflections";
 > = 4;
 
-uniform float SurfaceSharpness <
+uniform float SurfaceGlossiness <
     ui_type = "drag";
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
-    ui_category = "Surface Quality";
-    ui_label = "Surface Sharpness";
-    ui_tooltip = "How clear or blurry reflections appear (0=blurry, 1=sharp)";
-> = 0.75;
+    ui_category = "Material";
+    ui_label = "Surface Glossiness";
+    ui_tooltip = "Controls surface smoothness.\n0 = Sharp reflections (Defined)\n1 = Total roughness";
+> = 0.25; 
 
-uniform float RoughnessSensitivity <
-    ui_type = "drag";
-    ui_min = 0.0; ui_max = 2.0; ui_step = 0.01;
-    ui_category = "Surface Quality";
-    ui_label = "Adaptive Roughness";
-    ui_tooltip = "Estimates roughness based on local color contrast.\nHigher values make detailed/noisy textures appear rougher.";
-> = 1.0;
-
-uniform float MetallicLook <
+uniform float MetallicFactor <
     ui_type = "drag";
     ui_min = 0.0; ui_max = 1.0;
     ui_step = 0.01;
-    ui_category = "Surface Quality";
-    ui_label = "Metallic Look";
+    ui_category = "Material";
+    ui_label = "Metallic";
     ui_tooltip = "Make surfaces look more metallic (0=non-metal, 1=metal)";
 > = 0.2;
 
-uniform float SurfaceDetails <
-    ui_label = "Surface Details";
+uniform float RoughnessDetection <
     ui_type = "drag";
-    ui_category = "Surface Quality";
+    ui_min = 0.0; ui_max = 2.0; ui_step = 0.01;
+    ui_category = "Material";
+    ui_label = "Roughness Detection";
+    ui_tooltip = "Estimates roughness based on local color contrast.\nHigher values make detailed/noisy textures appear rougher.";
+> = 1.0;
+
+uniform float SurfaceDetails <
+    ui_category = "Material";
+    ui_label = "Details";
+    ui_type = "drag";
     ui_min = 0.0; ui_max = 5.0; ui_step = 0.01;
     ui_tooltip = "Adds small surface details to reflections";
 > = 0.1;
@@ -91,7 +91,7 @@ uniform float RenderResolution <
     ui_type = "drag";
     ui_min = 0.3; ui_max = 1.0; ui_step = 0.05;
     ui_category = "Performance";
-    ui_label = "Render Resolution";
+    ui_label = "Resolution %";
     ui_tooltip = "Lower values = better performance but less details";
 > = 0.8;
 
@@ -588,7 +588,8 @@ namespace Barbatos_SSR312
 
     float3 GetGlossySample(float2 sample_uv, float2 pixel_uv, float local_roughness)
     {
-        float netRoughness = saturate((1.0 - SurfaceSharpness) + (local_roughness * RoughnessSensitivity));
+        float netRoughness = saturate(SurfaceGlossiness + (local_roughness * RoughnessDetection));
+        
         if (netRoughness <= 0.001)
             return tex2Dlod(sTexColorCopy, float4(sample_uv, 0, 0)).rgb;
         float specularPower = pow(2.0, 10.0 * (1.0 - netRoughness) + 1.0);
@@ -922,7 +923,7 @@ namespace Barbatos_SSR312
         float3 viewDir = -normalize(UVToViewPos(input.uv, depth, pScale));
         float VdotN = saturate(dot(viewDir, normal));
         
-        float3 f0 = lerp(DIELECTRIC_REFLECTANCE.xxx, color, MetallicLook);
+        float3 f0 = lerp(DIELECTRIC_REFLECTANCE.xxx, color, MetallicFactor);
         float3 F = F_Schlick(VdotN, f0);
 
         float3 finalColor;
@@ -930,7 +931,7 @@ namespace Barbatos_SSR312
         {
             float3 kS = F;
             float effectiveIntensity = saturate(Intensity);
-            float3 kD = (1.0 - kS * effectiveIntensity) * (1.0 - MetallicLook * effectiveIntensity);
+            float3 kD = (1.0 - kS * effectiveIntensity) * (1.0 - MetallicFactor * effectiveIntensity);
             float3 diffuseComponent = color * kD;
             float3 specularComponent = reflectionColor * kS * Intensity;
             finalColor = lerp(color, diffuseComponent + specularComponent, reflectionMask);
