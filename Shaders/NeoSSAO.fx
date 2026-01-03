@@ -1,7 +1,7 @@
 /*----------------------------------------------|
 | ::                NeoSSAO                  :: |
 |-----------------------------------------------|
-| Version: 2.1                                  |
+| Version: 2.2                                  |
 | Author: Barbatos                              |
 | License: MIT                                  |
 |----------------------------------------------*/
@@ -40,7 +40,8 @@ uniform float RenderScale <
     ui_type = "drag";
     ui_category = "Performance";
     ui_label = "Render Resolution";
-    ui_min = 0.1; ui_max = 1.0; ui_step = 0.01;
+    ui_min = 0.1;
+    ui_max = 1.0; ui_step = 0.01;
 > = 1.0;
 
 uniform int RaySteps <
@@ -55,7 +56,8 @@ uniform int SampleCount <
     ui_type = "slider";
     ui_category = "Performance";
     ui_label = "Slice Count";
-    ui_min = 1; ui_max = 16;
+    ui_min = 1;
+    ui_max = 16;
 > = 4;
 
 uniform float FadeStart <
@@ -79,6 +81,20 @@ uniform float BlurSharpness <
     ui_tooltip = "Higher values preserve more edges but reduce blur strength.";
     ui_min = 0.0; ui_max = 5.0; ui_step = 0.1;
 > = 1.0;
+
+uniform bool EnableTAA <
+    ui_category = "Temporal Anti-Aliasing";
+    ui_label = "Enable TAA";
+    ui_tooltip = "Enables temporal accumulation to reduce noise and flickering.";
+> = false;
+
+uniform float TemporalStability <
+    ui_type = "drag";
+    ui_category = "Temporal Anti-Aliasing";
+    ui_label = "Temporal Stability";
+    ui_min = 0.0; ui_max = 0.99; ui_step = 0.01;
+    ui_tooltip = "Higher values = smoother but more ghosting. Lower values = faster reaction but more noise.";
+> = 0.85;
 
 uniform bool EnableDepthMultiplier <
     ui_type = "checkbox";
@@ -117,8 +133,10 @@ uniform int ViewMode <
     ui_type = "combo";
     ui_category = "Debug & Style";
     ui_label = "View Mode";
-    ui_items = "None\0AO Only\0Depth\0Normals\0";
+    ui_items = "None\0AO Only\0Depth\0";
 > = 0;
+
+uniform int FRAME_COUNT < source = "framecount"; >;
 
 // Defines
 #define PI 3.1415926535
@@ -128,9 +146,50 @@ uniform int ViewMode <
 #define GetLod(s,c) tex2Dlod(s, float4((c).xy, 0, 0))
 #define GetColor(c) tex2Dlod(ReShade::BackBuffer, float4((c).xy, 0, 0))
 static const int BlurRadius = 2;
+
 //----------------|
 // :: Textures :: |
 //----------------|
+
+#ifndef USE_MARTY_LAUNCHPAD_MOTION
+#define USE_MARTY_LAUNCHPAD_MOTION 0
+#endif
+
+#ifndef USE_VORT_MOTION
+#define USE_VORT_MOTION 0
+#endif
+
+#if USE_MARTY_LAUNCHPAD_MOTION
+    namespace Deferred {
+        texture MotionVectorsTex { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
+        sampler sMotionVectorsTex { Texture = MotionVectorsTex; };
+    }
+    float2 SampleMotionVectors(float2 texcoord) { return tex2Dlod(Deferred::sMotionVectorsTex, float4(texcoord, 0, 0)).rg; }
+#elif USE_VORT_MOTION
+    texture2D MotVectTexVort { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
+    sampler2D sMotVectTexVort { Texture = MotVectTexVort; MagFilter=POINT;MinFilter=POINT;MipFilter=POINT;AddressU=Clamp;AddressV=Clamp; };
+    float2 SampleMotionVectors(float2 texcoord) { return tex2Dlod(sMotVectTexVort, float4(texcoord, 0, 0)).rg; }
+#else
+texture texMotionVectors
+{
+    Width = BUFFER_WIDTH;
+    Height = BUFFER_HEIGHT;
+    Format = RG16F;
+};
+sampler sTexMotionVectorsSampler
+{
+    Texture = texMotionVectors;
+    MagFilter = POINT;
+    MinFilter = POINT;
+    MipFilter = POINT;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+float2 SampleMotionVectors(float2 texcoord)
+{
+    return tex2Dlod(sTexMotionVectorsSampler, float4(texcoord, 0, 0)).rg;
+}
+#endif
 
 namespace Barbatos_NeoSSAO2
 {
@@ -138,7 +197,7 @@ namespace Barbatos_NeoSSAO2
     {
         Width = BUFFER_WIDTH;
         Height = BUFFER_HEIGHT;
-        Format = RGBA16F;
+        Format = RG16F;
     };
     sampler sNormal
     {
@@ -165,6 +224,28 @@ namespace Barbatos_NeoSSAO2
     sampler2D sAOBlur
     {
         Texture = AOBlur;
+    };
+
+    texture2D History0
+    {
+        Width = BUFFER_WIDTH;
+        Height = BUFFER_HEIGHT;
+        Format = R8;
+    };
+    sampler sHistory0
+    {
+        Texture = History0;
+    };
+
+    texture2D History1
+    {
+        Width = BUFFER_WIDTH;
+        Height = BUFFER_HEIGHT;
+        Format = R8;
+    };
+    sampler sHistory1
+    {
+        Texture = History1;
     };
 
     //-------------|
@@ -225,7 +306,9 @@ namespace Barbatos_NeoSSAO2
 
     float3 getNormalFromTex(float2 coords)
     {
-        return tex2Dlod(sNormal, float4(coords, 0, 0)).xyz;
+        float2 normXY = tex2Dlod(sNormal, float4(coords, 0, 0)).xy;
+        float z = sqrt(saturate(1.0 - dot(normXY, normXY)));
+        return float3(normXY, -z);
     }
 
     float GetBayer8x8(float2 uv)
@@ -236,7 +319,6 @@ namespace Barbatos_NeoSSAO2
             0, 32, 8, 40, 2, 34, 10, 42, 48, 16, 56, 24, 50, 18, 58, 26,
             12, 44, 4, 36, 14, 46, 6, 38, 60, 28, 52, 20, 62, 30, 54, 22,
              3, 35, 11, 43, 1, 33, 9, 41, 51, 19, 59, 27, 49, 17, 57, 25,
-      
             15, 47, 7, 39, 13, 45, 5, 37, 63, 31, 55, 23, 61, 29, 53, 21
         };
         return float(bayer[(pixelPos.x % 8) + (pixelPos.y % 8) * 8]) * (1.0 / 64.0);
@@ -260,8 +342,7 @@ namespace Barbatos_NeoSSAO2
     {
         uint startHorizonInt = minHorizon * SECTOR_COUNT;
         uint angleHorizonInt = ceil((maxHorizon - minHorizon) * SECTOR_COUNT);
-        uint angleHorizonBitfield = angleHorizonInt > 0 ?
-            (0xFFFFFFFF >> (SECTOR_COUNT - angleHorizonInt)) : 0;
+        uint angleHorizonBitfield = angleHorizonInt > 0 ? (0xFFFFFFFF >> (SECTOR_COUNT - angleHorizonInt)) : 0;
         uint currentOccludedBitfield = angleHorizonBitfield << startHorizonInt;
         return globalOccludedBitfield | currentOccludedBitfield;
     }
@@ -296,7 +377,7 @@ namespace Barbatos_NeoSSAO2
         float4 edges = CalculateEdges(p_c.z, p_l.z, p_r.z, p_t.z, p_b.z);
         float3 normal = CalculateNormal(edges, p_c, p_l, p_r, p_t, p_b);
 
-        return float4(normal, 1.0);
+        return float4(normal.xy, 0.0, 1.0);
     }
 
     float4 PS_SSAO(VS_OUTPUT input) : SV_Target
@@ -308,19 +389,20 @@ namespace Barbatos_NeoSSAO2
         float center_depth = GetDepth(scaled_uv);
         if (center_depth >= DepthThreshold)
             return 1.0;
+
         float realDepthMult = EnableDepthMultiplier ? lerp(0.1, 5.0, DepthMultiplier) : 1.0;
         float2 invPScale = 1.0 / input.pScale;
         float3 positionVS = UVToViewPos(scaled_uv, center_depth * FAR_PLANE, input.pScale, realDepthMult);
         float3 normalVS = getNormalFromTex(scaled_uv);
-        
         positionVS += normalVS * (0.005 * realDepthMult);
+        
         float3 V = normalize(-positionVS);
-
         float random_val = GetBayer8x8(input.uv);
         float stepDist = (max(AORadius, 0.01)) / float(RaySteps);
+        float centerZ = positionVS.z;
         
         float totalVisibility = 0.0;
-        [loop]
+
         for (int i = 0; i < SampleCount; i++)
         {
             float angle = (float(i) + random_val) * (PI / float(SampleCount));
@@ -332,26 +414,28 @@ namespace Barbatos_NeoSSAO2
             float cosN = dot(projN / (projNLen + 1e-6), V);
             float3 T = cross(V, sliceN);
             float N_angle = -sign(dot(projN, T)) * GTAOFastAcos(cosN);
-            
+            float2 uvDir = (dir * invPScale * float2(0.5, -0.5));
+            float2 uvStep = (uvDir * stepDist) / (centerZ + 1e-6);
+
             uint globalOccludedBitfield = 0;
-            [unroll]
+
             for (int side = -1; side <= 1; side += 2)
             {
-                float currentDist = stepDist * (random_val + 0.1);
                 float2 rayDir = dir * float(side);
-                
+                float3 rayDirVS = float3(rayDir, 0); 
+                float marchProgress = random_val + 0.1;
+
                 [loop]
                 for (int j = 0; j < RaySteps; j++)
                 {
-                    float3 samplePosRay = positionVS + (float3(rayDir, 0) * currentDist);
-                    float invZ = 1.0 / (samplePosRay.z + 1e-6);
-                    float2 projected = samplePosRay.xy * invZ * invPScale;
-                    float2 sample_uv = projected * float2(0.5, -0.5) + 0.5;
-
+                    float2 sample_uv = input.uv + (uvStep * float(side) * marchProgress);
                     if (all(saturate(sample_uv) == sample_uv))
                     {
                         float sampleDepth = GetDepth(sample_uv);
-                        float3 samplePosVS = UVToViewPos(sample_uv, sampleDepth * FAR_PLANE, input.pScale, realDepthMult);
+                        float currentDist = stepDist * marchProgress;
+                        float3 samplePosRay = positionVS + (rayDirVS * currentDist);
+                        
+                        float3 samplePosVS = samplePosRay * ((sampleDepth * FAR_PLANE) / centerZ);
                         
                         float3 deltaPos = samplePosVS - positionVS;
                         float3 deltaPosBackface = deltaPos - V * Thickness;
@@ -359,14 +443,14 @@ namespace Barbatos_NeoSSAO2
                         float2 frontBackHorizon = float2(dot(normalize(deltaPos), V), dot(normalize(deltaPosBackface), V));
                         frontBackHorizon = GTAOFastAcos(frontBackHorizon);
                         float2 horizonAngles = (float(side) * -frontBackHorizon - N_angle + HALF_PI) / PI;
+                        
                         horizonAngles = saturate(horizonAngles);
-
                         float minH = min(horizonAngles.x, horizonAngles.y);
                         float maxH = max(horizonAngles.x, horizonAngles.y);
                         
                         globalOccludedBitfield = UpdateSectors(minH, maxH, globalOccludedBitfield);
                     }
-                    currentDist += stepDist;
+                    marchProgress += 1.0;
                 }
             }
             
@@ -389,20 +473,18 @@ namespace Barbatos_NeoSSAO2
         float2 scaled_uv = input.uv / RenderScale;
         if (any(scaled_uv > 1.0))
             discard;
-
-        float2 texelSize = ReShade::PixelSize * 1.5; 
+        float2 texelSize = ReShade::PixelSize * 1.5;
         float centerDepth = GetDepth(scaled_uv);
         
         float totalWeight = 1.0;
-        float totalAO = tex2D(sAO, input.uv).r; 
-
+        float totalAO = tex2D(sAO, input.uv).r;
         const int2 offsets[14] =
         {
-            int2(0, 1), int2(0, -1), 
+            int2(0, 1), int2(0, -1),
             int2(0, 2), int2(0, -2),
             int2(1, 0), int2(-1, 0),
-            int2(1, 1), int2(1, -1), int2(-1, 1), int2(-1, -1), 
-            int2(1, 2), int2(1, -2), int2(-1, 2), int2(-1, -2) 
+            int2(1, 1), int2(1, -1), int2(-1, 1), int2(-1, -1),
+            int2(1, 2), int2(1, -2), int2(-1, 2), int2(-1, -2)
         };
 
         const float spatialWeights[14] =
@@ -433,10 +515,81 @@ namespace Barbatos_NeoSSAO2
         return totalAO / totalWeight;
     }
 
+    float4 PS_TAA(VS_OUTPUT input, sampler sHistory)
+    {
+        float2 scaled_uv = input.uv / RenderScale;
+        if (any(scaled_uv > 1.0))
+            discard;
+        
+        float currentAO = tex2D(sAOBlur, input.uv).r; 
+        
+        if (!EnableTAA)
+            return currentAO;
+
+        float2 velocity = SampleMotionVectors(input.uv);
+        float2 prevUV = scaled_uv + velocity;
+        
+        // Reprojection check
+        if (any(prevUV < 0.0) || any(prevUV > 1.0))
+            return currentAO;
+
+        float historyAO = tex2D(sHistory, prevUV * RenderScale).r;
+
+        // Neighborhood Clamping 
+        float minNeighborhood = 1.0;
+        float maxNeighborhood = 0.0;
+        
+        float2 texel = ReShade::PixelSize / RenderScale;
+
+        [unroll]
+        for (int x = -1; x <= 1; x++)
+        {
+            [unroll]
+            for (int y = -1; y <= 1; y++)
+            {
+                float neighbor = tex2D(sAOBlur, (scaled_uv + float2(x, y) * texel) * RenderScale).r;
+                minNeighborhood = min(minNeighborhood, neighbor);
+                maxNeighborhood = max(maxNeighborhood, neighbor);
+            }
+        }
+        
+        // Clamp History 
+        historyAO = clamp(historyAO, minNeighborhood, maxNeighborhood);
+
+        // Blend
+        return lerp(currentAO, historyAO, TemporalStability);
+    }
+
+    float4 PS_Accumulate0(VS_OUTPUT input) : SV_Target
+    {
+        if (FRAME_COUNT % 2 != 0)
+            discard;
+        return PS_TAA(input, sHistory1);
+    }
+
+    float4 PS_Accumulate1(VS_OUTPUT input) : SV_Target
+    {
+        if (FRAME_COUNT % 2 == 0)
+            discard;
+        return PS_TAA(input, sHistory0);
+    }
+
     float4 PS_Output(VS_OUTPUT input) : SV_Target
     {
         float4 originalColor = GetColor(input.uv);
-        float occlusion = tex2D(sAOBlur, input.uv * RenderScale).r;
+        float occlusion = 1.0;
+
+        if (EnableTAA)
+        {
+            if (FRAME_COUNT % 2 == 0)
+                occlusion = tex2D(sHistory0, input.uv).r;
+            else
+                occlusion = tex2D(sHistory1, input.uv).r;
+        }
+        else
+        {
+            occlusion = tex2D(sAOBlur, input.uv * RenderScale).r;
+        }
 
         if (ViewMode == 0) // Normal
         {
@@ -448,8 +601,6 @@ namespace Barbatos_NeoSSAO2
             return occlusion;
         else if (ViewMode == 2) // Depth
             return GetDepth(input.uv);
-        else if (ViewMode == 3) // Normals
-            return float4(getNormalFromTex(input.uv) * 0.5 + 0.5, 1.0);
         return originalColor;
     }
 
@@ -472,6 +623,18 @@ namespace Barbatos_NeoSSAO2
             VertexShader = VS_NeoSSAO;
             PixelShader = PS_BilateralBlur;
             RenderTarget = AOBlur;
+        }
+        pass Accumulate0
+        {
+            VertexShader = VS_NeoSSAO;
+            PixelShader = PS_Accumulate0;
+            RenderTarget = History0;
+        }
+        pass Accumulate1
+        {
+            VertexShader = VS_NeoSSAO;
+            PixelShader = PS_Accumulate1;
+            RenderTarget = History1;
         }
         pass OutputPass
         {
