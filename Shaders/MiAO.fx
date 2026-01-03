@@ -20,7 +20,7 @@ THE SOFTWARE.
 /*-------------------------------------------------|
 | ::                   MiAO                     :: |
 '--------------------------------------------------|
-| Version: 1.21                                    |
+| Version: 1.3                                     |
 | Author: Barbatos                                 |
 | License: MIT                                     |
 | Description: Simple ambient occlusion with repur-|
@@ -57,7 +57,6 @@ static const float2 R2 = float2(0.75487766624669276005, 0.5698402909980532659114
 // :: UI :: |
 //----------|
 
-// -- Basic Settings --
 uniform float ShadowPow <
     ui_type = "drag";
     ui_category = "Basic Settings";
@@ -82,7 +81,6 @@ uniform float EffectShadowClamp <
     ui_tooltip = "Limits the maximum amount of occlusion to prevent excessive darkening.";
 > = 0.98;
 
-// -- Performance & Quality --
 uniform int QualityLevel <
     ui_type = "combo";
     ui_label = "Quality";
@@ -105,7 +103,6 @@ uniform bool EnableTemporal <
     ui_tooltip = "Reduces flickering and noise using temporal anti-aliasing";
 > = true;
 
-// -- Advanced Options --
 uniform bool EnableDistantRadius <
     ui_category = "Advanced Options";
     ui_label = "Enable Distant Radius";
@@ -152,6 +149,9 @@ uniform int DebugView <
 
 uniform int FRAME_COUNT < source = "framecount"; >;
 
+static const int g_TapCounts[5] = { 3, 5, 12, 20, 31 };
+static const float DEG2RAD = 0.017453292; // PI / 180.0
+#define TWO_PI 6.2831854
 //----------------|
 // :: Textures :: |
 //----------------|
@@ -209,7 +209,7 @@ sampler sMotionConfidence
     AddressW = CLAMP;
 };
 
-namespace MiAO
+namespace MiAO32
 {
     texture DEPTH
     {
@@ -238,6 +238,7 @@ namespace MiAO
         Width = BUFFER_WIDTH;
         Height = BUFFER_HEIGHT;
         Format = R16F;
+        MipLevels = 4;
     };
     sampler sAO
     {
@@ -259,7 +260,7 @@ namespace MiAO
     {
         Width = BUFFER_WIDTH;
         Height = BUFFER_HEIGHT;
-        Format = RG16F; 
+        Format = RG16F;
     };
     sampler sHISTORY_AO
     {
@@ -270,6 +271,13 @@ namespace MiAO
 // :: Functions ::|
 //----------------|
 
+    struct VS_OUTPUT
+    {
+        float4 vpos : SV_Position;
+        float2 uv : TEXCOORD0;
+        float2 pScale : TEXCOORD1;
+    };
+    
     float2 GetMotion(float2 texcoord)
     {
 #if USE_MARTY_LAUNCHPAD_MOTION
@@ -289,24 +297,26 @@ namespace MiAO
     float2 GetVelocityFromClosestFragment(float2 texcoord)
     {
         float2 pixel_size = ReShade::PixelSize;
-        float closest_depth = 1.0;
-        float2 closest_velocity = 0;
-        const int2 offsets[9] = { int2(-1, -1), int2(0, -1), int2(1, -1), int2(-1, 0), int2(0, 0), int2(1, 0), int2(-1, 1), int2(0, 1), int2(1, 1) };
+        float closest_depth = GetDepth(texcoord);
+        float2 best_coord = texcoord;
+        
+        const int2 offsets[4] = { int2(-1, 0), int2(1, 0), int2(0, -1), int2(0, 1) };
+
         [unroll]
-        for (int i = 0; i < 9; i++)
+        for (int i = 0; i < 4; i++)
         {
             float2 s_coord = texcoord + offsets[i] * pixel_size;
             float s_depth = GetDepth(s_coord);
             if (s_depth < closest_depth)
             {
                 closest_depth = s_depth;
-                closest_velocity = GetMotion(s_coord);
+                best_coord = s_coord;
             }
         }
-        return closest_velocity;
+        return GetMotion(best_coord);
     }
 
-     //Based on LumaFlow.fx from LumeniteFX CC-BY-NC-4.0
+    //Based on LumaFlow.fx from LumeniteFX CC-BY-NC-4.0
     float Confidence(float2 uv, float2 velocity)
     {
         float2 prev_uv = uv + velocity;
@@ -334,32 +344,11 @@ namespace MiAO
         return (consistency_conf * length_conf * photometric_conf);
     }
 
-    void ComputeNeighborhoodMinMax(sampler2D color_tex, float2 texcoord, out float4 color_min, out float4 color_max)
+    void ComputeNeighborhoodMinMax(sampler2D color_tex, float2 texcoord, float center_val, out float color_min, out float color_max)
     {
-        float2 pixel_size = ReShade::PixelSize;
-        float4 center_val = GetLod(color_tex, float4(texcoord, 0, 0));
-        color_min = center_val;
-        color_max = center_val;
-        const int2 offsets_3x3[8] = { int2(-1, -1), int2(0, -1), int2(1, -1), int2(-1, 0), int2(1, 0), int2(-1, 1), int2(0, 1), int2(1, 1) };
-        [unroll]
-        for (int i = 0; i < 8; i++)
-        {
-            float4 n_val = GetLod(color_tex, float4(texcoord + offsets_3x3[i] * pixel_size, 0, 0));
-            color_min = min(color_min, n_val);
-            color_max = max(color_max, n_val);
-        }
-        const int2 offsets_cross[4] = { int2(0, -2), int2(-2, 0), int2(2, 0), int2(0, 2) };
-        float4 cross_min = center_val;
-        float4 cross_max = center_val;
-        [unroll]
-        for (int j = 0; j < 4; j++)
-        {
-            float4 n_val = GetLod(color_tex, float4(texcoord + offsets_cross[j] * pixel_size, 0, 0));
-            cross_min = min(cross_min, n_val);
-            cross_max = max(color_max, n_val);
-        }
-        color_min = lerp(cross_min, color_min, 0.5);
-        color_max = lerp(cross_max, color_max, 0.5);
+        float4 vals = tex2DgatherR(color_tex, texcoord);
+        color_min = min(center_val, min(min(vals.x, vals.y), min(vals.z, vals.w)));
+        color_max = max(center_val, max(max(vals.x, vals.y), max(vals.z, vals.w)));
     }
 
     float ComputeTrustFactor(float2 velocity_pixels, float low_threshold = 10.0, float high_threshold = 80.0)
@@ -402,30 +391,18 @@ namespace MiAO
         return frac(0.5 + index * R2);
     }
 
-    float2 CameraTanHalfFOV()
-    {
-        float fov_rad = FOV * (PI / 180.0);
-        float tanHalfFOV = tan(fov_rad * 0.5);
-        return float2(tanHalfFOV, tanHalfFOV);
-    }
-    
-    float2 NDCToViewMul()
-    {
-        float2 tanHalfFOV = CameraTanHalfFOV();
-        return float2(tanHalfFOV.x * ReShade::AspectRatio, tanHalfFOV.y);
-    }
-
     float ScreenSpaceToViewSpaceDepth(float screenDepth)
     {
         return screenDepth * RESHADE_DEPTH_LINEARIZATION_FAR_PLANE;
     }
 
-    float3 DepthBufferUVToViewSpace(float2 pos, float viewspaceDepth)
+    float3 DepthBufferUVToViewSpace(float2 pos, float viewspaceDepth, float2 pScale)
     {
         float3 ret;
         float2 ndc = pos * 2.0 - 1.0;
         ndc.y = -ndc.y;
-        ret.xy = (NDCToViewMul() * ndc) * viewspaceDepth;
+        
+        ret.xy = (pScale * ndc) * viewspaceDepth;
         ret.z = viewspaceDepth;
         return ret;
     }
@@ -435,7 +412,7 @@ namespace MiAO
         float4 edgesLRTB = float4(leftZ, rightZ, topZ, bottomZ) - centerZ;
         float4 edgesLRTBSlopeAdjusted = edgesLRTB + edgesLRTB.yxwz;
         edgesLRTB = min(abs(edgesLRTB), abs(edgesLRTBSlopeAdjusted));
-        return saturate((1.3 - edgesLRTB / (centerZ * 0.040)));
+        return saturate(1.3 - (edgesLRTB * 25.0) / centerZ);
     }
 
     float3 CalculateNormal(const float4 edgesLRTB, float3 pixCenterPos, float3 pixLPos, float3 pixRPos, float3 pixTPos, float3 pixBPos)
@@ -453,49 +430,40 @@ namespace MiAO
         return normalize(pixelNormal);
     }
 
+    static const float K_Weights[31] =
+    {
+    1.5000, 1.4719, 1.4437, 1.4156, 1.3875, 1.3594, 1.3312, 1.3031,
+    1.2750, 1.2469, 1.2187, 1.1906, 1.1625, 1.1344, 1.1062, 1.0781,
+    1.0500, 1.0219, 0.9937, 0.9656, 0.9375, 0.9094, 0.8812, 0.8531,
+    0.8250, 0.7969, 0.7687, 0.7406, 0.7125, 0.6844, 0.6562
+    };
+
+    static const float K_MipLevels[31] =
+    {
+     -2.00, -1.50, -1.00, -1.00, -0.90, -0.80, -0.70, -0.60, -0.50, -0.40, -0.30, -0.20, 
+     -0.50, -0.45, -0.40, -0.35, -0.30, -0.25, -0.20, -0.15, -0.10, -0.05, 0.00, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40 
+    };
+
     float4 GetSamplePattern(int index, float2 noise)
     {
         float2 offset = frac(R2 * float(index) + noise);
         float radius = sqrt(offset.x);
-        float angle = offset.y * 2.0 * PI;
-    
+        float angle = offset.y * TWO_PI;
+
         float2 samplePos;
         sincos(angle, samplePos.y, samplePos.x);
         samplePos *= radius;
-        float weight = lerp(1.5, 0.6, saturate(float(index) / 32.0));
-        float mipLevel;
-        if (index < 3)
-            mipLevel = -2.0 + float(index) * 0.5;
-        else if (index < 12)
-            mipLevel = -1.0 + float(index - 3) * 0.1;
-        else
-            mipLevel = -0.5 + float(index - 12) * 0.05;
+        index = clamp(index, 0, 30);
     
-        return float4(samplePos, weight, mipLevel);
-    }
-
-    int GetNumTaps(int qualityLevel)
-    {
-        switch (qualityLevel)
-        {
-            case 0:
-                return 3;
-            case 1:
-                return 5;
-            case 2:
-                return 12;
-            case 3:
-                return 20;
-            case 4:
-                return 31;
-        }
-        return 12;
+        return float4(samplePos, K_Weights[index], K_MipLevels[index]);
     }
 
     float CalculatePixelObscurance(float3 pixelNormal, float3 hitDelta, float falloffCalcMulSq)
     {
         float lengthSq = dot(hitDelta, hitDelta);
-        float NdotD = dot(pixelNormal, hitDelta) / sqrt(lengthSq);
+        float invLength = rsqrt(lengthSq);
+        float NdotD = dot(pixelNormal, hitDelta) * invLength;
+    
         float falloffMult = max(0.0, lengthSq * falloffCalcMulSq + 1.0);
         return max(0, NdotD - EffectHorizonAngleThreshold) * falloffMult;
     }
@@ -504,7 +472,7 @@ namespace MiAO
     inout float obscuranceSum, inout float weightSum,
     const int tapIndex, const float2x2 rotScale, const float3 pixCenterPos,
     const float3 pixelNormal, const float2 depthBufferUV, const float falloffCalcMulSq,
-    const float2 noise)
+    const float2 noise, const float2 pScale)
     {
         float4 newSample = GetSamplePattern(tapIndex, noise);
         float2 sampleOffset = mul(rotScale, newSample.xy);
@@ -514,7 +482,7 @@ namespace MiAO
         samplingUV = saturate(samplingUV);
 
         float viewspaceSampleZ1 = GetLod(sDEPTH, float4(samplingUV, 0, 0)).r;
-        float3 hitPos1 = DepthBufferUVToViewSpace(samplingUV, viewspaceSampleZ1);
+        float3 hitPos1 = DepthBufferUVToViewSpace(samplingUV, viewspaceSampleZ1, pScale);
         float3 hitDelta1 = hitPos1 - pixCenterPos;
         float obscurance1 = CalculatePixelObscurance(pixelNormal, hitDelta1, falloffCalcMulSq);
         float weight1 = 1.0;
@@ -526,7 +494,7 @@ namespace MiAO
         samplingUV2 = saturate(samplingUV2);
     
         float viewspaceSampleZ2 = GetLod(sDEPTH, float4(samplingUV2, 0, 0)).r;
-        float3 hitPos2 = DepthBufferUVToViewSpace(samplingUV2, viewspaceSampleZ2);
+        float3 hitPos2 = DepthBufferUVToViewSpace(samplingUV2, viewspaceSampleZ2, pScale);
         float3 hitDelta2 = hitPos2 - pixCenterPos;
         float obscurance2 = CalculatePixelObscurance(pixelNormal, hitDelta2, falloffCalcMulSq);
         float weight2 = 1.0;
@@ -536,20 +504,37 @@ namespace MiAO
     }
 
 /*--------------------.
+| :: Vertex Shader :: |
+'--------------------*/
+
+    void VS_MiAO(in uint id : SV_VertexID, out VS_OUTPUT outStruct)
+    {
+        outStruct.uv.x = (id == 2) ? 2.0 : 0.0;
+        outStruct.uv.y = (id == 1) ? 2.0 : 0.0;
+        outStruct.vpos = float4(outStruct.uv * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
+        
+        float fov_rad = FOV * DEG2RAD;
+        float y = tan(fov_rad * 0.5);
+        outStruct.pScale = float2(y * ReShade::AspectRatio, y);
+    }
+
+/*--------------------.
 | :: Pixel Shaders :: |
 '--------------------*/
 
-    void PS_Prepare(float4 vpos : SV_Position, float2 uv : TEXCOORD, out float4 outDepth : SV_Target0, out float4 outNormal : SV_Target1)
+    void PS_Prepare(VS_OUTPUT input, out float4 outDepth : SV_Target0, out float4 outNormal : SV_Target1)
     {
+        float2 uv = input.uv;
         float linear_depth = GetDepth(uv);
         outDepth = ScreenSpaceToViewSpaceDepth(linear_depth);
 
         float2 p = BUFFER_RCP;
-        float3 p_c = DepthBufferUVToViewSpace(uv, outDepth.r);
-        float3 p_l = DepthBufferUVToViewSpace(uv - float2(p.x, 0), ScreenSpaceToViewSpaceDepth(GetDepth(uv - float2(p.x, 0))));
-        float3 p_r = DepthBufferUVToViewSpace(uv + float2(p.x, 0), ScreenSpaceToViewSpaceDepth(GetDepth(uv + float2(p.x, 0))));
-        float3 p_t = DepthBufferUVToViewSpace(uv - float2(0, p.y), ScreenSpaceToViewSpaceDepth(GetDepth(uv - float2(0, p.y))));
-        float3 p_b = DepthBufferUVToViewSpace(uv + float2(0, p.y), ScreenSpaceToViewSpaceDepth(GetDepth(uv + float2(0, p.y))));
+        
+        float3 p_c = DepthBufferUVToViewSpace(uv, outDepth.r, input.pScale);
+        float3 p_l = DepthBufferUVToViewSpace(uv - float2(p.x, 0), ScreenSpaceToViewSpaceDepth(GetDepth(uv - float2(p.x, 0))), input.pScale);
+        float3 p_r = DepthBufferUVToViewSpace(uv + float2(p.x, 0), ScreenSpaceToViewSpaceDepth(GetDepth(uv + float2(p.x, 0))), input.pScale);
+        float3 p_t = DepthBufferUVToViewSpace(uv - float2(0, p.y), ScreenSpaceToViewSpaceDepth(GetDepth(uv - float2(0, p.y))), input.pScale);
+        float3 p_b = DepthBufferUVToViewSpace(uv + float2(0, p.y), ScreenSpaceToViewSpaceDepth(GetDepth(uv + float2(0, p.y))), input.pScale);
 
         float4 edges = CalculateEdges(p_c.z, p_l.z, p_r.z, p_t.z, p_b.z);
         float3 normal = CalculateNormal(edges, p_c, p_l, p_r, p_t, p_b);
@@ -557,8 +542,11 @@ namespace MiAO
         outNormal = float4(normal * 0.5 + 0.5, 1.0);
     }
 
-    float PS_GenerateSSAO(float4 vpos : SV_Position, float2 uv : TEXCOORD) : SV_Target
+    float PS_GenerateSSAO(VS_OUTPUT input) : SV_Target
     {
+        float2 uv = input.uv;
+        float4 vpos = input.vpos;
+        
         if (any(uv > RenderScale))
         {
             return 1.0;
@@ -578,7 +566,7 @@ namespace MiAO
         float pixTZ = GetLod(sDEPTH, scaled_uv - float2(0, p.y)).r;
         float pixBZ = GetLod(sDEPTH, scaled_uv + float2(0, p.y)).r;
 
-        float3 pixCenterPos = DepthBufferUVToViewSpace(scaled_uv, pixZ);
+        float3 pixCenterPos = DepthBufferUVToViewSpace(scaled_uv, pixZ, input.pScale);
         float3 pixelNormal = normalize(tex2D(sNORMALS, scaled_uv).rgb * 2.0 - 1.0);
 
         float activeRadiusDistanceScale = EnableDistantRadius ? 1.0 : 0.0;
@@ -604,10 +592,11 @@ namespace MiAO
     
         float falloffCalcMulSq = -1.0 / (effectViewspaceRadius * effectViewspaceRadius);
 
-        const int numberOfTaps = GetNumTaps(QualityLevel);
+        const int numberOfTaps = g_TapCounts[clamp(QualityLevel, 0, 4)];
+        
         for (int i = 0; i < numberOfTaps; i++)
         {
-            SSAOTap(obscuranceSum, weightSum, i, rotScale, pixCenterPos, pixelNormal, scaled_uv, falloffCalcMulSq, noise);
+            SSAOTap(obscuranceSum, weightSum, i, rotScale, pixCenterPos, pixelNormal, scaled_uv, falloffCalcMulSq, noise, input.pScale);
         }
 
         float obscurance = obscuranceSum / weightSum;
@@ -629,18 +618,18 @@ namespace MiAO
         return occlusion;
     }
     
-    void PS_Upscale(float4 vpos : SV_Position, float2 uv : TEXCOORD, out float2 outUpscaled : SV_Target)
+    void PS_Upscale(VS_OUTPUT input, out float2 outUpscaled : SV_Target)
     {
-        float current_ao;
-        if (RenderScale >= 1.0)
-        {
-            current_ao = GetLod(sAO, uv).r;
-        }
-        else
-        {
-            current_ao = GetLod(sAO, uv * RenderScale).r;
-        }
+        float2 uv = input.uv;
+        float2 scaled_uv = (RenderScale >= 1.0) ? uv : uv * RenderScale;
 
+        //Denoising
+        float myDepth = GetDepth(uv);
+        float depthGrad = length(float2(ddx(myDepth), ddy(myDepth)));
+        float mip_level = saturate(1.0 - depthGrad * 500.0) * 2.5;
+        float current_ao = tex2Dlod(sAO, float4(scaled_uv, 0, mip_level)).r;
+
+        //Temporal Filter
         if (!EnableTemporal || FRAME_COUNT < 2)
         {
             outUpscaled = float2(current_ao, current_ao * current_ao);
@@ -648,42 +637,51 @@ namespace MiAO
         }
 
         float2 velocity = GetVelocityFromClosestFragment(uv);
-        float confidence = Confidence(uv, velocity);
-
-        float2 reprojected_uv = uv + velocity;
-
-        float current_depth = GetDepth(uv);
-        float2 history_signal = GetLod(sHISTORY_AO, reprojected_uv).rg;
         
-        bool valid_history = (reprojected_uv.x > 0.001 && reprojected_uv.x < 0.999 &&
-                              reprojected_uv.y > 0.001 && reprojected_uv.y < 0.999);
-
-        if (!valid_history)
+        // Reprojection
+        float2 reprojected_uv = uv + velocity;
+        
+        // Check bounds
+        if (any(reprojected_uv < 0.0) || any(reprojected_uv > 1.0))
         {
             outUpscaled = float2(current_ao, current_ao * current_ao);
             return;
         }
 
-        float4 sig_min, sig_max;
-        ComputeNeighborhoodMinMax(sAO, (RenderScale >= 1.0 ? uv : uv * RenderScale), sig_min, sig_max);
+        // Confidence & History
+        float confidence = Confidence(uv, velocity);
+        float2 history_signal = GetLod(sHISTORY_AO, reprojected_uv).rg;
 
-        float2 clipped_history = clamp(history_signal, sig_min.rg, sig_max.rg);
+        // Neighborhood Clamping 
+        float sig_min, sig_max;
+        ComputeNeighborhoodMinMax(sAO, scaled_uv, current_ao, sig_min, sig_max);
+
+        float2 clipped_history = clamp(history_signal, sig_min, sig_max);
         
+        // Blend
         float blend_factor = 0.9 * confidence;
         float2 temporal_signal = lerp(float2(current_ao, current_ao * current_ao), clipped_history, blend_factor);
 
-        float trust_factor = ComputeTrustFactor(velocity * BUFFER_DIM);
-        if (trust_factor < 1.0)
+        // Spatial Filter 
+        float trust_factor = 1.0;
+        if (confidence < 0.9)
+        {
+            trust_factor = ComputeTrustFactor(velocity * BUFFER_DIM);
+        }
+
+        if (trust_factor < 0.95)
         {
             float2 blurred_signal = float2(current_ao, current_ao * current_ao);
             float valid_samples = 1.0;
-            const int blur_samples = 3; 
+            const int blur_samples = 3;
+            
             [unroll]
             for (int i = 1; i < blur_samples; i++)
             {
                 float t = (float) i / (float) (blur_samples - 1);
                 float2 blur_coord = uv - velocity * 0.5 * t;
-                if (all(saturate(blur_coord) == blur_coord))
+                
+                if (all(blur_coord >= 0.0) && all(blur_coord <= 1.0))
                 {
                     float sampleAO = GetLod(sAO, (RenderScale >= 1.0 ? blur_coord : blur_coord * RenderScale)).r;
                     blurred_signal += float2(sampleAO, sampleAO * sampleAO);
@@ -697,18 +695,20 @@ namespace MiAO
         outUpscaled = temporal_signal;
     }
 
-    void PS_UpdateHistory(float4 vpos : SV_Position, float2 uv : TEXCOORD, out float2 outHistory : SV_Target)
+
+    void PS_UpdateHistory(VS_OUTPUT input, out float2 outHistory : SV_Target)
     {
-        outHistory = GetLod(sFINAL_AO, uv).rg;
+        outHistory = GetLod(sFINAL_AO, input.uv).rg;
     }
 
-    void PS_StorePrevLuma(float4 vpos : SV_Position, float2 uv : TEXCOORD, out float outLuma : SV_Target)
+    void PS_StorePrevLuma(VS_OUTPUT input, out float outLuma : SV_Target)
     {
-        outLuma = GetLuminance(GetColor(uv).rgb);
+        outLuma = GetLuminance(GetColor(input.uv).rgb);
     }
 
-    float4 PS_Apply(float4 vpos : SV_Position, float2 uv : TEXCOORD) : SV_Target
+    float4 PS_Apply(VS_OUTPUT input) : SV_Target
     {
+        float2 uv = input.uv;
         float4 color = GetColor(uv);
         float linear_depth = GetDepth(uv);
 
@@ -734,37 +734,38 @@ namespace MiAO
     {
         pass Prepare
         {
-            VertexShader = PostProcessVS;
+            VertexShader = VS_MiAO;
             PixelShader = PS_Prepare;
             RenderTarget0 = DEPTH;
             RenderTarget1 = NORMALS;
         }
         pass GenerateAO
         {
-            VertexShader = PostProcessVS;
+            VertexShader = VS_MiAO;
             PixelShader = PS_GenerateSSAO;
             RenderTarget = AO;
+            GenerateMipMaps = true;
         }
         pass UpdateHistory
         {
-            VertexShader = PostProcessVS;
+            VertexShader = VS_MiAO;
             PixelShader = PS_UpdateHistory;
             RenderTarget = HISTORY_AO;
         }
         pass Upscale
         {
-            VertexShader = PostProcessVS;
+            VertexShader = VS_MiAO;
             PixelShader = PS_Upscale;
             RenderTarget = FINAL_AO;
         }
         pass Apply
         {
-            VertexShader = PostProcessVS;
+            VertexShader = VS_MiAO;
             PixelShader = PS_Apply;
         }
         pass UpdateLuma
         {
-            VertexShader = PostProcessVS;
+            VertexShader = VS_MiAO;
             PixelShader = PS_StorePrevLuma;
             RenderTarget = texPrevLuma;
         }
