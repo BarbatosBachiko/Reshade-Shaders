@@ -1,7 +1,7 @@
 /*----------------------------------------------|
 | :: Barbatos SSR (Screen-Space Reflections) :: |
 |-----------------------------------------------|
-| Version: 0.5.61                               |
+| Version: 0.5.62                               |
 | Author: Barbatos                              |
 | License: MIT                                  |
 '----------------------------------------------*/
@@ -236,6 +236,8 @@ namespace Barbatos_SSR312
     sampler sReflection
     {
         Texture = Reflection;
+        AddressU = Clamp;
+        AddressV = Clamp;
     };
 
     texture History0
