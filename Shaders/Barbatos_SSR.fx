@@ -1,7 +1,7 @@
 /*----------------------------------------------|
 | :: Barbatos SSR (Screen-Space Reflections) :: |
 |-----------------------------------------------|
-| Version: 0.5.62                               |
+| Version: 0.6.0                                |
 | Author: Barbatos                              |
 | License: MIT                                  |
 '----------------------------------------------*/
@@ -28,7 +28,7 @@ uniform float THICKNESS_THRESHOLD <
     ui_category = "Basic Settings";
     ui_label = "Thickness";
     ui_tooltip = "Controls how 'thick' surfaces are before a ray passes through them.";
-> = 0.500;
+> = 0.066;
 
 uniform float FadeDistance <
     ui_type = "drag";
@@ -48,11 +48,11 @@ uniform int ReflectionMode <
 
 uniform float SurfaceGlossiness <
     ui_type = "drag";
-    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+    ui_min = 0.01; ui_max = 1.0; ui_step = 0.01;
     ui_category = "Material";
     ui_label = "Surface Glossiness";
     ui_tooltip = "Controls surface smoothness.\n0 = Sharp reflections (Defined)\n1 = Total roughness";
-> = 0.25; 
+> = 0.25;
 
 uniform float MetallicFactor <
     ui_type = "drag";
@@ -78,14 +78,6 @@ uniform float SurfaceDetails <
     ui_min = 0.0; ui_max = 5.0; ui_step = 0.01;
     ui_tooltip = "Adds small surface details to reflections";
 > = 0.1;
-
-uniform int QualityPreset <
-    ui_type = "combo";
-    ui_items = "Balanced\0Performance\0";
-    ui_category = "Performance";
-    ui_label = "RT Quality";
-    ui_tooltip = "Higher quality = better reflections but slower performance";
-> = 1;
 
 uniform float RenderResolution <
     ui_type = "drag";
@@ -148,7 +140,8 @@ uniform int ViewMode <
 #define GetLod(s,c) tex2Dlod(s, float4((c).xy, 0, 0))
 #define fmod(x, y) (frac((x)*rcp(y)) * (y))
 
-static const float DEG2RAD = 0.017453292; // PI / 180.0
+static const float DEG2RAD = 0.017453292;
+// PI / 180.0
 static const float SobelEdgeThreshold = 0.03;
 static const float Smooth_Threshold = 0.5;
 static const int GlossySamples = 10;
@@ -173,14 +166,17 @@ uniform int FRAME_COUNT < source = "framecount"; >;
 
 #if USE_MARTY_LAUNCHPAD_MOTION
     namespace Deferred {
-        texture MotionVectorsTex { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
+        texture MotionVectorsTex { Width = BUFFER_WIDTH;
+        Height = BUFFER_HEIGHT; Format = RG16F; };
         sampler sMotionVectorsTex { Texture = MotionVectorsTex; };
     }
-    float2 GetMV(float2 texcoord) { return GetLod(Deferred::sMotionVectorsTex, texcoord).rg; }
+    float2 GetMV(float2 texcoord) { return GetLod(Deferred::sMotionVectorsTex, texcoord).rg;
+}
 #elif USE_VORT_MOTION
     texture2D MotVectTexVort { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
     sampler2D sMotVectTexVort { Texture = MotVectTexVort; MagFilter=POINT;MinFilter=POINT;MipFilter=POINT;AddressU=Clamp;AddressV=Clamp; };
-    float2 GetMV(float2 texcoord) { return GetLod(sMotVectTexVort, texcoord).rg; }
+    float2 GetMV(float2 texcoord) { return GetLod(sMotVectTexVort, texcoord).rg;
+}
 #else
 texture texMotionVectors
 {
@@ -203,7 +199,7 @@ float2 GetMV(float2 texcoord)
 }
 #endif
 
-namespace Barbatos_SSR312
+namespace Barbatos_SSR401
 {
     texture Normal
     {
@@ -305,7 +301,8 @@ namespace Barbatos_SSR312
     
     void VS_Barbatos_SSR(in uint id : SV_VertexID, out VS_OUTPUT outStruct)
     {
-        outStruct.uv.x = (id == 2) ? 2.0 : 0.0;
+        outStruct.uv.x = (id == 2) ?
+        2.0 : 0.0;
         outStruct.uv.y = (id == 1) ? 2.0 : 0.0;
         outStruct.vpos = float4(outStruct.uv * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
 
@@ -394,7 +391,6 @@ namespace Barbatos_SSR312
     {
         if (abs(view_pos.z) < 1e-6)
             return 0.5;
-
         float2 ndc = view_pos.xy / (view_pos.z * pScale);
         return float2(ndc.x, -ndc.y) * 0.5 + 0.5;
     }
@@ -473,86 +469,88 @@ namespace Barbatos_SSR312
     //-------------------|
     // :: Ray Tracing  ::|
     //-------------------|
-    HitResult TraceRay(Ray r, int num_steps, float2 pScale, float jitter)
+    HitResult TraceRay2D(Ray r, int num_steps, float2 pScale, float jitter)
     {
         HitResult result;
         result.found = false;
         result.viewPos = 0.0;
         result.uv = 0.0;
 
-        float step_scale, min_step_size, max_step_size;
-        int refinement_steps;
-        if (QualityPreset == 1) // Performance
-        {
-            refinement_steps = 4;
-            step_scale = 0.7;
-            min_step_size = 0.001;
-            max_step_size = 1.0;
-        }
-        else // Balanced
-        {
-            refinement_steps = 5;
-            step_scale = 0.4;
-            min_step_size = 0.0005;
-            max_step_size = 1.0;
-        }
+        //Max Ray Distance
+        float maxDist = 10.0;
+        float3 endPos = r.origin + r.direction * maxDist;
 
-        float z_factor = abs(r.direction.z);
-        float z2 = z_factor * z_factor;
-        step_scale = lerp(step_scale, step_scale * 1.2, z2);
-        max_step_size = lerp(max_step_size, max_step_size * 4.0, z_factor);
-        float stepSize = min_step_size;
-        float totalDist = 0.0;
-        float3 prevPos = r.origin + (r.direction * stepSize * jitter);
+        float2 startUV = ViewPosToUV(r.origin, pScale);
+        float2 endUV = ViewPosToUV(endPos, pScale);
+        float startK = 1.0 / r.origin.z;
+        float endK = 1.0 / endPos.z;
+        //Compute Deltas
+        float2 deltaUV = endUV - startUV;
+        float deltaK = endK - startK;
+
+        if (dot(deltaUV, deltaUV) < 0.0001)
+            return result;
+        float stepSize = 1.0 / (float) num_steps;
+        float t = stepSize * jitter;
+        float2 currUV = startUV + deltaUV * t;
+        float currK = startK + deltaK * t;
+        float2 stepUV = deltaUV * stepSize;
+        float stepK = deltaK * stepSize;
         [loop]
         for (int i = 0; i < num_steps; ++i)
         {
-            float3 currPos = prevPos + r.direction * stepSize;
-            totalDist += stepSize;
-
-            if (totalDist > 10.0)
+            if (any(currUV < 0.0) || any(currUV > 1.0))
                 break;
-            float2 uvCurr = ViewPosToUV(currPos, pScale);
-    
-            if (any(uvCurr < 0.0) || any(uvCurr > 1.0))
-                break;
-            float sceneDepth = GetDepth(uvCurr);
-            float thickness = abs(currPos.z - sceneDepth);
-            float max_threshold = THICKNESS_THRESHOLD * (1.0 + totalDist * 0.1);
-            float adaptiveThickness = clamp(stepSize * 1.5, 0.001, max_threshold);
+            // Recover View Depth
+            float rayDepth = 1.0 / currK;
+            float sceneDepth = GetDepth(currUV);
 
-            if (currPos.z < sceneDepth || thickness > adaptiveThickness)
+            // Intersection Check
+            float depthDiff = rayDepth - sceneDepth;
+            // Adaptive thickness
+            float prevRayDepth = 1.0 / (currK - stepK);
+            float rayStepSizeZ = abs(rayDepth - prevRayDepth);
+            float adaptiveThickness = max(THICKNESS_THRESHOLD, rayStepSizeZ * 1.5);
+            adaptiveThickness *= (1.0 + rayDepth * 0.1);
+            if (depthDiff > 0.0 && depthDiff < adaptiveThickness)
             {
-                prevPos = currPos;
-                float distToDepth = abs(currPos.z - sceneDepth);
-                stepSize = clamp(distToDepth * step_scale, min_step_size, max_step_size);
-                continue;
+                //Binary Search Refinement
+                float2 loUV = currUV - stepUV;
+                float2 hiUV = currUV;
+                float2 midUV;
+                float midRayDepth;
+            
+                [unroll]
+                for (int j = 0; j < 4; j++)
+                {
+                    midUV = (loUV + hiUV) * 0.5;
+                    float t_mid = t - (stepSize * 0.5) + (stepSize * (float) j * 0.0);
+                    midRayDepth = 1.0 / (currK - stepK * 0.5);
+                
+                    if (midRayDepth > GetDepth(midUV))
+                        hiUV = midUV;
+                    else
+                        loUV = midUV;
+                }
+
+                result.found = true;
+                result.uv = hiUV;
+                result.viewPos = UVToViewPos(hiUV, GetDepth(hiUV), pScale);
+                return result;
             }
 
-            // Binary Search Refinement
-            float3 lo = prevPos, hi = currPos;
-            [unroll]
-            for (int ref_step = 0; ref_step < refinement_steps; ++ref_step)
-            {
-                float3 mid = 0.5 * (lo + hi);
-                float midDepth = GetDepth(ViewPosToUV(mid, pScale));
-                if (mid.z >= midDepth)
-                    hi = mid;
-                else
-                    lo = mid;
-            }
-            result.viewPos = hi;
-            result.uv = ViewPosToUV(result.viewPos, pScale);
-            result.found = true;
-            return result;
+            // Advance Ray
+            currUV += stepUV;
+            currK += stepK;
+            t += stepSize;
         }
+
         return result;
     }
 
     //---------------|
     // :: Glossy  :: |
     //---------------|
-
     float GetLocalRoughness(float2 uv)
     {
         float3 center = GetLod(ReShade::BackBuffer, float4(uv, 0, 0)).rgb;
@@ -591,7 +589,6 @@ namespace Barbatos_SSR312
     float3 GetGlossySample(float2 sample_uv, float2 pixel_uv, float local_roughness)
     {
         float netRoughness = saturate(SurfaceGlossiness + (local_roughness * RoughnessDetection));
-        
         if (netRoughness <= 0.001)
             return tex2Dlod(sTexColorCopy, float4(sample_uv, 0, 0)).rgb;
         float specularPower = pow(2.0, 10.0 * (1.0 - netRoughness) + 1.0);
@@ -625,10 +622,11 @@ namespace Barbatos_SSR312
     //------------|
     // :: TAA  :: |
     //------------|
+    
     float4 GetActiveHistory(float2 uv)
     {
         return (fmod((float) FRAME_COUNT, 2.0) < 0.5) ?
-            GetLod(sHistory0, float4(uv, 0, 0)) : GetLod(sHistory1, float4(uv, 0, 0));
+        GetLod(sHistory0, float4(uv, 0, 0)) : GetLod(sHistory1, float4(uv, 0, 0));
     }
 
     float3 ClipToAABB(float3 aabb_min, float3 aabb_max, float3 history_sample)
@@ -805,7 +803,8 @@ namespace Barbatos_SSR312
         Ray r;
         r.origin = viewPos;
         r.direction = normalize(reflect(-viewDir, normal));
-        r.origin += r.direction * 0.002;
+        float bias = 0.0005 + (depth * 0.02);
+        r.origin += r.direction * bias;
         
         float VdotN = dot(viewDir, normal);
         if (VdotN > 0.9 || r.direction.z < 0.0)
@@ -816,16 +815,13 @@ namespace Barbatos_SSR312
 
         HitResult hit;
         float jitter = GetSpatialNoise(scaled_uv * BUFFER_SCREEN_SIZE);
-
         if (isWall)
-            hit = TraceRay(r, STEPS_PER_RAY_WALLS, pScale, jitter);
+            hit = TraceRay2D(r, STEPS_PER_RAY_WALLS, pScale, jitter);
         else
-            hit = TraceRay(r, (QualityPreset == 1) ? 128 : 160, pScale, jitter);
-
+            hit = TraceRay2D(r, 64, pScale, jitter);
         float3 reflectionColor = 0;
         float reflectionAlpha = 0.0;
         float estimatedRoughness = GetLod(sTexColorCopy, float4(scaled_uv, 0, 0)).a;
-
         if (hit.found)
         {
             reflectionColor = GetGlossySample(hit.uv, scaled_uv, estimatedRoughness);
@@ -881,6 +877,7 @@ namespace Barbatos_SSR312
             switch (ViewMode)
             {
                 case 1: // Reflections Only
+             
                     outColor = float4(GetActiveHistory(input.uv).rgb, 1.0);
                     return;
                 case 2: // Normals
