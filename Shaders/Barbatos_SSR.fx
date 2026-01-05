@@ -199,7 +199,7 @@ float2 GetMV(float2 texcoord)
 }
 #endif
 
-namespace Barbatos_SSR401
+namespace Barbatos_SSR4012
 {
     texture Normal
     {
@@ -622,7 +622,6 @@ namespace Barbatos_SSR401
     //------------|
     // :: TAA  :: |
     //------------|
-    
     float4 GetActiveHistory(float2 uv)
     {
         return (fmod((float) FRAME_COUNT, 2.0) < 0.5) ?
@@ -848,7 +847,9 @@ namespace Barbatos_SSR401
             float3 fbViewPos = viewPos + r.direction * adaptiveDist;
             float2 uvFb = saturate(ViewPosToUV(fbViewPos, pScale).xy);
             reflectionColor = GetGlossySample(uvFb, scaled_uv, estimatedRoughness);
-            reflectionAlpha = smoothstep(0.0, 0.2, 1.0 - scaled_uv.y);
+            float baseAlpha = smoothstep(0.0, 0.2, 1.0 - scaled_uv.y);
+            float ghostKiller = smoothstep(0.0, 0.4, SurfaceGlossiness + (estimatedRoughness * 0.5));
+            reflectionAlpha = baseAlpha * ghostKiller;
         }
         
         reflectionAlpha *= pow(saturate(dot(-viewDir, r.direction)), 2.0);
