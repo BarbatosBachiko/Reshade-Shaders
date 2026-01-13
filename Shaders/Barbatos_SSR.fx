@@ -1,7 +1,7 @@
 /*----------------------------------------------|
 | :: Barbatos SSR (Screen-Space Reflections) :: |
 |-----------------------------------------------|
-| Version: 0.6.0                                |
+| Version: 0.6.1                                |
 | Author: Barbatos                              |
 | License: MIT                                  |
 '----------------------------------------------*/
@@ -140,8 +140,7 @@ uniform int ViewMode <
 #define GetLod(s,c) tex2Dlod(s, float4((c).xy, 0, 0))
 #define fmod(x, y) (frac((x)*rcp(y)) * (y))
 
-static const float DEG2RAD = 0.017453292;
-// PI / 180.0
+static const float DEG2RAD = 0.017453292; // PI / 180.0
 static const float SobelEdgeThreshold = 0.03;
 static const float Smooth_Threshold = 0.5;
 static const int GlossySamples = 10;
@@ -166,17 +165,14 @@ uniform int FRAME_COUNT < source = "framecount"; >;
 
 #if USE_MARTY_LAUNCHPAD_MOTION
     namespace Deferred {
-        texture MotionVectorsTex { Width = BUFFER_WIDTH;
-        Height = BUFFER_HEIGHT; Format = RG16F; };
+        texture MotionVectorsTex { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
         sampler sMotionVectorsTex { Texture = MotionVectorsTex; };
     }
-    float2 GetMV(float2 texcoord) { return GetLod(Deferred::sMotionVectorsTex, texcoord).rg;
-}
+    float2 GetMV(float2 texcoord) { return GetLod(Deferred::sMotionVectorsTex, texcoord).rg; }
 #elif USE_VORT_MOTION
     texture2D MotVectTexVort { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
     sampler2D sMotVectTexVort { Texture = MotVectTexVort; MagFilter=POINT;MinFilter=POINT;MipFilter=POINT;AddressU=Clamp;AddressV=Clamp; };
-    float2 GetMV(float2 texcoord) { return GetLod(sMotVectTexVort, texcoord).rg;
-}
+    float2 GetMV(float2 texcoord) { return GetLod(sMotVectTexVort, texcoord).rg; }
 #else
 texture texMotionVectors
 {
@@ -301,8 +297,7 @@ namespace Barbatos_SSR4012
     
     void VS_Barbatos_SSR(in uint id : SV_VertexID, out VS_OUTPUT outStruct)
     {
-        outStruct.uv.x = (id == 2) ?
-        2.0 : 0.0;
+        outStruct.uv.x = (id == 2) ? 2.0 : 0.0;
         outStruct.uv.y = (id == 1) ? 2.0 : 0.0;
         outStruct.vpos = float4(outStruct.uv * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
 
@@ -553,15 +548,15 @@ namespace Barbatos_SSR4012
     //---------------|
     float GetLocalRoughness(float2 uv)
     {
-        float3 center = GetLod(ReShade::BackBuffer, float4(uv, 0, 0)).rgb;
+        float3 center = GetColor(uv).rgb;
         float lumaC = GetLuminance(center);
     
         float2 p = ReShade::PixelSize;
         
-        float lumaN = GetLuminance(GetLod(ReShade::BackBuffer, float4(uv + float2(p.x, 0), 0, 0)).rgb);
-        float lumaS = GetLuminance(GetLod(ReShade::BackBuffer, float4(uv - float2(p.x, 0), 0, 0)).rgb);
-        float lumaE = GetLuminance(GetLod(ReShade::BackBuffer, float4(uv + float2(0, p.y), 0, 0)).rgb);
-        float lumaW = GetLuminance(GetLod(ReShade::BackBuffer, float4(uv - float2(0, p.y), 0, 0)).rgb);
+        float lumaN = GetLuminance(GetColor(uv + float2(p.x, 0)).rgb);
+        float lumaS = GetLuminance(GetColor(uv - float2(p.x, 0)).rgb);
+        float lumaE = GetLuminance(GetColor(uv + float2(0, p.y)).rgb);
+        float lumaW = GetLuminance(GetColor(uv - float2(0, p.y)).rgb);
         float variance = abs(lumaN - lumaC) + abs(lumaS - lumaC) + abs(lumaE - lumaC) + abs(lumaW - lumaC);
         return saturate(variance * 10.0);
     }
@@ -625,7 +620,7 @@ namespace Barbatos_SSR4012
     float4 GetActiveHistory(float2 uv)
     {
         return (fmod((float) FRAME_COUNT, 2.0) < 0.5) ?
-        GetLod(sHistory0, float4(uv, 0, 0)) : GetLod(sHistory1, float4(uv, 0, 0));
+            GetLod(sHistory0, uv) : GetLod(sHistory1, uv);
     }
 
     float3 ClipToAABB(float3 aabb_min, float3 aabb_max, float3 history_sample)
@@ -684,7 +679,7 @@ namespace Barbatos_SSR4012
         if (depth >= 1.0)
             return 0.0;
         float2 packed_uv = input.uv * RenderResolution;
-        float4 current_reflection = GetLod(sReflection, float4(packed_uv, 0, 0));
+        float4 current_reflection = GetLod(sReflection, packed_uv);
         if (!EnableSmoothing)
             return current_reflection;
         // Reprojection
@@ -692,7 +687,7 @@ namespace Barbatos_SSR4012
         float2 reprojected_uv = input.uv + velocity;
         if (any(saturate(reprojected_uv) != reprojected_uv) || FRAME_COUNT <= 1)
             return current_reflection;
-        float4 history_reflection = GetLod(sHistoryParams, float4(reprojected_uv, 0, 0));
+        float4 history_reflection = GetLod(sHistoryParams, reprojected_uv);
 
         // Depth Check
         float history_depth = GetDepth(reprojected_uv);
@@ -725,7 +720,7 @@ namespace Barbatos_SSR4012
     //--------------------|
     void PS_CopyColor(VS_OUTPUT input, out float4 outColor : SV_Target)
     {
-        float3 color = tex2D(ReShade::BackBuffer, input.uv).rgb;
+        float3 color = GetColor(input.uv).rgb;
         float roughness = GetLocalRoughness(input.uv);
         outColor = float4(color, roughness);
     }
@@ -820,7 +815,7 @@ namespace Barbatos_SSR4012
             hit = TraceRay2D(r, 64, pScale, jitter);
         float3 reflectionColor = 0;
         float reflectionAlpha = 0.0;
-        float estimatedRoughness = GetLod(sTexColorCopy, float4(scaled_uv, 0, 0)).a;
+        float estimatedRoughness = GetLod(sTexColorCopy, scaled_uv).a;
         if (hit.found)
         {
             reflectionColor = GetGlossySample(hit.uv, scaled_uv, estimatedRoughness);
