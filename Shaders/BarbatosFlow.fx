@@ -1,16 +1,14 @@
 /*----------------------------------------------|
 | ::               BarbatosFlow              :: |
 '-----------------------------------------------|
-Version: 0.0.2                                
+Version: 0.0.3                               
 Author: Barbatos (Original by umar-afzaal - Kaidô)                               
 License: CC-BY-NC-4.0 (https://github.com/umar-afzaal/LumeniteFX/blob/mainline/Shaders/LumaFlow.fx)
 Description: A performance-focused version of LumaFlow with DX9 compatibility.
 The optimization focused on using the shaders present in my repository; other shaders were not tested.
 */
 
-
 #include "ReShade.fxh"
-
 uniform int FRAME_COUNT < source = "framecount"; >;
 
 //----------------|
@@ -238,7 +236,6 @@ texture2D texMotionVectors
 //---------------|
 // :: Functions::|
 //---------------|
-
 float GetDepth(float2 xy)
 {
     return ReShade::GetLinearizedDepth(xy);
@@ -269,13 +266,21 @@ float2 SmartBlur(sampler2D motion_tex, float2 uv, float2 texel_size)
     {
         float2 sample_uv = uv + offsets[i] * texel_size;
         float depth = GetDepth(sample_uv);
-        if (abs(depth - center_depth) < 0.02) // Simple edge detection
+        if (abs(depth - center_depth) < 0.02)
         {
             flow_sum += tex2Dlod(motion_tex, float4(sample_uv, 0, 0)).xy;
             weight_sum += 1.0;
         }
     }
     return flow_sum / weight_sum;
+}
+
+void MnMx(inout float2 a, inout float2 b)
+{
+    float2 mn = min(a, b);
+    float2 mx = max(a, b);
+    a = mn;
+    b = mx;
 }
 
 float2 Median5(sampler2D motion_tex, float2 uv, float2 texel_size, int mip)
@@ -286,28 +291,18 @@ float2 Median5(sampler2D motion_tex, float2 uv, float2 texel_size, int mip)
     v[2] = tex2Dlod(motion_tex, float4(uv + float2(-texel_size.x, 0), 0, mip)).xy;
     v[3] = tex2Dlod(motion_tex, float4(uv + float2(0, texel_size.y), 0, mip)).xy;
     v[4] = tex2Dlod(motion_tex, float4(uv + float2(0, -texel_size.y), 0, mip)).xy;
+    
+    MnMx(v[0], v[1]);
+    MnMx(v[1], v[2]);
+    MnMx(v[2], v[3]);
+    MnMx(v[3], v[4]);
+    MnMx(v[0], v[1]);
+    MnMx(v[1], v[2]);
+    MnMx(v[2], v[3]);
+    MnMx(v[0], v[1]);
+    MnMx(v[1], v[2]);
 
-    [unroll]
-    for (int i = 0; i < 4; i++)
-    {
-        [unroll]
-        for (int j = 0; j < 4 - i; j++)
-        {
-            if (v[j].x > v[j + 1].x)
-            {
-                float t = v[j].x;
-                v[j].x = v[j + 1].x;
-                v[j + 1].x = t;
-            }
-            if (v[j].y > v[j + 1].y)
-            {
-                float t = v[j].y;
-                v[j].y = v[j + 1].y;
-                v[j + 1].y = t;
-            }
-        }
-    }
-    return float2(v[2].x, v[2].y);
+    return v[2];
 }
 
 float2 ComputeFlow(sampler2D source_flow_sampler, float2 uv, int mip1, int mip2)
@@ -315,7 +310,7 @@ float2 ComputeFlow(sampler2D source_flow_sampler, float2 uv, int mip1, int mip2)
     if (FRAME_COUNT == 0)
         return 0.0;
 
-    float2 texel_size_mip = rcp(float2(BUFFER_WIDTH, BUFFER_HEIGHT) / exp2(mip1));
+    float2 texel_size_mip = BUFFER_PIXEL_SIZE * exp2(mip1);
     float2 src_texel = rcp(float2(tex2Dsize(source_flow_sampler, 0)));
 
     float2 candidates[6];
@@ -340,7 +335,7 @@ float2 ComputeFlow(sampler2D source_flow_sampler, float2 uv, int mip1, int mip2)
         }
     }
 
-    float2 refine_size = rcp(float2(BUFFER_WIDTH, BUFFER_HEIGHT) / exp2(mip2));
+    float2 refine_size = BUFFER_PIXEL_SIZE * exp2(mip2);
     float2 offsets[4] = { float2(1, 0), float2(-1, 0), float2(0, 1), float2(0, -1) };
     
     [unroll]
@@ -363,7 +358,8 @@ float2 ComputeFlow(sampler2D source_flow_sampler, float2 uv, int mip1, int mip2)
 //---------------------|
 float PS_CurrLuma(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
 {
-    float2 t = rcp(float2(BUFFER_WIDTH, BUFFER_HEIGHT));
+    float2 t = BUFFER_PIXEL_SIZE;
+    
     float l = dot(GetColor(uv), 0.333);
     l += dot(GetColor(uv + float2(t.x, 0)), 0.333);
     l += dot(GetColor(uv - float2(t.x, 0)), 0.333);
@@ -423,24 +419,24 @@ float PS_CopyCurrLumaAsPrev(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV
 
 float2 PS_SpatialFilterL3(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
 {
-    return Median5(sCoarseFlowL3_A, uv, rcp(float2(tex2Dsize(sCoarseFlowL3_A, 0))), 6);
+    return Median5(sCoarseFlowL3_A, uv, BUFFER_PIXEL_SIZE * 64.0, 6);
 }
 float2 PS_SpatialFilterL2(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
 {
-    return Median5(sCoarseFlowL2_A, uv, rcp(float2(tex2Dsize(sCoarseFlowL2_A, 0))), 5);
+    return Median5(sCoarseFlowL2_A, uv, BUFFER_PIXEL_SIZE * 32.0, 5);
 }
 float2 PS_SpatialFilterL1(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
 {
-    return Median5(sCoarseFlowL1_A, uv, rcp(float2(tex2Dsize(sCoarseFlowL1_A, 0))), 4);
+    return Median5(sCoarseFlowL1_A, uv, BUFFER_PIXEL_SIZE * 16.0, 4);
 }
 float2 PS_SpatialFilterL0(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
 {
-    return Median5(sCoarseFlowL0_A, uv, rcp(float2(tex2Dsize(sCoarseFlowL0_A, 0))), 3);
+    return Median5(sCoarseFlowL0_A, uv, BUFFER_PIXEL_SIZE * 8.0, 3);
 }
 
 float2 PS_SmoothFlow(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
 {
-    return SmartBlur(sDenseFlow_A, uv, rcp(float2(tex2Dsize(sDenseFlow_A, 0))));
+    return SmartBlur(sDenseFlow_A, uv, BUFFER_PIXEL_SIZE * 4.0);
 }
 float2 PS_ExportFlow(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
 {
