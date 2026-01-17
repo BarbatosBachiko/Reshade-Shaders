@@ -16,7 +16,7 @@
 /*----------------------------------------------|
 | ::           Barbatos XeGTAO               :: |
 '-----------------------------------------------|
-| Version: 0.9.8                                |
+| Version: 0.9.9                                |
 | Author: Barbatos                              |
 '----------------------------------------------*/
 #include "ReShade.fxh"
@@ -24,10 +24,11 @@
 // Constants
 static const float PI = 3.1415926535897932384626433832795;
 static const float PI_HALF = 1.5707963267948966192313216916398;
+static const float PI_OVER_360 = 0.00872664625997164788461845384244;
 static const float2 LOD_MASK = float2(0.0, 1.0);
 static const float2 ZERO_LOD = float2(0.0, 0.0);
 
-//Definitions
+// Definitions
 #define lpfloat float
 #define lpfloat2 float2
 #define lpfloat3 float3
@@ -59,7 +60,8 @@ static const float2 ZERO_LOD = float2(0.0, 0.0);
 
 uniform float Intensity <
     ui_type = "drag";
-    ui_min = 0.0; ui_max = 2.0; ui_step = 0.01;
+    ui_min = 0.0;
+    ui_max = 2.0; ui_step = 0.01;
     ui_category = "Basic Settings";
     ui_label = "AO Intensity";
     ui_tooltip = "Strength of the Ambient Occlusion effect.";
@@ -89,7 +91,8 @@ uniform int QualityLevel <
 
 uniform float RadiusMultiplier <
     ui_type = "drag";
-    ui_min = 0.1; ui_max = 2.0; ui_step = 0.01;
+    ui_min = 0.1; ui_max = 2.0;
+    ui_step = 0.01;
     ui_category = "Advanced Options";
     ui_label = "Radius Multiplier";
     ui_tooltip = "Additional radius multiplier.";
@@ -105,7 +108,8 @@ uniform float FinalValuePower <
 
 uniform float FalloffRange <
     ui_type = "drag";
-    ui_min = 0.01; ui_max = 1.0; ui_step = 0.01;
+    ui_min = 0.01; ui_max = 1.0;
+    ui_step = 0.01;
     ui_category = "Advanced Options";
     ui_label = "Falloff Range";
     ui_tooltip = "Controls the smoothness of the AO edge.";
@@ -113,7 +117,8 @@ uniform float FalloffRange <
 
 uniform float SampleDistributionPower <
     ui_type = "drag";
-    ui_min = 1.0; ui_max = 8.0; ui_step = 0.1;
+    ui_min = 1.0; ui_max = 8.0;
+    ui_step = 0.1;
     ui_category = "Advanced Options";
     ui_label = "Sample Distribution";
     ui_tooltip = "Controls how samples are distributed along the view ray.";
@@ -171,7 +176,8 @@ uniform float TemporalStability <
 
 uniform float ConfidenceSensitivity <
     ui_type = "drag";
-    ui_min = 0.1; ui_max = 5.0; ui_step = 0.1;
+    ui_min = 0.1; ui_max = 5.0;
+    ui_step = 0.1;
     ui_category = "Temporal Settings";
     ui_label = "Confidence Sensitivity";
     ui_tooltip = "Controls how aggressive the confidence rejection is.\nHigher = Stricter (less ghosting).\nLower = More relaxed.";
@@ -182,7 +188,8 @@ uniform float HeightmapIntensity <
     ui_label = "Heightmap Intensity";
     ui_tooltip = "Controls the strength of heightmap-based normal perturbation.";
     ui_type = "drag";
-    ui_min = 0.0; ui_max = 200.0; ui_step = 0.1;
+    ui_min = 0.0; ui_max = 200.0;
+    ui_step = 0.1;
 > = 100.0;
 
 uniform float HeightmapBlendAmount <
@@ -203,7 +210,7 @@ uniform float HeightmapDepthThreshold <
 
 uniform int ViewMode <
     ui_type = "combo";
-    ui_items = "Normal\0Edges\0AO\0Normals\0Depth\0Confidence Check\0";
+    ui_items = "None\0AO\0Normals\0Depth\0Confidence Check\0";
     ui_category = "Debug";
     ui_label = "View Mode";
     ui_tooltip = "Selects the debug view mode.";
@@ -214,7 +221,6 @@ uniform int FRAME_COUNT < source = "framecount"; >;
 //----------------|
 // :: Textures :: |
 //----------------|
-
 #ifndef USE_MARTY_LAUNCHPAD_MOTION
 #define USE_MARTY_LAUNCHPAD_MOTION 0
 #endif
@@ -225,14 +231,17 @@ uniform int FRAME_COUNT < source = "framecount"; >;
 
 #if USE_MARTY_LAUNCHPAD_MOTION
     namespace Deferred {
-        texture MotionVectorsTex { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
+        texture MotionVectorsTex { Width = BUFFER_WIDTH;
+        Height = BUFFER_HEIGHT; Format = RG16F; };
         sampler sMotionVectorsTex { Texture = MotionVectorsTex; };
     }
-    float2 SampleMotionVectors(float2 texcoord) { return GetLod(Deferred::sMotionVectorsTex, texcoord).rg; }
+    float2 SampleMotionVectors(float2 texcoord) { return GetLod(Deferred::sMotionVectorsTex, texcoord).rg;
+}
 #elif USE_VORT_MOTION
     texture2D MotVectTexVort { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
     sampler2D sMotVectTexVort { Texture = MotVectTexVort; MagFilter=POINT;MinFilter=POINT;MipFilter=POINT;AddressU=Clamp;AddressV=Clamp; };
-    float2 SampleMotionVectors(float2 texcoord) { return GetLod(sMotVectTexVort, texcoord).rg; }
+    float2 SampleMotionVectors(float2 texcoord) { return GetLod(sMotVectTexVort, texcoord).rg;
+}
 #else
 texture texMotionVectors
 {
@@ -256,7 +265,7 @@ namespace Barbatos_XeGTAO1
     {
         Width = BUFFER_WIDTH;
         Height = BUFFER_HEIGHT;
-        Format = RGBA16F;
+        Format = RG16F;
     };
     sampler sNormalEdges
     {
@@ -266,7 +275,7 @@ namespace Barbatos_XeGTAO1
     {
         Texture = texNormalEdges;S_LC
     };
-
+    
     texture B_PrevLuma
     {
         Width = BUFFER_WIDTH;
@@ -292,7 +301,6 @@ namespace Barbatos_XeGTAO1
     {
         Texture = DepthT;S_LC
     };
-
     texture AO
     {
         Width = BUFFER_WIDTH;
@@ -303,29 +311,6 @@ namespace Barbatos_XeGTAO1
     {
         Texture = AO;S_LC
     };
-
-    texture DenoiseTex0
-    {
-        Width = BUFFER_WIDTH;
-        Height = BUFFER_HEIGHT;
-        Format = R16F;
-    };
-    sampler sDenoiseTex0
-    {
-        Texture = DenoiseTex0;S_LC
-    };
-
-    texture DenoiseTex1
-    {
-        Width = BUFFER_WIDTH;
-        Height = BUFFER_HEIGHT;
-        Format = R16F;
-    };
-    sampler sDenoiseTex1
-    {
-        Texture = DenoiseTex1;S_LC
-    };
-    
     texture History0
     {
         Width = BUFFER_WIDTH;
@@ -336,7 +321,6 @@ namespace Barbatos_XeGTAO1
     {
         Texture = History0;S_LC
     };
-
     texture History1
     {
         Width = BUFFER_WIDTH;
@@ -365,7 +349,7 @@ namespace Barbatos_XeGTAO1
         outStruct.uv.y = (id == 1) ? 2.0 : 0.0;
         outStruct.vpos = float4(outStruct.uv * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
         
-        float tanHalfFOV = tan(radians(FOV * 0.5));
+        float tanHalfFOV = tan(FOV * PI_OVER_360);
         float aspect = BUFFER_ASPECT_RATIO;
         outStruct.NDCToView.xy = float2(aspect * tanHalfFOV * 2.0, -tanHalfFOV * 2.0);
         outStruct.NDCToView.zw = float2(aspect * tanHalfFOV * -1.0, tanHalfFOV);
@@ -373,30 +357,17 @@ namespace Barbatos_XeGTAO1
 
     float GetActiveHistory(float2 uv)
     {
-        return (FRAME_COUNT % 2 == 0) ?
+#if __RENDERER__ >= 0xa000 // DX10+
+            bool isEven = (FRAME_COUNT & 1) == 0;
+#else // DX9
+        bool isEven = (FRAME_COUNT % 2) == 0;
+#endif
+
+        return isEven ?
             tex2Dlod(sHistory0, float4(uv, 0, 0)).r :
             tex2Dlod(sHistory1, float4(uv, 0, 0)).r;
     }
-
-#if __SHADERMODEL__ >= 40
-    int hilbert(int2 p, int level)
-    {
-        int d = 0;
-        [unroll]
-        for (int k = 0; k < level; k++)
-        {
-            int n = level - k - 1;
-            int2 r = (p >> n) & 1;
-            d += ((3 * r.x) ^ r.y) << (2 * n);
-            if (r.y == 0) {
-                if (r.x == 1) p = (1 << n) - 1 - p;
-                p = p.yx;
-            }
-        }
-        return d;
-    }
-    uint HilbertIndex(uint x, uint y) { return hilbert(int2(x & 63, y & 63), 6); }
-#else
+    
     float hilbert(float2 p, int level)
     {
         float d = 0;
@@ -417,22 +388,36 @@ namespace Barbatos_XeGTAO1
         }
         return d;
     }
+
     uint HilbertIndex(uint x, uint y)
     {
-        return hilbert(float2(x & 63, y & 63), 6);
-    }
+#if __RENDERER__ >= 0xa000 // DX10+
+            return hilbert(float2(x & 63, y & 63), 6);
+#else // DX9
+        return hilbert(float2(x % 64, y % 64), 6);
 #endif
+    }
 
     float2 SpatioTemporalNoise(uint2 pixCoord, uint temporalIndex)
     {
         uint index = HilbertIndex(pixCoord.x, pixCoord.y);
-        index += 288 * (temporalIndex & 63);
+        
+#if __RENDERER__ >= 0xa000 // DX10+
+            index += 288 * (temporalIndex & 63);
+#else // DX9
+        index += 288 * (temporalIndex % 64);
+#endif
+
         return frac(0.5 + index * float2(0.75487766624669276005, 0.5698402909980532659114));
     }
     
     half XeGTAO_FastSqrt(float x)
     {
-        return (half) (asfloat(0x1fbd1df5 + (asint(x) >> 1)));
+#if __RENDERER__ >= 0xa000 // DX10+
+            return (half) (asfloat(0x1fbd1df5 + (asint(x) >> 1)));
+#else // DX9
+        return (half) sqrt(x);
+#endif
     }
     
     half XeGTAO_FastACos(half inX)
@@ -448,34 +433,26 @@ namespace Barbatos_XeGTAO1
         return dot(linearColor, float3(0.2126, 0.7152, 0.0722));
     }
 
-    half4 XeGTAO_CalculateEdges(const half centerZ, const half leftZ, const half rightZ, const half topZ, const half bottomZ)
+    float3 XeGTAO_CalculateNormalBGI(float3 pixCenterPos, float3 pixLPos, float3 pixRPos, float3 pixTPos, float3 pixBPos)
     {
-        half4 edgesLRTB = half4(leftZ, rightZ, topZ, bottomZ) - centerZ;
-        half slopeLR = (edgesLRTB.y - edgesLRTB.x) * 0.5;
-        half slopeTB = (edgesLRTB.w - edgesLRTB.z) * 0.5;
-        half4 edgesLRTBSlopeAdjusted = edgesLRTB + half4(slopeLR, -slopeLR, slopeTB, -slopeTB);
-        edgesLRTB = min(abs(edgesLRTB), abs(edgesLRTBSlopeAdjusted));
-        return saturate((1.25 - edgesLRTB / (centerZ * 0.011)));
-    }
-
-    half XeGTAO_PackEdges(half4 edgesLRTB)
-    {
-        edgesLRTB = round(saturate(edgesLRTB) * 2.9);
-        return dot(edgesLRTB, half4(64.0 / 255.0, 16.0 / 255.0, 4.0 / 255.0, 1.0 / 255.0));
-    }
-
-    float3 XeGTAO_CalculateNormalBGI(const float4 edgesLRTB, float3 pixCenterPos, float3 pixLPos, float3 pixRPos, float3 pixTPos, float3 pixBPos)
-    {
-        float4 acceptedNormals = saturate(float4(edgesLRTB.x * edgesLRTB.z, edgesLRTB.z * edgesLRTB.y, edgesLRTB.y * edgesLRTB.w, edgesLRTB.w * edgesLRTB.x) + 0.01);
         pixLPos = normalize(pixLPos - pixCenterPos);
         pixRPos = normalize(pixRPos - pixCenterPos);
         pixTPos = normalize(pixTPos - pixCenterPos);
         pixBPos = normalize(pixBPos - pixCenterPos);
-        float3 pixelNormal = acceptedNormals.x * cross(pixLPos, pixTPos) +
-                             acceptedNormals.y * cross(pixTPos, pixRPos) +
-                             acceptedNormals.z * cross(pixRPos, pixBPos) +
-                             acceptedNormals.w * cross(pixBPos, pixLPos);
+        
+        float3 pixelNormal = cross(pixLPos, pixTPos) +
+                             cross(pixTPos, pixRPos) +
+                             cross(pixRPos, pixBPos) +
+                             cross(pixBPos, pixLPos);
         return normalize(pixelNormal);
+    }
+    
+    float3 DecodeNormal(float2 enc)
+    {
+        float3 n;
+        n.xy = enc * 2.0 - 1.0;
+        n.z = -sqrt(saturate(1.0 - dot(n.xy, n.xy)));
+        return n;
     }
 
     float3 blend_normals(float3 n1, float3 n2)
@@ -498,7 +475,6 @@ namespace Barbatos_XeGTAO1
         
         float Gx = h00 - h20 + 2.0 * h01 - 2.0 * h21 + h02 - h22;
         float Gy = h00 + 2.0 * h10 + h20 - h02 - 2.0 * h12 - h22;
-        
         return normalize(float3(Gx * pixelWorldSize.y * pixelWorldSize.z,
                                 Gy * pixelWorldSize.x * pixelWorldSize.z,
                                 pixelWorldSize.x * pixelWorldSize.y * 8));
@@ -516,7 +492,6 @@ namespace Barbatos_XeGTAO1
         float h02 = GetColor(texcoord + float2(-p.x, p.y)).r;
         float h12 = GetColor(texcoord + float2(0, p.y)).r;
         float h22 = GetColor(texcoord + float2(p.x, p.y)).r;
-        
         float3 pixelWorldSize = float3(p.x, p.y, HeightmapIntensity * 0.001);
         return ComputeHeightmapNormal(h00, h10, h20, h01, h11, h21, h02, h12, h22, pixelWorldSize);
     }
@@ -527,7 +502,6 @@ namespace Barbatos_XeGTAO1
         const float2 step_size = ReShade::PixelSize * exp2(level);
         
         float center_val = tex2Dlod(input_sampler, float4(texcoord, 0.0, 0.0)).r;
-        
         float2 center_clip_pos = texcoord * 2.0 - 1.0;
         float3 center_pos;
         center_pos.xy = center_clip_pos * inv_proj_scale * center_depth;
@@ -537,14 +511,14 @@ namespace Barbatos_XeGTAO1
         float sum = center_val;
         float cum_w = 1.0;
         static const float2 atrous_offsets[4] = { float2(0, -1), float2(-1, 0), float2(1, 0), float2(0, 1) };
-        
         [unroll]
         for (int i = 0; i < 4; i++)
         {
             float2 uv = texcoord + atrous_offsets[i] * step_size;
             float sample_val = tex2Dlod(input_sampler, float4(uv, 0.0, 0.0)).r;
             float sample_depth = tex2Dlod(sViewDepthLinear, float4(uv, 0.0, 0.0)).r;
-            float3 sample_normal = tex2Dlod(sNormalLinear, float4(uv, 0.0, 0.0)).xyz * 2.0 - 1.0;
+            
+            float3 sample_normal = DecodeNormal(tex2Dlod(sNormalLinear, float4(uv, 0.0, 0.0)).xy);
             
             float is_valid_depth = step(sample_depth / (DepthMultiplier * 10.0), DepthThreshold);
             float2 sample_clip_pos = uv * 2.0 - 1.0;
@@ -557,11 +531,9 @@ namespace Barbatos_XeGTAO1
             float diff_c = center_val - sample_val;
             float3 diff_p_vec = center_pos - sample_pos;
             float diff_n = dot(center_normal, sample_normal);
-            
             float w_c = exp(-diff_c * diff_c / c_phi);
             float w_p = exp(-dot(diff_p_vec, diff_p_vec) / p_phi);
             float w_n = pow(saturate(diff_n), n_phi);
-
             float weight = w_c * w_n * w_p * is_valid_depth;
 
             sum += sample_val * weight;
@@ -607,7 +579,7 @@ namespace Barbatos_XeGTAO1
         float depth01 = getDepth(input.uv);
         if (depth01 >= DepthThreshold)
         {
-            outNormalEdges = float4(0.5, 0.5, 1.0, 0.0);
+            outNormalEdges = float4(0.5, 0.5, 0.0, 1.0);
             return;
         }
 
@@ -624,17 +596,14 @@ namespace Barbatos_XeGTAO1
         float dT = tex2D(sDepth, input.uv + float2(0, -pixelSize.y)).r;
         float dB = tex2D(sDepth, input.uv + float2(0, pixelSize.y)).r;
 
-        lpfloat4 edgesLRTB = XeGTAO_CalculateEdges((lpfloat) dC, (lpfloat) dL, (lpfloat) dR, (lpfloat) dT, (lpfloat) dB);
-        lpfloat packedEdges = XeGTAO_PackEdges(edgesLRTB);
-
         float3 CENTER = XeGTAO_ComputeViewspacePosition(input.uv, dC, consts);
         float3 LEFT = XeGTAO_ComputeViewspacePosition(input.uv + float2(-1, 0) * pixelSize, dL, consts);
         float3 RIGHT = XeGTAO_ComputeViewspacePosition(input.uv + float2(1, 0) * pixelSize, dR, consts);
         float3 TOP = XeGTAO_ComputeViewspacePosition(input.uv + float2(0, -1) * pixelSize, dT, consts);
         float3 BOTTOM = XeGTAO_ComputeViewspacePosition(input.uv + float2(0, 1) * pixelSize, dB, consts);
         
-        float3 viewspaceNormal = XeGTAO_CalculateNormalBGI(edgesLRTB, CENTER, LEFT, RIGHT, TOP, BOTTOM);
-        
+        float3 viewspaceNormal = XeGTAO_CalculateNormalBGI(CENTER, LEFT, RIGHT, TOP, BOTTOM);
+
         if (HeightmapBlendAmount > 0.001 && depth01 < HeightmapDepthThreshold)
         {
             float3 heightmapNormal = GetHeightmapNormal(input.uv);
@@ -643,7 +612,7 @@ namespace Barbatos_XeGTAO1
             viewspaceNormal = normalize(lerp(viewspaceNormal, blended, HeightmapBlendAmount * fade));
         }
         
-        outNormalEdges = float4(viewspaceNormal * 0.5 + 0.5, packedEdges);
+        outNormalEdges = float4(viewspaceNormal.xy * 0.5 + 0.5, 0.0, 1.0);
     }
 
     float4 PS_GTAO_Main(VS_OUTPUT input) : SV_Target
@@ -651,7 +620,7 @@ namespace Barbatos_XeGTAO1
         float depth = getDepth(input.uv);
         if (depth >= DepthThreshold)
             return float4(0, 0, 0, 1.0);
-
+        
         GTAOConstants consts;
         consts.ViewportSize = BUFFER_SCREEN_SIZE;
         consts.ViewportPixelSize = ReShade::PixelSize;
@@ -666,8 +635,9 @@ namespace Barbatos_XeGTAO1
         consts.FinalValuePower = FinalValuePower;
 
         lpfloat viewspaceZ = (lpfloat) tex2D(sDepth, input.uv).r * 0.99920;
-        float4 normalEdges = tex2D(sNormalEdges, input.uv);
-        lpfloat3 viewspaceNormal = (lpfloat3) (normalEdges.xyz * 2.0 - 1.0);
+        
+        float2 encodedNormal = tex2D(sNormalEdges, input.uv).xy;
+        lpfloat3 viewspaceNormal = (lpfloat3) DecodeNormal(encodedNormal);
         
         const float3 pixCenterPos = XeGTAO_ComputeViewspacePosition(input.uv, viewspaceZ, consts);
         const lpfloat3 viewVec = (lpfloat3) normalize(-pixCenterPos);
@@ -697,10 +667,10 @@ namespace Barbatos_XeGTAO1
         uint2 pixCoord = uint2(input.vpos.xy);
         uint noiseIndex = UseStaticNoise ? 0 : FRAME_COUNT;
         lpfloat2 localNoise = (lpfloat2) SpatioTemporalNoise(pixCoord, noiseIndex);
-        
         const lpfloat effectRadius = (lpfloat) consts.EffectRadius * (lpfloat) consts.RadiusMultiplier;
         const lpfloat falloffRange = (lpfloat) consts.EffectFalloffRange * effectRadius;
         const lpfloat falloffFrom = effectRadius * ((lpfloat) 1 - (lpfloat) consts.EffectFalloffRange);
+        
         const lpfloat falloffMul = (lpfloat) -1.0 / falloffRange;
         const lpfloat falloffAdd = falloffFrom / falloffRange + (lpfloat) 1.0;
         lpfloat visibility = 0;
@@ -708,15 +678,17 @@ namespace Barbatos_XeGTAO1
         const lpfloat pixelTooCloseThreshold = 1.3;
         const float2 pixelDirRBViewspaceSizeAtCenterZ = viewspaceZ.xx * consts.NDCToViewMul_x_PixelSize;
         lpfloat screenspaceRadius = effectRadius / (lpfloat) pixelDirRBViewspaceSizeAtCenterZ.x;
-        visibility += saturate((10 - screenspaceRadius) / 100) * 0.5;
+        visibility += saturate((10 - screenspaceRadius) * 0.01) * 0.5;
         const lpfloat minS = (lpfloat) pixelTooCloseThreshold / screenspaceRadius;
-
+        
         for (lpfloat slice = 0; slice < sliceCount; slice++)
         {
             lpfloat sliceK = (slice + localNoise.x) / sliceCount;
             lpfloat phi = sliceK * PI;
-            lpfloat cosPhi = cos(phi);
-            lpfloat sinPhi = sin(phi);
+            
+            lpfloat sinPhi, cosPhi;
+            sincos(phi, sinPhi, cosPhi);
+
             lpfloat2 omega = lpfloat2(cosPhi, -sinPhi) * screenspaceRadius;
             const lpfloat3 directionVec = lpfloat3(cosPhi, sinPhi, 0);
             const lpfloat3 orthoDirectionVec = directionVec - (dot(directionVec, viewVec) * viewVec);
@@ -753,16 +725,12 @@ namespace Barbatos_XeGTAO1
                 float3 sampleDelta1 = samplePos1 - pixCenterPos;
                 lpfloat sampleDist0 = (lpfloat) length(sampleDelta0);
                 lpfloat sampleDist1 = (lpfloat) length(sampleDelta1);
-
                 lpfloat3 sampleHorizonVec0 = (lpfloat3) (sampleDelta0 / sampleDist0);
                 lpfloat3 sampleHorizonVec1 = (lpfloat3) (sampleDelta1 / sampleDist1);
-                
                 lpfloat falloffBase0 = length(lpfloat3(sampleDelta0.xy, sampleDelta0.z * (1 + consts.ThinOccluderCompensation)));
                 lpfloat falloffBase1 = length(lpfloat3(sampleDelta1.xy, sampleDelta1.z * (1 + consts.ThinOccluderCompensation)));
-                
                 lpfloat weight0 = saturate(falloffBase0 * falloffMul + falloffAdd);
                 lpfloat weight1 = saturate(falloffBase1 * falloffMul + falloffAdd);
-                
                 lpfloat shc0 = (lpfloat) dot(sampleHorizonVec0, viewVec);
                 lpfloat shc1 = (lpfloat) dot(sampleHorizonVec1, viewVec);
 
@@ -776,49 +744,22 @@ namespace Barbatos_XeGTAO1
             projectedNormalVecLength = lerp(projectedNormalVecLength, 1, 0.05);
             lpfloat h0 = -XeGTAO_FastACos((lpfloat) horizonCos1);
             lpfloat h1 = XeGTAO_FastACos((lpfloat) horizonCos0);
-            lpfloat iarc0 = ((lpfloat) cosNorm + (lpfloat) 2 * (lpfloat) h0 * (lpfloat) sin(n) - (lpfloat) cos((lpfloat) 2 * (lpfloat) h0 - n)) / (lpfloat) 4;
-            lpfloat iarc1 = ((lpfloat) cosNorm + (lpfloat) 2 * (lpfloat) h1 * (lpfloat) sin(n) - (lpfloat) cos((lpfloat) 2 * (lpfloat) h1 - n)) / (lpfloat) 4;
+            lpfloat iarc0 = ((lpfloat) cosNorm + (lpfloat) 2 * (lpfloat) h0 * (lpfloat) sin(n) - (lpfloat) cos((lpfloat) 2 * (lpfloat) h0 - n)) * 0.25;
+            lpfloat iarc1 = ((lpfloat) cosNorm + (lpfloat) 2 * (lpfloat) h1 * (lpfloat) sin(n) - (lpfloat) cos((lpfloat) 2 * (lpfloat) h1 - n)) * 0.25;
             lpfloat localVisibility = (lpfloat) projectedNormalVecLength * (lpfloat) (iarc0 + iarc1);
             visibility += localVisibility;
         }
 
-        visibility /= (lpfloat) sliceCount;
+        visibility *= rcp((lpfloat) sliceCount);
         visibility = pow(max(1e-5, visibility), (lpfloat) consts.FinalValuePower);
         visibility = max((lpfloat) 0.03, visibility);
         
         return float4(saturate(visibility).xxx, 1.0);
     }
     
-    float PS_DenoisePass(VS_OUTPUT input, int level, sampler input_sampler) : SV_Target
-    {
-        if (!bEnableDenoise)
-            return tex2Dlod(input_sampler, float4(input.uv, 0.0, 0.0)).r;
-        
-        float rawDepth = getDepth(input.uv);
-        if (rawDepth >= DepthThreshold)
-            return tex2Dlod(input_sampler, float4(input.uv, 0.0, 0.0)).r;
-        
-        float depth = tex2Dlod(sViewDepthLinear, float4(input.uv, 0.0, 0.0)).r;
-        if (depth / (DepthMultiplier * 10.0) >= DepthThreshold)
-            return tex2Dlod(input_sampler, float4(input.uv, 0.0, 0.0)).r;
-        
-        float3 normal = tex2Dlod(sNormalLinear, float4(input.uv, 0.0, 0.0)).xyz * 2.0 - 1.0;
-        
-        return atrous_scalar(input_sampler, input.uv, level, depth, normal, input.NDCToView);
-    }
-
-    float PS_DenoisePass0(VS_OUTPUT input) : SV_Target
-    {
-        return PS_DenoisePass(input, 0, sAO);
-    }
-    float PS_DenoisePass1(VS_OUTPUT input) : SV_Target
-    {
-        return PS_DenoisePass(input, 1, sDenoiseTex0);
-    }
-    
-    //------------|
-    // :: TAA  :: |
-    //------------|
+    //---------|
+    // :: TAA::|
+    //---------|
     
     float ClipToAABB(float aabb_min, float aabb_max, float history_sample)
     {
@@ -830,13 +771,12 @@ namespace Barbatos_XeGTAO1
         return (a_unit > 1.0) ? (p_clip + v_clip / a_unit) : history_sample;
     }
     
-    float2 GetVelocityFromClosestFragment(float2 texcoord)
+    float2 GetVelocity(float2 texcoord)
     {
         float2 pixel_size = ReShade::PixelSize;
         float closest_depth = 1.0;
         float2 closest_velocity = 0.0;
         static const float2 offsets[5] = { float2(0, 0), float2(0, -1), float2(-1, 0), float2(1, 0), float2(0, 1) };
-        
         [unroll] 
         for (int i = 0; i < 5; i++)
         {
@@ -866,114 +806,106 @@ namespace Barbatos_XeGTAO1
         return saturate((high_threshold - vel_mag) / (high_threshold - low_threshold));
     }
     
-    float Confidence(float2 uv, float2 velocity)
+    float Confidence(float2 uv, float2 velocity, float flow_magnitude)
     {
         float2 prev_uv = uv + velocity;
         if (any(prev_uv < 0.0) || any(prev_uv > 1.0))
             return 0.0;
-        
         float curr_luma = GetLuminance(GetColor(uv).rgb);
         float prev_luma = tex2D(sB_PrevLuma, prev_uv).r;
         float luma_error = abs(curr_luma - prev_luma);
-        
-        float flow_magnitude = length(velocity * BUFFER_SCREEN_SIZE);
-        
         if (flow_magnitude <= 0.5)
             return 1.0;
-        
         float2 destination_velocity = SampleMotionVectors(prev_uv);
         float error = length(velocity - destination_velocity);
         float normalized_error = (error * ConfidenceSensitivity) / (length(velocity) + 1e-6);
-
         float length_conf = rcp(flow_magnitude * 0.02 + 1.0);
         float consistency_conf = rcp(normalized_error + 1.0);
         float photometric_conf = exp(-luma_error * 1.5);
-
         return consistency_conf * length_conf * photometric_conf;
     }
 
-    float4 ComputeTAA(VS_OUTPUT input, sampler sHistoryParams)
+    float4 SpatioTemporalDenoise(VS_OUTPUT input, sampler sHistoryParams)
     {
         float rawDepth = getDepth(input.uv);
         if (rawDepth >= DepthThreshold)
             return float4(1, 1, 1, 1);
-        
         float center_depth = tex2Dlod(sViewDepthLinear, float4(input.uv, 0.0, 0.0)).r;
         if (center_depth / (DepthMultiplier * 10.0) >= DepthThreshold)
             return float4(1, 1, 1, 1);
         
-        float current_signal = atrous_scalar(sDenoiseTex1, input.uv, 2, center_depth, 0.0, input.NDCToView);
+        float3 normal = DecodeNormal(tex2Dlod(sNormalLinear, float4(input.uv, 0.0, 0.0)).xy);
         
+        float current_signal;
+        if (bEnableDenoise)
+            current_signal = atrous_scalar(sAO, input.uv, 1, center_depth, normal, input.NDCToView);
+        else
+            current_signal = tex2Dlod(sAO, float4(input.uv, 0.0, 0.0)).r;
         if (!EnableTemporal)
             return float4(current_signal.xxxx);
-        
-        float2 velocity = GetVelocityFromClosestFragment(input.uv);
+        // Temporal
+        float2 velocity = GetVelocity(input.uv);
         float2 reprojected_uv = input.uv + velocity;
-        
         float history_signal = GetLod(sHistoryParams, float4(reprojected_uv, 0, 0)).r;
         
         float current_depth = getDepth(input.uv);
         float history_depth = getDepth(reprojected_uv);
-        
         bool valid_depth = abs(history_depth - current_depth) < 0.02;
         bool inside_screen = all(saturate(reprojected_uv) == reprojected_uv);
-
         if (!inside_screen || FRAME_COUNT <= 1 || !valid_depth)
             return float4(current_signal.xxxx);
+        float2 velocity_pixels = velocity * BUFFER_SCREEN_SIZE;
+        float flow_magnitude = length(velocity_pixels);
 
-        float confidence = Confidence(input.uv, velocity);
+        float confidence = Confidence(input.uv, velocity, flow_magnitude);
+        
         float val_min, val_max;
-        ComputeNeighborhoodMinMax_Scalar(sDenoiseTex1, input.uv, current_signal, val_min, val_max);
+        ComputeNeighborhoodMinMax_Scalar(sAO, input.uv, current_signal, val_min, val_max);
         
         float box_size = val_max - val_min;
-        val_min -= box_size * 0.2;
-        val_max += box_size * 0.2;
+        val_min -= box_size * 0.5;
+        val_max += box_size * 0.5;
 
         float clipped_history = ClipToAABB(val_min, val_max, history_signal);
-        float velocity_factor = saturate(length(velocity * BUFFER_SCREEN_SIZE) / 4.0);
+        
+        float velocity_factor = saturate(flow_magnitude * 0.25);
         float final_history = lerp(history_signal, clipped_history, velocity_factor);
 
         float compressed_confidence = saturate(confidence + log2(2.0 - confidence) * 0.5);
         float blendFactor = max(0.1, TemporalStability * compressed_confidence);
         float temporal_val = lerp(current_signal, final_history, blendFactor);
-        float trust_factor = ComputeTrustFactor(velocity * BUFFER_SCREEN_SIZE, 4.0, 20.0);
-        
+        float trust_factor = ComputeTrustFactor(velocity_pixels, 4.0, 20.0);
         [branch] 
         if (trust_factor < 1.0)
         {
-            float blurred_val = current_signal;
-            float valid_samples_count = 1.0;
-            
-            [unroll]
-            for (int i = 1; i < 3; i++)
-            {
-                float t = (float) i / 2.0;
-                float2 blur_coord = input.uv - velocity * 0.5 * t;
-                if (all(saturate(blur_coord) == blur_coord))
-                {
-                    blurred_val += tex2Dlod(sDenoiseTex1, float4(blur_coord, 0, 0)).r;
-                    valid_samples_count += 1.0;
-                }
-            }
-            blurred_val /= valid_samples_count;
-            temporal_val = lerp(blurred_val, temporal_val, lerp(0.5, 1.0, trust_factor));
+            temporal_val = lerp(current_signal, temporal_val, lerp(0.5, 1.0, trust_factor));
         }
 
         return float4(temporal_val.xxx, 1.0);
     }
     
-    void PS_Accumulate0(VS_OUTPUT input, out float4 outHistory : SV_Target)
+    void PS_SpatioTemporal0(VS_OUTPUT input, out float4 outHistory : SV_Target)
     {
-        if ((FRAME_COUNT & 1) != 0)
+#if __RENDERER__ >= 0xa000 // DX10+
+            if ((FRAME_COUNT & 1) != 0)
+#else // DX9
+        if ((FRAME_COUNT % 2) != 0)
+#endif
             discard;
-        outHistory = ComputeTAA(input, sHistory1);
+
+        outHistory = SpatioTemporalDenoise(input, sHistory1);
     }
 
-    void PS_Accumulate1(VS_OUTPUT input, out float4 outHistory : SV_Target)
+    void PS_SpatioTemporal1(VS_OUTPUT input, out float4 outHistory : SV_Target)
     {
-        if ((FRAME_COUNT & 1) == 0)
+#if __RENDERER__ >= 0xa000 // DX10+
+            if ((FRAME_COUNT & 1) == 0)
+#else // DX9
+        if ((FRAME_COUNT % 2) == 0)
+#endif
             discard;
-        outHistory = ComputeTAA(input, sHistory0);
+
+        outHistory = SpatioTemporalDenoise(input, sHistory0);
     }
     
     void PS_UpdateLuma(VS_OUTPUT input, out float4 outLuma : SV_Target)
@@ -993,35 +925,31 @@ namespace Barbatos_XeGTAO1
         {
             if (depth >= DepthThreshold || depth < 0.0001)
                 return originalColor;
-
             float occlusion = saturate((1.0 - visibility) * Intensity);
             float fade = saturate(1.0 - smoothstep(0.95, 1.0, depth));
             occlusion *= fade;
             originalColor.rgb = lerp(originalColor.rgb, OcclusionColor.rgb, occlusion);
             return originalColor;
         }
-        else if (ViewMode == 1) // Edges
-        {
-            return float4(GetLod(sNormalEdges, input.uv).aaa, 1.0);
-        }
-        else if (ViewMode == 2) // AO Only
+        else if (ViewMode == 1) // AO Only
         {
             float occlusion = saturate((1.0 - visibility) * Intensity);
             return float4(lerp(float3(1, 1, 1), OcclusionColor.rgb, occlusion), 1.0);
         }
-        else if (ViewMode == 3) // Normals
+        else if (ViewMode == 2) // Normals
         {
-            return float4(GetLod(sNormalEdges, input.uv).rgb, 1.0);
+            float3 n = DecodeNormal(GetLod(sNormalEdges, input.uv).xy);
+            return float4(n.rgb * 0.5 + 0.5, 1.0);
         }
-        else if (ViewMode == 4) // Depth
+        else if (ViewMode == 3) // Depth
         {
             float view_depth = GetLod(sDepth, input.uv).r / (DepthMultiplier * 10.0);
             return float4(saturate(view_depth).xxx, 1.0);
         }
-        else if (ViewMode == 5) // Confidence Check
+        else if (ViewMode == 4) // Confidence Check
         {
-            float2 velocity = GetVelocityFromClosestFragment(input.uv);
-            float conf = Confidence(input.uv, velocity);
+            float2 velocity = GetVelocity(input.uv);
+            float conf = Confidence(input.uv, velocity, length(velocity * BUFFER_SCREEN_SIZE));
             return float4(conf.xxx, 1.0);
         }
 
@@ -1050,30 +978,16 @@ namespace Barbatos_XeGTAO1
             RenderTarget = AO;
             ClearRenderTargets = true;
         }
-        pass Denoise_0
+        pass SpatioTemporal0
         {
             VertexShader = VS_GTAO;
-            PixelShader = PS_DenoisePass0;
-            RenderTarget = DenoiseTex0;
-            ClearRenderTargets = true;
-        }
-        pass Denoise_1
-        {
-            VertexShader = VS_GTAO;
-            PixelShader = PS_DenoisePass1;
-            RenderTarget = DenoiseTex1;
-            ClearRenderTargets = true;
-        }
-        pass Accumulate0
-        {
-            VertexShader = VS_GTAO;
-            PixelShader = PS_Accumulate0;
+            PixelShader = PS_SpatioTemporal0;
             RenderTarget = History0;
         }
-        pass Accumulate1
+        pass SpatioTemporal1
         {
             VertexShader = VS_GTAO;
-            PixelShader = PS_Accumulate1;
+            PixelShader = PS_SpatioTemporal1;
             RenderTarget = History1;
         }
         pass UpdateLuma
