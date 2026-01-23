@@ -20,7 +20,7 @@ THE SOFTWARE.
 /*-------------------------------------------------|
 | ::                   MiAO                     :: |
 '--------------------------------------------------|
-| Version: 1.3                                     |
+| Version: 1.4                                     |
 | Author: Barbatos                                 |
 | License: MIT                                     |
 | Description: Simple ambient occlusion with repur-|
@@ -42,11 +42,10 @@ THE SOFTWARE.
 #define USE_VORT_MOTION 0
 #endif
 
-static const float2 LOD_MASK = float2(0.0, 1.0);
-static const float2 ZERO_LOD = float2(0.0, 0.0);
 #define GetDepth(coords) (ReShade::GetLinearizedDepth(coords))
 #define GetColor(c) tex2Dlod(ReShade::BackBuffer, float4((c).xy, 0, 0))
-#define GetLod(s,c) tex2Dlod(s, ((c).xyyy * LOD_MASK.yyxx + ZERO_LOD.xxxy))
+#define GetLod(s,c) tex2Dlod(s, float4((c).xy, 0, 0))
+
 static const float2 BUFFER_DIM = float2(BUFFER_WIDTH, BUFFER_HEIGHT);
 static const float2 BUFFER_RCP = float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT);
 static const float2 R2 = float2(0.75487766624669276005, 0.5698402909980532659114);
@@ -156,6 +155,10 @@ static const float DEG2RAD = 0.017453292; // PI / 180.0
 // :: Textures :: |
 //----------------|
 
+#ifndef USE_HILBERT_LUT
+#define USE_HILBERT_LUT 1 
+#endif
+
 #if USE_MARTY_LAUNCHPAD_MOTION
     namespace Deferred {
         texture MotionVectorsTex { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
@@ -193,23 +196,7 @@ sampler sPrevLuma
     Texture = texPrevLuma;
 };
 
-texture tMotionConfidence
-{
-    Width = BUFFER_WIDTH;
-    Height = BUFFER_HEIGHT;
-    Format = R16F;
-};
-sampler sMotionConfidence
-{
-    Texture = tMotionConfidence;
-    MagFilter = POINT;
-    MinFilter = POINT;
-    AddressU = CLAMP;
-    AddressV = CLAMP;
-    AddressW = CLAMP;
-};
-
-namespace MiAO32
+namespace MiAO24
 {
     texture DEPTH
     {
@@ -267,6 +254,24 @@ namespace MiAO32
         Texture = HISTORY_AO;
     };
 
+#if USE_HILBERT_LUT
+    texture texHilbertLUT < source = "Barbatos_Hilbert_RGB.png"; >
+    {
+        Width = 64;
+        Height = 64;
+        Format = RGBA8;
+    };
+    sampler sHilbertLUT
+    {
+        Texture = texHilbertLUT;
+        AddressU = Wrap;
+        AddressV = Wrap;
+        MagFilter = POINT;
+        MinFilter = POINT;
+        MipFilter = POINT;
+    };
+#endif
+    
 //----------------|
 // :: Functions ::|
 //----------------|
@@ -294,7 +299,7 @@ namespace MiAO32
         return dot(linearColor, float3(0.2126, 0.7152, 0.0722));
     }
 
-    float2 GetVelocityFromClosestFragment(float2 texcoord)
+    float2 GetVelocity(float2 texcoord)
     {
         float2 pixel_size = ReShade::PixelSize;
         float closest_depth = GetDepth(texcoord);
@@ -357,6 +362,7 @@ namespace MiAO32
         return saturate((high_threshold - vel_mag) / (high_threshold - low_threshold));
     }
 
+#if !USE_HILBERT_LUT
     float hilbert(float2 p, int level)
     {
         float d = 0;
@@ -378,15 +384,27 @@ namespace MiAO32
         }
         return d;
     }
-    
+
     uint HilbertIndex(uint x, uint y)
     {
-        return hilbert(float2(x % 64, y % 64), 6);
+        return (uint)hilbert(float2(x % 64, y % 64), 6);
     }
+#endif
 
     float2 SpatioTemporalNoise(uint2 pixCoord, uint temporalIndex)
     {
-        uint index = HilbertIndex(pixCoord.x, pixCoord.y);
+        uint index;
+        
+#if USE_HILBERT_LUT
+        float4 encodedVal = tex2Dfetch(sHilbertLUT, int2(pixCoord.x % 64, pixCoord.y % 64));
+        uint high_byte = (uint) (encodedVal.r * 255.0 + 0.1);
+        uint low_byte = (uint) (encodedVal.g * 255.0 + 0.1);
+        index = (high_byte * 256) + low_byte;
+#else
+        // Calculate index procedurally (Slower)
+        index = HilbertIndex(pixCoord.x, pixCoord.y);
+#endif
+
         index += 288 * (temporalIndex % 64);
         return frac(0.5 + index * R2);
     }
@@ -432,16 +450,16 @@ namespace MiAO32
 
     static const float K_Weights[31] =
     {
-    5.7722, 7.5684, 4.0276, 5.0732, 5.5975, 4.9093, 3.5299, 2.5269,
-    1.9852, 1.8654, 2.2458, 2.7978, 2.3091, 3.1527, 3.4548, 2.0992,
-    -0.6360, 1.9286, 2.6142, 1.8576, 1.1390, -0.0224, -3.3208, 2.5695,
-    4.5335, 0.6797, 3.2594, 4.1440, 4.3394, 1.4891, 3.1744
+    2.87855, 3.89337, 2.03928, 2.57912, 2.82997, 2.49643, 1.65273, 1.14063,
+    0.93697, 0.95761, 1.14153, 1.45707, 1.20977, 1.51199, 1.65217, 0.95377,
+    -0.39005, 0.92968, 1.32165, 0.97041, 0.59024, -0.03566, -1.72452, 1.28163,
+    2.27953, 0.24276, 1.67147, 2.05600, 2.10187, 0.73659, 1.63937
     };
 
     static const float K_MipLevels[31] =
     {
-     -2.00, -1.50, -1.00, -1.00, -0.90, -0.80, -0.70, -0.60, -0.50, -0.40, -0.30, -0.20, 
-     -0.50, -0.45, -0.40, -0.35, -0.30, -0.25, -0.20, -0.15, -0.10, -0.05, 0.00, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40 
+     -2.00, -1.50, -1.00, -1.00, -0.90, -0.80, -0.70, -0.60, -0.50, -0.40, -0.30, -0.20,
+     -0.50, -0.45, -0.40, -0.35, -0.30, -0.25, -0.20, -0.15, -0.10, -0.05, 0.00, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40
     };
 
     float4 GetSamplePattern(int index, float2 noise)
@@ -481,7 +499,7 @@ namespace MiAO32
         float2 samplingUV = sampleOffset * BUFFER_RCP + depthBufferUV;
         samplingUV = saturate(samplingUV);
 
-        float viewspaceSampleZ1 = GetLod(sDEPTH, float4(samplingUV, 0, 0)).r;
+        float viewspaceSampleZ1 = GetLod(sDEPTH, samplingUV).r;
         float3 hitPos1 = DepthBufferUVToViewSpace(samplingUV, viewspaceSampleZ1, pScale);
         float3 hitDelta1 = hitPos1 - pixCenterPos;
         float obscurance1 = CalculatePixelObscurance(pixelNormal, hitDelta1, falloffCalcMulSq);
@@ -493,7 +511,7 @@ namespace MiAO32
         float2 samplingUV2 = -sampleOffset * BUFFER_RCP + depthBufferUV;
         samplingUV2 = saturate(samplingUV2);
     
-        float viewspaceSampleZ2 = GetLod(sDEPTH, float4(samplingUV2, 0, 0)).r;
+        float viewspaceSampleZ2 = GetLod(sDEPTH, samplingUV2).r;
         float3 hitPos2 = DepthBufferUVToViewSpace(samplingUV2, viewspaceSampleZ2, pScale);
         float3 hitDelta2 = hitPos2 - pixCenterPos;
         float obscurance2 = CalculatePixelObscurance(pixelNormal, hitDelta2, falloffCalcMulSq);
@@ -522,11 +540,12 @@ namespace MiAO32
 | :: Pixel Shaders :: |
 '--------------------*/
 
-    void PS_Prepare(VS_OUTPUT input, out float4 outDepth : SV_Target0, out float4 outNormal : SV_Target1)
+    void PS_Prepare(VS_OUTPUT input, out float4 outDepth : SV_Target0, out float4 outNormal : SV_Target1, out float2 outHistory : SV_Target2)
     {
         float2 uv = input.uv;
         float linear_depth = GetDepth(uv);
         outDepth = ScreenSpaceToViewSpaceDepth(linear_depth);
+        outHistory = GetLod(sFINAL_AO, uv).rg;
 
         float2 p = BUFFER_RCP;
         
@@ -636,7 +655,7 @@ namespace MiAO32
             return;
         }
 
-        float2 velocity = GetVelocityFromClosestFragment(uv);
+        float2 velocity = GetVelocity(uv);
         
         // Reprojection
         float2 reprojected_uv = uv + velocity;
@@ -695,12 +714,6 @@ namespace MiAO32
         outUpscaled = temporal_signal;
     }
 
-
-    void PS_UpdateHistory(VS_OUTPUT input, out float2 outHistory : SV_Target)
-    {
-        outHistory = GetLod(sFINAL_AO, input.uv).rg;
-    }
-
     void PS_StorePrevLuma(VS_OUTPUT input, out float outLuma : SV_Target)
     {
         outLuma = GetLuminance(GetColor(input.uv).rgb);
@@ -738,6 +751,7 @@ namespace MiAO32
             PixelShader = PS_Prepare;
             RenderTarget0 = DEPTH;
             RenderTarget1 = NORMALS;
+            RenderTarget2 = HISTORY_AO;
         }
         pass GenerateAO
         {
@@ -745,12 +759,6 @@ namespace MiAO32
             PixelShader = PS_GenerateSSAO;
             RenderTarget = AO;
             GenerateMipMaps = true;
-        }
-        pass UpdateHistory
-        {
-            VertexShader = VS_MiAO;
-            PixelShader = PS_UpdateHistory;
-            RenderTarget = HISTORY_AO;
         }
         pass Upscale
         {
@@ -771,4 +779,3 @@ namespace MiAO32
         }
     }
 }
-
