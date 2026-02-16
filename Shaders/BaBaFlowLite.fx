@@ -21,7 +21,7 @@ texture2D texMotionVectors
 //----------------|
 // :: Textures :: |
 //----------------|
-namespace Barbatos_Flow
+namespace Barbatos_Flow_Lite
 {
     texture2D tCurrLuma
     {
