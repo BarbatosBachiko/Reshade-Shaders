@@ -1405,7 +1405,7 @@ namespace Barbatos_GI_100
         outColor = float4(Linear2Output(finalColor), 1.0);
     }
     
-    technique Barbatos_GI_PRE_RELEASE
+    technique Barbatos_GI
     {
         pass CopyColorGenMips
         {
