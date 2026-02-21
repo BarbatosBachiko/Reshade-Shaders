@@ -341,7 +341,7 @@ namespace Barbatos_NS
 
     technique Barbatos_NS
     <
-    ui_label = "Barbatos: Neural Sharpen";
+    ui_label = "BaBa: Neural Sharpen";
     >
     {
         pass
