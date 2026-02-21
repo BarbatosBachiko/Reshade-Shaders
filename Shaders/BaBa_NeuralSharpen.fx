@@ -1,7 +1,7 @@
 /*----------------------------------------------|
 | ::        Barbatos Neural Sharpening       :: |
 |-----------------------------------------------|
-| Version: 1.1                                  |
+| Version: 1.2                                  |
 | Author: Barbatos                              |
 | License: MIT                                  |
 | 12-Channel Neural Network                     |
@@ -28,6 +28,15 @@ uniform float Intensity <
     ui_step = 0.1;
     ui_label = "Intensity";
 > = 2.0;
+
+uniform float AntiHalo <
+    ui_type = "drag";
+    ui_min = 0.0; 
+    ui_max = 1.0;
+    ui_step = 0.05;
+    ui_label = "Anti-Halo";
+    ui_tooltip = "Reduces ringing artifacts.";
+> = 0.0;
 
 /* // Debug Mode 
 uniform int ViewMode <
@@ -61,6 +70,25 @@ namespace Barbatos_NS
     float GetLuma(float3 rgb)
     {
         return dot(rgb, float3(0.299, 0.587, 0.114));
+    }
+
+    float3 RGBToYCbCr(float3 rgb)
+    {
+        float y = dot(rgb, float3(0.299, 0.587, 0.114));
+        float cb = (rgb.b - y) * 0.564 + 0.5;
+        float cr = (rgb.r - y) * 0.713 + 0.5;
+        return float3(y, cb, cr);
+    }
+
+    float3 YCbCrToRGB(float3 ycbcr)
+    {
+        float y = ycbcr.x;
+        float cb = ycbcr.y - 0.5;
+        float cr = ycbcr.z - 0.5;
+        float r = y + 1.403 * cr;
+        float g = y - 0.344 * cb - 0.714 * cr;
+        float b = y + 1.770 * cb;
+        return float3(r, g, b);
     }
     
     float RunNet_A(float2 uv)
@@ -253,11 +281,9 @@ namespace Barbatos_NS
     void PS_Apply(float4 vpos : SV_Position, float2 uv : TexCoord, out float4 outColor : SV_Target)
     {
         const float3 c = tex2D(ReShade::BackBuffer, uv).rgb;
-        const float l = GetLuma(c);
-        
         float residual = 0.0;
         float normFactor = 5.0;
-        
+
         if (ModelType == 0) // Model A
         {
             residual = RunNet_A(uv);
@@ -266,23 +292,51 @@ namespace Barbatos_NS
         else // Model B
         {
             residual = RunNet_B(uv);
-            normFactor = 20.0; 
+            normFactor = 20.0;
         }
 
         /* Debug Mode
         if (ViewMode == 1)
         {
-            float debugRes = (residual / normFactor) * Intensity;
-            outColor = float4(debugRes + 0.5, debugRes + 0.5, debugRes + 0.5, 1.0);
+            float debugRes = residual * Intensity;
+            outColor = float4(0.5 + debugRes, 0.5 + debugRes, 0.5 + debugRes, 1.0);
             return;
         }
         */
 
         residual = residual / normFactor;
-        
         residual = clamp(residual, -0.15, 0.15);
-        const float sharp_luma = max(0, l + residual * Intensity);
-        outColor = float4(c * (sharp_luma / max(l, 0.0001)), 1.0);
+
+        float3 ycbcr = RGBToYCbCr(c);
+        float sharpenedLuma = max(0.0, ycbcr.x + (residual * Intensity));
+        
+        // Anti-Halo Local Min/Max Clamping
+        if (AntiHalo > 0.0)
+        {
+            const float2 pixel = ReShade::PixelSize;
+            float minLuma = 1.0;
+            float maxLuma = 0.0;
+            
+            [unroll]
+            for (int y = -1; y <= 1; y++)
+            {
+                [unroll]
+                for (int x = -1; x <= 1; x++)
+                {
+                    float lumaTap = tex2D(sTexLuma, uv + float2(x, y) * pixel).r;
+                    minLuma = min(minLuma, lumaTap);
+                    maxLuma = max(maxLuma, lumaTap);
+                }
+            }
+            
+            float clampedLuma = clamp(sharpenedLuma, minLuma, maxLuma);
+            sharpenedLuma = lerp(sharpenedLuma, clampedLuma, AntiHalo);
+        }
+        
+        ycbcr.x = sharpenedLuma;
+        float3 finalColor = max(0.0, YCbCrToRGB(ycbcr));
+
+        outColor = float4(finalColor, 1.0);
     }
 
     technique Barbatos_NS
