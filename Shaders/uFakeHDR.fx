@@ -1,11 +1,9 @@
 /*-------------------------------------------------|
 | ::                  uFakeHDR                  :: |
-| Version: 3.1                                     |
+| Version: 3.2                                     |
 | Author: Barbatos                                 |
 | License: CC0                                     |
 '-------------------------------------------------*/
-
-#include "ReShade.fxh"
 
 namespace uFakeHDR
 {
@@ -16,8 +14,9 @@ namespace uFakeHDR
     static const float INV_LUT_SIZE = 1.0 / LUT_SIZE;
     static const float INV_LUT_COUNT = 1.0 / float(LUT_COUNT);
     static const float LUT_SIZE_MINUS_ONE = LUT_SIZE - 1.0;
-    static const float DITHER_INTENSITY = 0.00196078431;
-
+    static const float DITHER_INTENSITY = 0.00392156862;
+    static const float2 ScreenSize = float2(BUFFER_WIDTH, BUFFER_HEIGHT);
+    
 //----------|
 // :: UI :: |
 //----------|
@@ -55,50 +54,82 @@ namespace uFakeHDR
         MagFilter = LINEAR;
     };
 
+    texture BackBufferTex : COLOR;
+
+    sampler Color
+    {
+        Texture = BackBufferTex;
+    };
+    
 /*------------------.
 | :: Functions ::   |
 '------------------*/
-    
-    float3 ApplyDither(float3 color, float2 pixelCoord)
+
+    struct VSOUT
     {
-        float noise = frac(sin(dot(pixelCoord, float2(12.9898, 78.233))) * 43758.5453);
-        return color + (noise * 2.0 - 1.0) * DITHER_INTENSITY;
+        float4 vpos : SV_Position;
+        float2 texcoord : TEXCOORD0;
+        float magicDot : TEXCOORD1;
+    };
+
+    VSOUT VS_FHD(in uint id : SV_VertexID)
+    {
+        VSOUT o;
+        
+        o.texcoord.x = (id == 2) ? 2.0 : 0.0;
+        o.texcoord.y = (id == 1) ? 2.0 : 0.0;
+        o.vpos = float4(o.texcoord * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
+        
+        const float2 pixelCoord = o.texcoord * ScreenSize;
+        o.magicDot = dot(pixelCoord, float2(0.06711056, 0.00583715));
+        
+        return o;
     }
 
-    float3 ApplyLUT(sampler s, float3 color, int presetIndex)
+    float3 ApplyDither(const float3 color, const float magicDot)
     {
-        float3 uvw = color * LUT_SCALE + LUT_OFFSET;
+        const float noise1 = frac(52.9829189 * frac(magicDot));
+        const float noise2 = frac(52.9829189 * frac(magicDot + 0.036473855));
+        const float triangleNoise = noise1 + noise2 - 1.0;
+        
+        return color + (triangleNoise * DITHER_INTENSITY);
+    }
 
-        float slice = uvw.b * LUT_SIZE;
-        float slice0 = floor(slice);
-        float sliceFrac = slice - slice0;
+    float3 ApplyLUT(sampler s, const float3 color, const int presetIndex)
+    {
+        const float3 clampedColor = saturate(color);
+        const float3 uvw = clampedColor * LUT_SCALE + LUT_OFFSET;
+        
+        const float slice = clampedColor.b * LUT_SIZE_MINUS_ONE;
+        const float slice0 = floor(slice);
+        const float sliceFrac = frac(slice);
+        
+        const float u0 = (slice0 + uvw.r) * INV_LUT_SIZE;
+        const float u1 = (min(slice0 + 1.0, LUT_SIZE_MINUS_ONE) + uvw.r) * INV_LUT_SIZE;
 
-        float u_base = uvw.r * INV_LUT_SIZE;
-        float u0 = slice0 * INV_LUT_SIZE + u_base;
-        float u1 = min(slice0 + 1.0, LUT_SIZE_MINUS_ONE) * INV_LUT_SIZE + u_base;
-
-        float v_atlas = (uvw.g + float(presetIndex)) * INV_LUT_COUNT;
-
-        float3 col0 = tex2D(s, float2(u0, v_atlas)).rgb;
-        float3 col1 = tex2D(s, float2(u1, v_atlas)).rgb;
+        const float v_atlas = (uvw.g + float(presetIndex)) * INV_LUT_COUNT;
+        
+        const float3 col0 = tex2D(s, float2(u0, v_atlas)).rgb;
+        const float3 col1 = tex2D(s, float2(u1, v_atlas)).rgb;
 
         return lerp(col0, col1, sliceFrac);
     }
 
-    float3 PS_Main(float4 vpos : SV_Position, float2 texcoord : TexCoord) : SV_Target
+    float3 PS_FHD(VSOUT i) : SV_Target
     {
-        const float3 color = tex2D(ReShade::BackBuffer, texcoord).rgb;
+        const float3 color = tex2D(Color, i.texcoord).rgb;
         const float3 lut_output = ApplyLUT(SamplerLUT, color, Preset);
         const float3 final_color = lerp(color, lut_output, Strength);
-        return ApplyDither(final_color, texcoord * ReShade::ScreenSize);
+        
+        return ApplyDither(final_color, i.magicDot);
     }
 
     technique uFakeHDR
     {
         pass
         {
-            VertexShader = PostProcessVS;
-            PixelShader = PS_Main;
+            VertexShader = VS_FHD;
+            PixelShader = PS_FHD;
         }
     }
 }
