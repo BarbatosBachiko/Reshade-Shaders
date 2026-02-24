@@ -446,7 +446,7 @@ namespace Barbatos_Flow_Lite
         return tex2D(sFinalFlow, uv).xy;
     }
 
-    technique BarbatosFlow
+    technique BaBA_Flow_Lite
     {
         pass
         {
