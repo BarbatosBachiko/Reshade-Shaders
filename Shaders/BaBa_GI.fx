@@ -1,7 +1,7 @@
 /*----------------------------------------------|
 | ::              Barbatos GI                :: |
 |-----------------------------------------------|
-| Version: 1.0                                  |
+| Version: 1.1                                  |
 | Author: Barbatos                              |
 | License: MIT                                  |
 '----------------------------------------------*/
@@ -1006,6 +1006,7 @@ namespace Barbatos_GI_100
                 float3 rand = toroidalJitter(sequence3D(perFrameSeedBase), blueNoiseSeed);
                 float3 jitter = (rand - 0.5) * Shadow_Softness;
                 float3 shadowRayDir = normalize(sunDir + jitter);
+            
                 if (dot(normal, shadowRayDir) > 0.0)
                 {
                     float2 sUV;
@@ -1015,12 +1016,11 @@ namespace Barbatos_GI_100
                     bool hit = TraceRay(rayOrigin, shadowRayDir, input.pScale, RaySteps, rand.z, sUV, sPos, sDist);
                     if (hit)
                     {
-                        finalVisibility *= (1.0 - SSS_Intensity);
+                        float2 edgeFade = smoothstep(0.0, 0.05, sUV) * (1.0 - smoothstep(0.95, 1.0, sUV));
+                        float screenFade = edgeFade.x * edgeFade.y;
+                    
+                        finalVisibility *= lerp(1.0, (1.0 - SSS_Intensity), screenFade);
                     }
-                }
-                else
-                {
-                    finalVisibility *= (1.0 - (SSS_Intensity * 0.5));
                 }
             }
         }
@@ -1149,7 +1149,7 @@ namespace Barbatos_GI_100
         int d2 = (number / 10) % 10;
         int d3 = number % 10;
        
-        float spacing = 0.4; 
+        float spacing = 0.4;
         
         // Digit 1
         float2 digitUV = localUV;
@@ -1406,6 +1406,10 @@ namespace Barbatos_GI_100
     }
     
     technique Barbatos_GI
+    <
+    ui_label = "Barbatos: GI";
+    ui_tooltip = "GI, AO and Shadows";
+    >
     {
         pass CopyColorGenMips
         {
