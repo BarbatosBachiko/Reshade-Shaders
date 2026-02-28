@@ -92,7 +92,7 @@ uniform float VERTICAL_FOV <
     ui_type = "drag";
     ui_min = 15.0;
     ui_max = 120.0; ui_step = 0.1;
-> = 70.0;
+> = 60.0;
 
 uniform bool EnableSmoothing <
     ui_category = "Reflections";
@@ -1215,9 +1215,9 @@ namespace Barbatos_SSR110
         // Virtual Resolution
         float2 scaled_uv = input.uv / RenderResolution;
         
-        // ==========================================
-        // TAA Upscaling Jitter
-        // ==========================================
+        //----------------------------|
+        // :: TAA Upscaling Jitter :: |
+        //----------------------------|
         if (EnableTAAUpscaling)
         {
             // 8-Phase Halton Sequence
