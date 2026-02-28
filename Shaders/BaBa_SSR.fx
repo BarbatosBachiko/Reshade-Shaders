@@ -596,7 +596,7 @@ namespace Barbatos_SSR110
         return pow(num / den, m2);
     }
 
-	#define SDR_Inverse_Power 0.01
+	#define SDR_Inverse_Power 0.05
 
 	float3 sRGB2Linear(float3 x)
     {
