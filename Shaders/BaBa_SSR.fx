@@ -1374,13 +1374,16 @@ namespace Barbatos_SSR110
         outBlended = ComputeTAA(input, sHistory0);
     }
 
-    void PS_Output(VS_OUTPUT input, out float4 outColor : SV_Target)
+	void PS_Output(VS_OUTPUT input, out float4 outColor : SV_Target)
     {
         // Debug Views
         if (ViewMode != 0)
         {
             if (ViewMode == 1)
-                outColor = float4(GetActiveHistory(input.uv).rgb, 1.0);
+            {
+                float3 debug_reflection = GetActiveHistory(input.uv).rgb;
+                outColor = float4(Linear2Output(debug_reflection), 1.0);
+            }
             else if (ViewMode == 2)
                 outColor = float4(SampleGBuffer(input.uv).rgb * 0.5 + 0.5, 1.0);
             else if (ViewMode == 3)
