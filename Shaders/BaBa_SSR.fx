@@ -458,10 +458,10 @@ namespace Barbatos_SSR110
         MipFilter = LINEAR;
     };
     
-    texture TexBlueNoise < source = "SS_BN.png"; >
+    texture TexBlueNoise < source = "SS_BN3.png"; >
     {
-        Width = 256;
-        Height = 256;
+        Width = 1024;
+        Height = 1024;
         Format = RGBA8;
     };
     sampler sTexBlueNoise
@@ -674,7 +674,7 @@ namespace Barbatos_SSR110
 
     float GetSpatialTemporalNoise(float2 pos)
     {
-        float2 bn_uv = pos / 256.0;
+        float2 bn_uv = pos / 1024.0;
         float frame = fmod((float)FRAME_COUNT, 64.0);
         bn_uv += float2(0.61803398875, 0.73205080757) * frame;
         return tex2Dlod(sTexBlueNoise, float4(bn_uv, 0, 0)).r;
@@ -940,7 +940,7 @@ namespace Barbatos_SSR110
 
         float frame = fmod((float)FRAME_COUNT, 64.0);
         float2 golden2D = float2(0.61803398875, 0.73205080757) * frame;
-        float2 bn_uv = (pixel_uv * screen_size) / 256.0 + golden2D;
+        float2 bn_uv = (pixel_uv * screen_size) / 1024.0 + golden2D;
         float2 rand_noise = tex2Dlod(sTexBlueNoise, float4(bn_uv, 0, 0)).rg;
         rand_noise = frac(rand_noise + golden2D);
 
@@ -1111,7 +1111,7 @@ namespace Barbatos_SSR110
         float history_depth = GetDepth(reprojected_view_uv);
         if (abs(history_depth - depth) > 0.05) 
             return current_reflection;
-
+            
         // Tone Compression
         float3 current_compressed = TAA_Compress(current_reflection.rgb);
         float3 history_compressed = TAA_Compress(history_reflection.rgb);
@@ -1120,12 +1120,13 @@ namespace Barbatos_SSR110
         float vel_mag = length(velocity * float2(BUFFER_WIDTH, BUFFER_HEIGHT));
         float motion_sensitivity = EnableAntiSmear ? 3.0 : 0.5;
         float static_factor = saturate(1.0 - vel_mag * motion_sensitivity);
-
+        
         // Neighborhood Clamping
         float4 color_min, color_max;
         ComputeNeighborhoodMinMax(sReflection, lowres_uv, color_min, color_max);
         
-        float relax_amount = 0.15 * static_factor;
+        // Increased from 0.15 to 0.25
+        float relax_amount = 0.25 * static_factor;
         color_min -= relax_amount;
         color_max += relax_amount;
         
@@ -1137,7 +1138,9 @@ namespace Barbatos_SSR110
         float luma_diff = max(diff.r, max(diff.g, diff.b));
 
         float min_feedback = EnableAntiSmear ? 0.30 : 0.85;
-        float dynamic_feedback = lerp(0.97, min_feedback, saturate(luma_diff * 30.0));
+        
+        // Reduced from 30 to 15 to prevent larger noise from breaking TAA
+        float dynamic_feedback = lerp(0.98, min_feedback, saturate(luma_diff * 15.0));
         
         float final_static_factor = EnableAntiSmear ? static_factor : (static_factor * static_factor);
         float final_feedback = lerp(dynamic_feedback, 0.99, final_static_factor);
@@ -1147,7 +1150,9 @@ namespace Barbatos_SSR110
         float boosted_conf = saturate(flowConfidence + log2(2.0 - flowConfidence) * 0.3);
         
         final_feedback *= boosted_conf;
-        final_feedback = clamp(final_feedback, 0.0, 0.93);
+        
+        // Increased upper feedback limit
+        final_feedback = clamp(final_feedback, 0.0, 0.95);
         
         // Final Blend
         float3 result_compressed = lerp(current_compressed, clipped_history_rgb, final_feedback);
@@ -1294,7 +1299,7 @@ namespace Barbatos_SSR110
             return;
         }
         
-        float2 bn_uv = input.vpos.xy / (RenderResolution * 256.0);
+        float2 bn_uv = input.vpos.xy / (RenderResolution * 1024.0);
         float frame = fmod((float)FRAME_COUNT, 64.0);
         float2 golden2D = float2(0.61803398875, 0.73205080757) * frame;
         bn_uv += golden2D;
