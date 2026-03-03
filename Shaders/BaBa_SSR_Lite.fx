@@ -427,8 +427,14 @@ namespace Barbatos_SSR_Lite34
                     outColor = float4(GetLod(sUpscaled, input.uv).rgb, 1.0);
                     return;
                 case 2:
-                    outColor = float4(CalculateNormal(input.uv, pScale) * 0.5 + 0.5, 1.0);
-                    return;
+                    {
+                        float3 debugNormals = CalculateNormal(input.uv, pScale);
+                        debugNormals.x = -debugNormals.x;
+                        debugNormals.z = -debugNormals.z;
+                    
+                        outColor = float4(debugNormals * 0.5 + 0.5, 1.0);
+                        return;
+                    }
                 case 3:
                     outColor = float4(GetDepth(input.uv).xxx, 1.0);
                     return;
@@ -509,4 +515,5 @@ namespace Barbatos_SSR_Lite34
         }
     }
 }
+
 
