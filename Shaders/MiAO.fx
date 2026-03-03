@@ -734,7 +734,13 @@ namespace MiAO24
         }
         else if (DebugView == 2) // Normals
         {
-            return GetLod(sNORMALS, uv);
+            float3 debugNormals = GetLod(sNORMALS, uv).rgb;
+            
+            debugNormals = debugNormals * 2.0 - 1.0;
+            debugNormals.x = -debugNormals.x;
+            debugNormals.z = -debugNormals.z;
+            
+            return float4(debugNormals * 0.5 + 0.5, 1.0);
         }
     
         float ao = GetLod(sFINAL_AO, uv).r;
@@ -779,3 +785,4 @@ namespace MiAO24
         }
     }
 }
+
