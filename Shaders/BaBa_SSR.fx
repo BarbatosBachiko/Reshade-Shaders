@@ -1,7 +1,7 @@
 /*----------------------------------------------|
 | :: Barbatos SSR (Screen-Space Reflections) :: |
 |-----------------------------------------------|
-| Version: 1.2.1                                |
+| Version: 1.2.2                                |
 | Author: Barbatos                              |
 | License: MIT                                  |
 '----------------------------------------------*/
@@ -114,6 +114,7 @@ uniform float SurfaceGlossiness <
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
 > = 0.30;
 
+#if !ENABLE_VNDF
 uniform float Anisotropy <
     ui_category = "Material";
     ui_label = "Anisotropic Stretching";
@@ -122,6 +123,7 @@ uniform float Anisotropy <
     ui_min = 0.0;
     ui_max = 0.4; ui_step = 0.01;
 > = 0.0;
+#endif
 
 uniform float Metallic <
     ui_category = "Material";
@@ -168,6 +170,11 @@ uniform bool EnableSmoothing <
     ui_category = "Denoiser";
     ui_label = "Enable Temporal Accumulation";
     ui_tooltip = "Uses data from previous frames to heavily denoise the reflections. Highly recommended to keep ON.";
+> = true;
+
+uniform bool EnableSpatioTemporal <
+    ui_category = "Denoiser";
+    ui_label = "Enable SpatioTemporal Denoiser";
 > = true;
 
 uniform bool EnableTAAUpscaling <
@@ -1159,7 +1166,7 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         return closest_velocity;
     }
 
-    float4 ComputeSpatioTemporal(VS_OUTPUT input, sampler sHistoryParams)
+    float4 ComputeDenoise(VS_OUTPUT input, sampler sHistoryParams)
     {
         float2 viewUV = input.uv;
         float depth = GetDepth(viewUV);
@@ -1177,30 +1184,34 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         float3 c_norm = c_gbuffer.rgb;
         float c_depth = c_gbuffer.a;
 
-        float estimatedRoughness = GetLod(sTexColorCopy, viewUV).a;
-        float netRoughness = saturate(SurfaceGlossiness + (estimatedRoughness * RoughnessDetection));
-        
-        float targetLOD = netRoughness * 5.0;
-        
-        float4 spatial_reflection = tex2Dlod(sReflection, float4(lowres_uv, 0, targetLOD));
-        float4 lod_gbuffer = tex2Dlod(sNormal, float4(viewUV, 0, targetLOD));
-        
-        // Normal Sharpness
         float2 px = ReShade::PixelSize;
-        float3 nR = SampleGBuffer(viewUV + float2(px.x, 0.0)).rgb;
-        float3 nL = SampleGBuffer(viewUV + float2(-px.x, 0.0)).rgb;
-        float3 nD = SampleGBuffer(viewUV + float2(0.0, px.y)).rgb;
-        float3 nU = SampleGBuffer(viewUV + float2(0.0, -px.y)).rgb;
-        
-        float normal_sharpness = length(c_norm - nR) + length(c_norm - nL) + length(c_norm - nD) + length(c_norm - nU);
-        float edge_mask = saturate(1.0 - (normal_sharpness * 2.5));
-        float depth_mask = exp(-abs(c_depth - lod_gbuffer.a) * (10.0 / (c_depth + 0.1)));
-        spatial_reflection = lerp(current_reflection, spatial_reflection, edge_mask * depth_mask);
 
-        float3 current_compressed = TAA_Compress(spatial_reflection.rgb);
+        if (EnableSpatioTemporal)
+        {
+            float estimatedRoughness = GetLod(sTexColorCopy, viewUV).a;
+            float netRoughness = saturate(SurfaceGlossiness + (estimatedRoughness * RoughnessDetection));
+        
+            float targetLOD = netRoughness * 5.0;
+            
+            float4 lod_reflection = tex2Dlod(sReflection, float4(lowres_uv, 0, targetLOD));
+            float4 lod_gbuffer = tex2Dlod(sNormal, float4(viewUV, 0, targetLOD));
+            
+            // Normal Sharpness
+            float3 nR = SampleGBuffer(viewUV + float2(px.x, 0.0)).rgb;
+            float3 nL = SampleGBuffer(viewUV + float2(-px.x, 0.0)).rgb;
+            float3 nD = SampleGBuffer(viewUV + float2(0.0, px.y)).rgb;
+            float3 nU = SampleGBuffer(viewUV + float2(0.0, -px.y)).rgb;
+            
+            float normal_sharpness = length(c_norm - nR) + length(c_norm - nL) + length(c_norm - nD) + length(c_norm - nU);
+            float edge_mask = saturate(1.0 - (normal_sharpness * 2.5));
+            float depth_mask = exp(-abs(c_depth - lod_gbuffer.a) * (10.0 / (c_depth + 0.1)));
+            current_reflection = lerp(current_reflection, lod_reflection, edge_mask * depth_mask);
+        }
+        
+        float3 current_compressed = TAA_Compress(current_reflection.rgb);
 
         // Neigh MIN/MAX
-        float4 color_min = float4(current_compressed, spatial_reflection.a);
+        float4 color_min = float4(current_compressed, current_reflection.a);
         float4 color_max = color_min;
 
         float4 r1 = GetLod(sReflection, lowres_uv + float2( px.x, 0.0));
@@ -1221,7 +1232,7 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         float2 reprojected_view_uv = viewUV + velocity;
         
         if (any(saturate(reprojected_view_uv) != reprojected_view_uv) || FRAME_COUNT <= 1)
-            return spatial_reflection;
+            return current_reflection;
 
         float4 history_reflection = GetLod(sHistoryParams, reprojected_view_uv);
         float history_depth = GetDepth(reprojected_view_uv);
@@ -1229,7 +1240,7 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         
         float depth_tolerance = EnableAntiSmear ? 0.05 : (0.05 + vel_mag * 0.015);
         if (abs(history_depth - depth) > depth_tolerance) 
-            return spatial_reflection;
+            return current_reflection;
 
         float3 history_compressed = TAA_Compress(history_reflection.rgb);
 
@@ -1261,7 +1272,7 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         final_feedback = clamp(final_feedback, 0.0, max_feedback);
 
         float3 result_compressed = lerp(current_compressed, clipped_history_rgb, final_feedback);
-        float result_alpha = lerp(spatial_reflection.a, clipped_history_a, final_feedback);
+        float result_alpha = lerp(current_reflection.a, clipped_history_a, final_feedback);
 
         return float4(TAA_Resolve(result_compressed), result_alpha);
     }
@@ -1497,14 +1508,14 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
     {
         if (fmod((float) FRAME_COUNT, 2.0) > 0.5)
             discard;
-        outBlended = ComputeSpatioTemporal(input, sHistory1);
+        outBlended = ComputeDenoise(input, sHistory1);
     }
 
     void PS_Accumulate1(VS_OUTPUT input, out float4 outBlended : SV_Target)
     {
         if (fmod((float) FRAME_COUNT, 2.0) < 0.5)
             discard;
-        outBlended = ComputeSpatioTemporal(input, sHistory0);
+        outBlended = ComputeDenoise(input, sHistory0);
     }
 
     void PS_Output(VS_OUTPUT input, out float4 outColor : SV_Target)
