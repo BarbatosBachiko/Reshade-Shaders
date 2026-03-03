@@ -989,8 +989,12 @@ namespace Barbatos_XeGTAO13
         }
         else if (ViewMode == 2) // Normals
         {
-            float3 n = DecodeNormal(GetLod(sNormalEdges, input.uv).xy);
-            return float4(n.rgb * 0.5 + 0.5, 1.0);
+            float3 debugNormals = DecodeNormal(GetLod(sNormalEdges, input.uv).xy);
+            {
+                debugNormals.x = -debugNormals.x;
+                debugNormals.z = -debugNormals.z;
+            }
+            return float4(debugNormals * 0.5 + 0.5, 1.0);
         }
         else if (ViewMode == 3) // Depth
         {
