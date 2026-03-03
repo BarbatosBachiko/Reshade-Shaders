@@ -1,7 +1,7 @@
 /*----------------------------------------------|
 | :: Barbatos SSR (Screen-Space Reflections) :: |
 |-----------------------------------------------|
-| Version: 1.2                                  |
+| Version: 1.2.1                                |
 | Author: Barbatos                              |
 | License: MIT                                  |
 '----------------------------------------------*/
@@ -451,7 +451,7 @@ float GetFlowConf(float2 texcoord)
 }
 #endif
 
-namespace Barbatos_SSR110
+namespace Barbatos_SSR121
 {
     texture Normal
     {
@@ -1255,9 +1255,9 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         float final_feedback = lerp(dynamic_feedback, max_feedback, final_static_factor);
         
         float flowConfidence = GetFlowConf(viewUV);
-        float boosted_conf = saturate(flowConfidence + log2(2.0 - flowConfidence) * 0.3);
+        float conf_multiplier = EnableAntiSmear ? pow(abs(flowConfidence), 2.0) : lerp(0.3, 1.0, flowConfidence);
         
-        final_feedback *= EnableAntiSmear ? boosted_conf : lerp(0.9, 1.0, boosted_conf);
+        final_feedback *= conf_multiplier;
         final_feedback = clamp(final_feedback, 0.0, max_feedback);
 
         float3 result_compressed = lerp(current_compressed, clipped_history_rgb, final_feedback);
