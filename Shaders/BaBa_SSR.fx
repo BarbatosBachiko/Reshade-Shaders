@@ -1173,24 +1173,24 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         if (!EnableSmoothing)
             return current_reflection;
 
-        float4 c_gbuffer = SampleGBuffer(lowres_uv);
+        float4 c_gbuffer = SampleGBuffer(viewUV);
         float3 c_norm = c_gbuffer.rgb;
         float c_depth = c_gbuffer.a;
 
-        float estimatedRoughness = GetLod(sTexColorCopy, lowres_uv).a;
+        float estimatedRoughness = GetLod(sTexColorCopy, viewUV).a;
         float netRoughness = saturate(SurfaceGlossiness + (estimatedRoughness * RoughnessDetection));
         
         float targetLOD = netRoughness * 5.0;
         
         float4 spatial_reflection = tex2Dlod(sReflection, float4(lowres_uv, 0, targetLOD));
-        float4 lod_gbuffer = tex2Dlod(sNormal, float4(lowres_uv, 0, targetLOD));
+        float4 lod_gbuffer = tex2Dlod(sNormal, float4(viewUV, 0, targetLOD));
         
         // Normal Sharpness
-        float2 px = ReShade::PixelSize / RenderResolution;
-        float3 nR = SampleGBuffer(lowres_uv + float2(px.x, 0.0)).rgb;
-        float3 nL = SampleGBuffer(lowres_uv + float2(-px.x, 0.0)).rgb;
-        float3 nD = SampleGBuffer(lowres_uv + float2(0.0, px.y)).rgb;
-        float3 nU = SampleGBuffer(lowres_uv + float2(0.0, -px.y)).rgb;
+        float2 px = ReShade::PixelSize;
+        float3 nR = SampleGBuffer(viewUV + float2(px.x, 0.0)).rgb;
+        float3 nL = SampleGBuffer(viewUV + float2(-px.x, 0.0)).rgb;
+        float3 nD = SampleGBuffer(viewUV + float2(0.0, px.y)).rgb;
+        float3 nU = SampleGBuffer(viewUV + float2(0.0, -px.y)).rgb;
         
         float normal_sharpness = length(c_norm - nR) + length(c_norm - nL) + length(c_norm - nD) + length(c_norm - nU);
         float edge_mask = saturate(1.0 - (normal_sharpness * 2.5));
