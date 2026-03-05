@@ -1,13 +1,12 @@
 /*-------------------------------------------------|
 | ::                 VividTone                  :: |
 '--------------------------------------------------|
-| Version 1.2                                      |
+| Version 1.2.1                                    |
 | Author: Barbatos                                 |
 | License: MIT                                     |
 | Description: Transforms ordinary game visuals    | 
 | into vibrant, high-contrast scenes               |
 '-------------------------------------------------*/
-
 #include "ReShade.fxh"
 
 #define GetColor(coord) tex2Dlod(ReShade::BackBuffer, float4(coord, 0, 0))
@@ -42,7 +41,7 @@ uniform float ExposureStrength <
     ui_min = 0.0;
     ui_max = 1.0;
     ui_step = 0.01;
-> = 0.1; 
+> = 0.1;
 
 uniform float ShadowLiftStrength <
     ui_category = "Scene Adaptation";
@@ -78,7 +77,9 @@ uniform float AdaptationRate <
     ui_min = 0.0;
     ui_max = 1.0;
     ui_step = 0.01;
-> = 0.05;
+> = 0.25;
+
+uniform float FrameTime < source = "frametime"; >;
 
 /*---------------.
 | :: Textures :: |
@@ -122,7 +123,7 @@ namespace VividTone
     static const float SceneDarkThreshold = 0.15;
     static const float MinLuminance = 0.01;
     static const float MaxLuminance = 2.0;
-    static const float TargetBrightness = 0.5; 
+    static const float TargetBrightness = 0.5;
     static const float AdaptiveSaturation = 1.0;
     static const float AdaptiveStrength = 0.5;
     static const float BrightSceneVibrancy = 0.0;
@@ -180,18 +181,14 @@ namespace VividTone
         float darkSceneFactor = 1.0 - brightSceneFactor;
         color *= exposure;
         
-        if (brightSceneFactor > 0.5)
-        {
-            color = EnhanceVibrancy(color, BrightSceneVibrancy * brightSceneFactor);
-            float midGray = 0.5;
-            float realContrast = lerp(0.0, MaxContrast, contrastNorm);
-            color = lerp(color, pow(color / midGray, 1.0 + realContrast * brightSceneFactor) * midGray, 0.5);
-        }
-        else
-        {
-            color = LiftShadows(color, shadowLiftNorm * darkSceneFactor);
-        }
+        float3 darkColor = LiftShadows(color, shadowLiftNorm * darkSceneFactor);
+        float3 brightColor = EnhanceVibrancy(color, BrightSceneVibrancy * brightSceneFactor);
+        float midGray = 0.5;
+        float realContrast = lerp(0.0, MaxContrast, contrastNorm);
+        brightColor = lerp(brightColor, pow(brightColor / midGray, 1.0 + realContrast * brightSceneFactor) * midGray, 0.5);
+        color = lerp(darkColor, brightColor, brightSceneFactor);
     
+        // Luminance mapping
         float adaptedLum = clamp(sceneLum, MinLuminance, MaxLuminance);
         float key = TargetBrightness / max(adaptedLum, 0.001);
         key = lerp(key * 1.5, key * 0.8, brightSceneFactor);
@@ -201,8 +198,10 @@ namespace VividTone
         float scaledLum = lum * key;
         float whitePoint = lerp(MaxLuminance * 0.8, MaxLuminance * 1.2, brightSceneFactor);
         float toneMappedLum = scaledLum / (1.0 + scaledLum / whitePoint);
+        
         float3 toneMappedColor = color * (toneMappedLum / max(lum, 0.0001));
         float adaptiveSat = lerp(AdaptiveSaturation * 1.2, AdaptiveSaturation * 0.9, brightSceneFactor);
+        
         float3 lumColor = float3(toneMappedLum, toneMappedLum, toneMappedLum);
         toneMappedColor = lerp(lumColor, toneMappedColor, adaptiveSat);
     
@@ -212,7 +211,7 @@ namespace VividTone
     float3 MultipleExposuresHDR(float3 color, float sceneLum, float brightSceneFactor)
     {
         float underExp = lerp(2.5, 1.5, brightSceneFactor);
-        float overExp = lerp(0.6, 0.8, brightSceneFactor); 
+        float overExp = lerp(0.6, 0.8, brightSceneFactor);
     
         float3 underexposed = pow(color, underExp);
         float3 overexposed = pow(color, overExp);
@@ -241,12 +240,12 @@ namespace VividTone
         else
         {
             float currentLum = CalculateSceneLuminance();
+            float dt = clamp(FrameTime * 0.001, 0.0, 0.1);
             
-            float adaptSpeed = lerp(0.01, 1.0, AdaptationRate);
-            if (abs(currentLum - prevLum) > 0.1)
-                adaptSpeed *= 2.0;
+            float adaptSpeed = lerp(0.1, 5.0, AdaptationRate);
+            float smoothFactor = 1.0 - exp(-dt * adaptSpeed);
             
-            adaptedLum = lerp(prevLum, currentLum, adaptSpeed);
+            adaptedLum = lerp(prevLum, currentLum, smoothFactor);
         }
     
         return float4(adaptedLum, 0, 0, 1);
@@ -261,17 +260,17 @@ namespace VividTone
     {
         float3 originalColor = GetColor(uv).rgb;
         
-        //Map HDR Power
+        // Map HDR Power
         float realHDR = lerp(MinHDR, MaxHDR, HDRStrength);
         float3 color = pow(abs(originalColor), realHDR);
         float sceneLum = tex2Dfetch(sLUM, int2(0, 0)).r;
         float brightSceneFactor = smoothstep(SceneDarkThreshold, SceneBrightThreshold, sceneLum);
-
-        //Map Exposure 
+        
+        // Map Exposure 
         float realExposureVal = lerp(MinExp, MaxExp, ExposureStrength);
         float exposure = pow(2.0, realExposureVal);
         
-        //ToneMapping
+        // ToneMapping
         color = AdaptiveToneMapping(color, sceneLum, exposure, ContrastStrength, ShadowLiftStrength, brightSceneFactor);
         color = MultipleExposuresHDR(color, sceneLum, brightSceneFactor);
         
