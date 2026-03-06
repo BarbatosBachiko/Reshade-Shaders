@@ -9,14 +9,7 @@
 
 #include "ReShade.fxh"
 #include "ReShadeUI.fxh"
-
-#ifndef USE_MARTY_LAUNCHPAD_MOTION
-#define USE_MARTY_LAUNCHPAD_MOTION 0
-#endif
-
-#ifndef USE_VORT_MOTION
-#define USE_VORT_MOTION 0
-#endif
+#include "BaBa_MV.fxh"
 
 static const float2 LOD_MASK = float2(0.0, 1.0);
 static const float2 ZERO_LOD = float2(0.0, 0.0);
@@ -165,7 +158,6 @@ sampler SamplerHistory
     Texture = TexHistory;
 };
 
-// Added for Temporal Confidence Check (R16F for Depth Precision)
 texture TexPrevInput
 {
     Width = BUFFER_WIDTH;
@@ -177,32 +169,6 @@ sampler SamplerPrevInput
     Texture = TexPrevInput;
 };
 
-#if USE_MARTY_LAUNCHPAD_MOTION
-    namespace Deferred {
-        texture MotionVectorsTex { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
-        sampler sMotionVectorsTex { Texture = MotionVectorsTex; };
-    }
-#elif USE_VORT_MOTION
-    texture2D MotVectTexVort { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
-    sampler2D sMotVectTexVort { Texture = MotVectTexVort; MagFilter=POINT; MinFilter=POINT; MipFilter=POINT; AddressU=Clamp; AddressV=Clamp; };
-#else
-texture texMotionVectors
-{
-    Width = BUFFER_WIDTH;
-    Height = BUFFER_HEIGHT;
-    Format = RG16F;
-};
-sampler sTexMotionVectorsSampler
-{
-    Texture = texMotionVectors;
-    MagFilter = POINT;
-    MinFilter = POINT;
-    MipFilter = POINT;
-    AddressU = Clamp;
-    AddressV = Clamp;
-};
-#endif
-
 /*----------------.
 | :: Functions :: |
 '----------------*/
@@ -210,17 +176,6 @@ sampler sTexMotionVectorsSampler
 float GetGaussianWeight(float x, float sigma)
 {
     return 0.39894228 * exp(-0.5 * x * x / (sigma * sigma)) / sigma;
-}
-
-float2 GetMotion(float2 texcoord)
-{
-#if USE_MARTY_LAUNCHPAD_MOTION
-    return GetLod(Deferred::sMotionVectorsTex, texcoord).rg;
-#elif USE_VORT_MOTION
-    return GetLod(sMotVectTexVort, texcoord).rg;
-#else
-    return GetLod(sTexMotionVectorsSampler, texcoord).rg;
-#endif
 }
 
 float GetInput(float2 uv)
@@ -248,7 +203,7 @@ float Confidence(float2 uv, float2 velocity)
     if (flow_magnitude <= subpixel_threshold)
         return 1.0;
 
-    float2 destination_velocity = GetMotion(prev_uv);
+    float2 destination_velocity = SampleMotionVectors(prev_uv);
     float2 diff = velocity - destination_velocity;
     float error = length(diff);
     float normalized_error = error / (length(velocity) + 1e-6);
@@ -321,7 +276,7 @@ void PS_TemporalFilter(float4 pos : SV_Position, float2 uv : TEXCOORD, out float
 {
     float currentDeltaD = tex2D(SamplerDeltaD, uv).r;
     
-    float2 motion = GetMotion(uv);
+    float2 motion = SampleMotionVectors(uv);
     float2 prevUV = uv + motion;
 
     float conf = Confidence(uv, motion);
@@ -364,13 +319,13 @@ void PS_Composite(float4 pos : SV_Position, float2 uv : TEXCOORD, out float3 out
     }
     else if (DebugView == 2) // View Motion
     {
-        float2 m = GetMotion(uv) * 100.0;
+        float2 m = SampleMotionVectors(uv) * 100.0;
         outColor = float3(abs(m.x), abs(m.y), 0.0);
         return;
     }
     else if (DebugView == 3) // View Confidence Map
     {
-        float2 motion = GetMotion(uv);
+        float2 motion = SampleMotionVectors(uv);
         float conf = Confidence(uv, motion);
         outColor = float3(conf, conf, conf);
         return;

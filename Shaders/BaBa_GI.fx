@@ -6,6 +6,7 @@
 | License: MIT                                  |
 '----------------------------------------------*/
 #include "ReShade.fxh"
+#include "BaBa_MV.fxh"
 
 //----------|
 // :: UI :: |
@@ -271,85 +272,6 @@ uniform int FRAME_COUNT < source = "framecount"; >;
 uniform float TIMER < source = "timer"; >;
 #ifndef BUFFER_COLOR_SPACE
 #define BUFFER_COLOR_SPACE 0
-#endif
-
-#ifndef USE_MARTY_LAUNCHPAD_MOTION
-#define USE_MARTY_LAUNCHPAD_MOTION 0
-#endif
-
-#ifndef USE_VORT_MOTION
-#define USE_VORT_MOTION 0
-#endif
-
-//----------------|
-// :: Textures :: |
-//----------------|
-// Motion Vectors
-#if USE_MARTY_LAUNCHPAD_MOTION
-    namespace Deferred {
-        texture MotionVectorsTex { Width = BUFFER_WIDTH;
-            Height = BUFFER_HEIGHT; Format = RG16F; };
-        sampler sMotionVectorsTex { Texture = MotionVectorsTex; };
-    }
-    float2 GetMV(float2 texcoord) { return GetLod(Deferred::sMotionVectorsTex, texcoord).rg;
-    }
-    
-    // Dummy confidence for launchpad 
-    float GetFlowConf(float2 texcoord) { return 0.5;
-    } 
-
-#elif USE_VORT_MOTION
-    texture2D MotVectTexVort { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
-    sampler2D sMotVectTexVort { Texture = MotVectTexVort; MagFilter=POINT;MinFilter=POINT;MipFilter=POINT;AddressU=Clamp;AddressV=Clamp; };
-    float2 GetMV(float2 texcoord) { return GetLod(sMotVectTexVort, texcoord).rg;
-    }
-    
-    // Dummy confidence for vort
-    float GetFlowConf(float2 texcoord) { return 0.5;
-    }
-
-#else
-
-texture texMotionVectors
-{
-    Width = BUFFER_WIDTH;
-    Height = BUFFER_HEIGHT;
-    Format = RG16F;
-};
-sampler sTexMotionVectorsSampler
-{
-    Texture = texMotionVectors;
-    MagFilter = POINT;
-    MinFilter = POINT;
-    MipFilter = POINT;
-    AddressU = Clamp;
-    AddressV = Clamp;
-};
-
-texture tMotionConfidence
-{
-    Width = BUFFER_WIDTH;
-    Height = BUFFER_HEIGHT;
-    Format = R16F;
-};
-sampler sMotionConfidence
-{
-    Texture = tMotionConfidence;
-    MagFilter = POINT;
-    MinFilter = POINT;
-    AddressU = Clamp;
-    AddressV = Clamp;
-};
-
-float2 GetMV(float2 texcoord)
-{
-    return GetLod(sTexMotionVectorsSampler, texcoord).rg;
-}
-
-float GetFlowConf(float2 texcoord)
-{
-    return GetLod(sMotionConfidence, texcoord).r;
-}
 #endif
 
 namespace Barbatos_GI_100
@@ -780,26 +702,6 @@ namespace Barbatos_GI_100
         return (ma_unit > 1.0) ? (p_clip + v_clip / ma_unit) : history_sample;
     }
 
-    float2 GetVelocity(float2 texcoord)
-    {
-        float2 pixel_size = ReShade::PixelSize;
-        float closest_depth = 1.0;
-        float2 closest_velocity = 0.0;
-        
-        [unroll]
-        for (int i = 0; i < 5; i++)
-        {
-            float2 s_coord = texcoord + TAA_Offsets[i] * pixel_size;
-            float s_depth = GetDepth(s_coord);
-            if (s_depth < closest_depth)
-            {
-                closest_depth = s_depth;
-                closest_velocity = GetMV(s_coord);
-            }
-        }
-        return closest_velocity;
-    }
-
     void ComputeNeighborhoodMinMax(sampler sInput, float2 texcoord, out float4 color_min, out float4 color_max)
     {
         float2 pSize = ReShade::PixelSize;
@@ -838,7 +740,7 @@ namespace Barbatos_GI_100
             return float4(0.0, 0.0, 0.0, 1.0);
         float4 current_gi = GetLod(sAccum, input.uv);
         
-        float2 velocity = GetVelocity(viewUV);
+        float2 velocity = MV_GetVelocity(viewUV);
         float2 reprojected_view_uv = viewUV + velocity;
         float2 reprojected_buffer_uv = reprojected_view_uv * RenderScale;
 
@@ -1353,7 +1255,7 @@ namespace Barbatos_GI_100
                     }
                     else if (ViewMode == 4)
                     {
-                        float2 mv = GetMV(input.uv);
+                        float2 mv = SampleMotionVectors(input.uv);
                         outColor = float4(saturate(float3(mv.x, mv.y, 0.0) * 50.0 + 0.5), 1.0);
                     }
                     else if (ViewMode == 5)

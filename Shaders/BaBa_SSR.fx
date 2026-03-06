@@ -9,6 +9,7 @@
 #include "ReShade.fxh"
 #include "ReShadeUI.fxh"
 #include "Blending.fxh"
+#include "BaBa_MV.fxh"
 
 //----------|
 // :: UI :: |
@@ -345,118 +346,6 @@ uniform int FRAME_COUNT < source = "framecount"; >;
 //----------------|
 // :: Textures :: |
 //----------------|
-
-#ifndef USE_MARTY_LAUNCHPAD_MOTION
-#define USE_MARTY_LAUNCHPAD_MOTION 0
-#endif
-
-#ifndef USE_VORT_MOTION
-#define USE_VORT_MOTION 0
-#endif
-
-#if USE_MARTY_LAUNCHPAD_MOTION
-    namespace Deferred {
-        texture MotionVectorsTex { Width = BUFFER_WIDTH;
-        Height = BUFFER_HEIGHT; Format = RG16F; };
-        sampler sMotionVectorsTex { Texture = MotionVectorsTex; };
-    }
-    float2 GetMV(float2 texcoord) { return GetLod(Deferred::sMotionVectorsTex, texcoord).rg;
-    }
-    float GetFlowConf(float2 texcoord) 
-    { 
-        float2 velocity = GetMV(texcoord);
-        float2 prev_uv = texcoord + velocity;
-
-        if (any(saturate(prev_uv) != prev_uv)) 
-            return 0.0;
-        float2 resolution = float2(BUFFER_WIDTH, BUFFER_HEIGHT);
-        float flow_magnitude = length(velocity * resolution);
-        if (flow_magnitude <= 0.5)
-            return 1.0;
-        float2 destination_velocity = GetMV(prev_uv);
-        float error = length(velocity - destination_velocity);
-        float normalized_error = (error * 1.25) / (length(velocity) + 1e-6);
-        float curr_depth = ReShade::GetLinearizedDepth(texcoord);
-        float dest_depth = ReShade::GetLinearizedDepth(prev_uv);
-        float depth_error = abs(curr_depth - dest_depth);
-        float length_conf = rcp(flow_magnitude * 0.02 + 1.0);        
-        float consistency_conf = rcp(normalized_error + 1.0);        
-        float depth_conf = exp(-depth_error * 100.0);
-        return saturate(consistency_conf * length_conf * depth_conf); 
-    }
-
-#elif USE_VORT_MOTION
-    texture2D MotVectTexVort { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT;
-    Format = RG16F; };
-    sampler2D sMotVectTexVort { Texture = MotVectTexVort; MagFilter=POINT;MinFilter=POINT;MipFilter=POINT;AddressU=Clamp;AddressV=Clamp; };
-    float2 GetMV(float2 texcoord) { return GetLod(sMotVectTexVort, texcoord).rg;
-    }
-    float GetFlowConf(float2 texcoord) 
-    { 
-        float2 velocity = GetMV(texcoord);
-        float2 prev_uv = texcoord + velocity;
-
-        if (any(saturate(prev_uv) != prev_uv)) 
-            return 0.0;
-        float2 resolution = float2(BUFFER_WIDTH, BUFFER_HEIGHT);
-        float flow_magnitude = length(velocity * resolution);
-        if (flow_magnitude <= 0.5)
-            return 1.0;
-        float2 destination_velocity = GetMV(prev_uv);
-        float error = length(velocity - destination_velocity);
-        float normalized_error = (error * 1.25) / (length(velocity) + 1e-6);
-        float curr_depth = ReShade::GetLinearizedDepth(texcoord);
-        float dest_depth = ReShade::GetLinearizedDepth(prev_uv);
-        float depth_error = abs(curr_depth - dest_depth);
-        float length_conf = rcp(flow_magnitude * 0.02 + 1.0);        
-        float consistency_conf = rcp(normalized_error + 1.0);        
-        float depth_conf = exp(-depth_error * 100.0);
-        return saturate(consistency_conf * length_conf * depth_conf); 
-    }
-
-#else
-
-texture2D texMotionVectors
-{
-    Width = BUFFER_WIDTH;
-    Height = BUFFER_HEIGHT;
-    Format = RG16F;
-};
-sampler sTexMotionVectorsSampler
-{
-    Texture = texMotionVectors;
-    MagFilter = POINT;
-    MinFilter = POINT;
-    MipFilter = POINT;
-    AddressU = Clamp;
-    AddressV = Clamp;
-};
-    
-texture2D tMotionConfidence
-{
-    Width = BUFFER_WIDTH;
-    Height = BUFFER_HEIGHT;
-    Format = R16F;
-};
-sampler sMotionConfidence
-{
-    Texture = tMotionConfidence;
-    MagFilter = POINT;
-    MinFilter = POINT;
-    AddressU = Clamp;
-    AddressV = Clamp;
-};
-
-float2 GetMV(float2 texcoord)
-{
-    return GetLod(sTexMotionVectorsSampler, texcoord).rg;
-}
-    
-float GetFlowConf(float2 texcoord)
-{
-    return GetLod(sMotionConfidence, texcoord).r;
-}
-#endif
 
 namespace Barbatos_SSR121
 {
@@ -1145,26 +1034,6 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         float ma_unit = max(a_unit.x, max(a_unit.y, a_unit.z));
         return (ma_unit > 1.0) ? (p_clip + v_clip / ma_unit) : history_sample;
     }
-    
-    float2 GetVelocity(float2 texcoord)
-    {
-        float2 pixel_size = ReShade::PixelSize;
-        float closest_depth = 1.0;
-        float2 closest_velocity = 0.0;
-
-        [unroll]
-        for (int i = 0; i < 5; i++)
-        {
-            float2 s_coord = texcoord + TAA_Offsets[i] * pixel_size;
-            float s_depth = GetDepth(s_coord);
-            if (s_depth < closest_depth)
-            {
-                closest_depth = s_depth;
-                closest_velocity = GetMV(s_coord);
-            }
-        }
-        return closest_velocity;
-    }
 
     float4 ComputeDenoise(VS_OUTPUT input, sampler sHistoryParams)
     {
@@ -1228,7 +1097,7 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         color_max = max(color_max, max(max(c1, c2), max(c3, c4)));
         
         // TA
-        float2 velocity = GetVelocity(viewUV);
+        float2 velocity = MV_GetVelocity(viewUV);
         float2 reprojected_view_uv = viewUV + velocity;
         
         if (any(saturate(reprojected_view_uv) != reprojected_view_uv) || FRAME_COUNT <= 1)
@@ -1265,7 +1134,7 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         float final_static_factor = EnableAntiSmear ? static_factor : lerp(0.8, 1.0, static_factor);
         float final_feedback = lerp(dynamic_feedback, max_feedback, final_static_factor);
         
-        float flowConfidence = GetFlowConf(viewUV);
+        float flowConfidence = MV_GetConfidence(viewUV);
         float conf_multiplier = EnableAntiSmear ? pow(abs(flowConfidence), 2.0) : lerp(0.3, 1.0, flowConfidence);
         
         final_feedback *= conf_multiplier;
@@ -1545,7 +1414,7 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
                 outColor = SampleGBuffer(input.uv).aaaa;
             else if (ViewMode == 4)
             {
-                float2 m = GetMV(input.uv);
+                float2 m = SampleMotionVectors(input.uv);
                 float v_mag = length(m) * 100.0;
                 float a = atan2(m.y, m.x);
                 float3 hsv_color = HSVToRGB(float3((a / (2.0 * PI)) + 0.5, 1.0, 1.0));
@@ -1553,7 +1422,7 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
             }
             else if (ViewMode == 5)
             {
-                float conf = GetFlowConf(input.uv);
+                float conf = MV_GetConfidence(input.uv);
                 outColor = float4(conf.xxx, 1.0);
             }
             return;

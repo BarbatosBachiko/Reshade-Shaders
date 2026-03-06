@@ -11,6 +11,7 @@
 '-------------------------------------------------*/
 
 #include "ReShade.fxh"
+#include "BaBa_MV.fxh"
 
 #ifndef ENABLE_JITTER_FOR_TAA
 #define ENABLE_JITTER_FOR_TAA 1
@@ -21,13 +22,6 @@
 #define DEPTH_THRESHOLD 0.01
 #define MOTION_REJECTION 0.2
 #define VARIANCE_GAMMA 1.0
-
-#ifndef USE_MARTY_LAUNCHPAD_MOTION
-#define USE_MARTY_LAUNCHPAD_MOTION 0
-#endif
-#ifndef USE_VORT_MOTION
-#define USE_VORT_MOTION 0
-#endif
 
 // Utility macros 
 #define GetDepth(coords) (ReShade::GetLinearizedDepth(coords))
@@ -88,42 +82,6 @@ static const float2 JitterLUT[16] =
 /*---------------.
 | :: Textures :: |
 '---------------*/
-
-#if USE_MARTY_LAUNCHPAD_MOTION
-    namespace Deferred {
-        texture MotionVectorsTex { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
-        sampler sMotionVectorsTex { Texture = MotionVectorsTex; };
-    }
-    float2 SampleMotionVectors(float2 texcoord) {
-        return GetLod(Deferred::sMotionVectorsTex, texcoord).rg;
-    }
-#elif USE_VORT_MOTION
-    texture2D MotVectTexVort { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
-    sampler2D sMotVectTexVort { Texture = MotVectTexVort; MagFilter=POINT;MinFilter=POINT;MipFilter=POINT;AddressU=Clamp;AddressV=Clamp; };
-    float2 SampleMotionVectors(float2 texcoord) {
-        return GetLod(sMotVectTexVort, texcoord).rg;
-    }
-#else
-texture texMotionVectors
-{
-    Width = BUFFER_WIDTH;
-    Height = BUFFER_HEIGHT;
-    Format = RG16F;
-};
-sampler sTexMotionVectorsSampler
-{
-    Texture = texMotionVectors;
-    MagFilter = POINT;
-    MinFilter = POINT;
-    MipFilter = POINT;
-    AddressU = Clamp;
-    AddressV = Clamp;
-};
-float2 SampleMotionVectors(float2 texcoord)
-{
-    return GetLod(sTexMotionVectorsSampler, texcoord).rg;
-}
-#endif
 
 texture2D TEMP
 {
