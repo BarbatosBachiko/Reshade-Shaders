@@ -1,5 +1,4 @@
 /*Copyright (c) 2020-2021 Advanced Micro Devices, Inc. All rights reserved.
-
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
 in the Software without restriction, including without limitation the rights
@@ -9,10 +8,10 @@ furnished to do so, subject to the following conditions:
 
 The above copyright notice and this permission notice shall be included in
 all copies or substantial portions of the Software.
-
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE
 AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
@@ -29,18 +28,11 @@ THE SOFTWARE.
 
 #include "ReShade.fxh"
 #include "ReShadeUI.fxh"
+#include "BaBa_MV.fxh"
 
 //--------------------|
 // :: Preprocessor :: |
 //--------------------|
-
-#ifndef USE_MARTY_LAUNCHPAD_MOTION
-#define USE_MARTY_LAUNCHPAD_MOTION 0
-#endif
-
-#ifndef USE_VORT_MOTION
-#define USE_VORT_MOTION 0
-#endif
 
 #define GetDepth(coords) (ReShade::GetLinearizedDepth(coords))
 #define GetColor(c) tex2Dlod(ReShade::BackBuffer, float4((c).xy, 0, 0))
@@ -55,12 +47,12 @@ static const float2 R2 = float2(0.75487766624669276005, 0.5698402909980532659114
 //----------|
 // :: UI :: |
 //----------|
-
 uniform float ShadowPow <
     ui_type = "drag";
     ui_category = "Basic Settings";
     ui_label = "Intensity";
-    ui_min = 0.1; ui_max = 8.0; ui_step = 0.01;
+    ui_min = 0.1;
+    ui_max = 8.0; ui_step = 0.01;
     ui_tooltip = "Global strength of the ambient occlusion effect.";
 > = 1.5;
 
@@ -68,7 +60,8 @@ uniform float Radius <
     ui_type = "drag";
     ui_category = "Basic Settings";
     ui_label = "Radius";
-    ui_min = 0.1; ui_max = 10.0; ui_step = 0.01;
+    ui_min = 0.1;
+    ui_max = 10.0; ui_step = 0.01;
     ui_tooltip = "World-space radius of the ambient occlusion effect.";
 > = 5.0;
 
@@ -76,7 +69,8 @@ uniform float EffectShadowClamp <
     ui_type = "drag";
     ui_category = "Basic Settings";
     ui_label = "Clamp";
-    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+    ui_min = 0.0;
+    ui_max = 1.0; ui_step = 0.01;
     ui_tooltip = "Limits the maximum amount of occlusion to prevent excessive darkening.";
 > = 0.98;
 
@@ -149,8 +143,10 @@ uniform int DebugView <
 uniform int FRAME_COUNT < source = "framecount"; >;
 
 static const int g_TapCounts[5] = { 3, 5, 12, 20, 31 };
-static const float DEG2RAD = 0.017453292; // PI / 180.0
+static const float DEG2RAD = 0.017453292;
+// PI / 180.0
 #define TWO_PI 6.2831854
+
 //----------------|
 // :: Textures :: |
 //----------------|
@@ -159,38 +155,13 @@ static const float DEG2RAD = 0.017453292; // PI / 180.0
 #define USE_HILBERT_LUT 1 
 #endif
 
-#if USE_MARTY_LAUNCHPAD_MOTION
-    namespace Deferred {
-        texture MotionVectorsTex { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
-        sampler sMotionVectorsTex { Texture = MotionVectorsTex; };
-    }
-#elif USE_VORT_MOTION
-    texture2D MotVectTexVort { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
-    sampler2D sMotVectTexVort { Texture = MotVectTexVort; MagFilter=POINT; MinFilter=POINT; MipFilter=POINT; AddressU=Clamp; AddressV=Clamp; };
-#else
-texture texMotionVectors
-{
-    Width = BUFFER_WIDTH;
-    Height = BUFFER_HEIGHT;
-    Format = RG16F;
-};
-sampler sTexMotionVectorsSampler
-{
-    Texture = texMotionVectors;
-    MagFilter = POINT;
-    MinFilter = POINT;
-    MipFilter = POINT;
-    AddressU = Clamp;
-    AddressV = Clamp;
-};
-#endif
-
 texture texPrevLuma
 {
     Width = BUFFER_WIDTH;
     Height = BUFFER_HEIGHT;
     Format = R8;
 };
+
 sampler sPrevLuma
 {
     Texture = texPrevLuma;
@@ -255,7 +226,8 @@ namespace MiAO24
     };
 
 #if USE_HILBERT_LUT
-    texture texHilbertLUT < source = "Barbatos_Hilbert_RGB.png"; >
+    texture texHilbertLUT < source = "Barbatos_Hilbert_RGB.png";
+    >
     {
         Width = 64;
         Height = 64;
@@ -275,78 +247,16 @@ namespace MiAO24
 //----------------|
 // :: Functions ::|
 //----------------|
-
     struct VS_OUTPUT
     {
         float4 vpos : SV_Position;
         float2 uv : TEXCOORD0;
         float2 pScale : TEXCOORD1;
     };
-    
-    float2 GetMotion(float2 texcoord)
-    {
-#if USE_MARTY_LAUNCHPAD_MOTION
-        return GetLod(Deferred::sMotionVectorsTex, texcoord).rg;
-#elif USE_VORT_MOTION
-        return GetLod(sMotVectTexVort, texcoord).rg;
-#else
-        return GetLod(sTexMotionVectorsSampler, texcoord).rg;
-#endif
-    }
 
     float GetLuminance(float3 linearColor)
     {
         return dot(linearColor, float3(0.2126, 0.7152, 0.0722));
-    }
-
-    float2 GetVelocity(float2 texcoord)
-    {
-        float2 pixel_size = ReShade::PixelSize;
-        float closest_depth = GetDepth(texcoord);
-        float2 best_coord = texcoord;
-        
-        const int2 offsets[4] = { int2(-1, 0), int2(1, 0), int2(0, -1), int2(0, 1) };
-
-        [unroll]
-        for (int i = 0; i < 4; i++)
-        {
-            float2 s_coord = texcoord + offsets[i] * pixel_size;
-            float s_depth = GetDepth(s_coord);
-            if (s_depth < closest_depth)
-            {
-                closest_depth = s_depth;
-                best_coord = s_coord;
-            }
-        }
-        return GetMotion(best_coord);
-    }
-
-    //Based on LumaFlow.fx from LumeniteFX CC-BY-NC-4.0
-    float Confidence(float2 uv, float2 velocity)
-    {
-        float2 prev_uv = uv + velocity;
-        if (any(prev_uv < 0.0) || any(prev_uv > 1.0))
-            return 0.0;
-
-        float curr_luma = GetLuminance(GetColor(uv).rgb);
-        float prev_luma = tex2D(sPrevLuma, prev_uv).r;
-        float luma_error = abs(curr_luma - prev_luma);
-        float flow_magnitude = length(velocity * BUFFER_DIM);
-        
-        if (flow_magnitude <= 1.0)
-            return 1.0;
-
-        float2 destination_velocity = GetMotion(prev_uv);
-        float2 diff = velocity - destination_velocity;
-        float error = length(diff);
-        float normalized_error = error / length(velocity);
-
-        float motion_penalty = flow_magnitude;
-        float length_conf = rcp(motion_penalty * 0.002 + 1.0);
-        float consistency_conf = rcp(normalized_error + 1.0);
-        float photometric_conf = exp(-luma_error * 1.0);
-
-        return (consistency_conf * length_conf * photometric_conf);
     }
 
     void ComputeNeighborhoodMinMax(sampler2D color_tex, float2 texcoord, float center_val, out float color_min, out float color_max)
@@ -394,14 +304,12 @@ namespace MiAO24
     float2 SpatioTemporalNoise(uint2 pixCoord, uint temporalIndex)
     {
         uint index;
-        
 #if USE_HILBERT_LUT
         float4 encodedVal = tex2Dfetch(sHilbertLUT, int2(pixCoord.x % 64, pixCoord.y % 64));
         uint high_byte = (uint) (encodedVal.r * 255.0 + 0.1);
         uint low_byte = (uint) (encodedVal.g * 255.0 + 0.1);
         index = (high_byte * 256) + low_byte;
 #else
-        // Calculate index procedurally (Slower)
         index = HilbertIndex(pixCoord.x, pixCoord.y);
 #endif
 
@@ -455,13 +363,11 @@ namespace MiAO24
     -0.39005, 0.92968, 1.32165, 0.97041, 0.59024, -0.03566, -1.72452, 1.28163,
     2.27953, 0.24276, 1.67147, 2.05600, 2.10187, 0.73659, 1.63937
     };
-
     static const float K_MipLevels[31] =
     {
      -2.00, -1.50, -1.00, -1.00, -0.90, -0.80, -0.70, -0.60, -0.50, -0.40, -0.30, -0.20,
      -0.50, -0.45, -0.40, -0.35, -0.30, -0.25, -0.20, -0.15, -0.10, -0.05, 0.00, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40
     };
-
     float4 GetSamplePattern(int index, float2 noise)
     {
         float2 offset = frac(R2 * float(index) + noise);
@@ -498,7 +404,6 @@ namespace MiAO24
 
         float2 samplingUV = sampleOffset * BUFFER_RCP + depthBufferUV;
         samplingUV = saturate(samplingUV);
-
         float viewspaceSampleZ1 = GetLod(sDEPTH, samplingUV).r;
         float3 hitPos1 = DepthBufferUVToViewSpace(samplingUV, viewspaceSampleZ1, pScale);
         float3 hitDelta1 = hitPos1 - pixCenterPos;
@@ -510,7 +415,6 @@ namespace MiAO24
 
         float2 samplingUV2 = -sampleOffset * BUFFER_RCP + depthBufferUV;
         samplingUV2 = saturate(samplingUV2);
-    
         float viewspaceSampleZ2 = GetLod(sDEPTH, samplingUV2).r;
         float3 hitPos2 = DepthBufferUVToViewSpace(samplingUV2, viewspaceSampleZ2, pScale);
         float3 hitDelta2 = hitPos2 - pixCenterPos;
@@ -527,7 +431,8 @@ namespace MiAO24
 
     void VS_MiAO(in uint id : SV_VertexID, out VS_OUTPUT outStruct)
     {
-        outStruct.uv.x = (id == 2) ? 2.0 : 0.0;
+        outStruct.uv.x = (id == 2) ?
+        2.0 : 0.0;
         outStruct.uv.y = (id == 1) ? 2.0 : 0.0;
         outStruct.vpos = float4(outStruct.uv * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
         
@@ -548,7 +453,6 @@ namespace MiAO24
         outHistory = GetLod(sFINAL_AO, uv).rg;
 
         float2 p = BUFFER_RCP;
-        
         float3 p_c = DepthBufferUVToViewSpace(uv, outDepth.r, input.pScale);
         float3 p_l = DepthBufferUVToViewSpace(uv - float2(p.x, 0), ScreenSpaceToViewSpaceDepth(GetDepth(uv - float2(p.x, 0))), input.pScale);
         float3 p_r = DepthBufferUVToViewSpace(uv + float2(p.x, 0), ScreenSpaceToViewSpaceDepth(GetDepth(uv + float2(p.x, 0))), input.pScale);
@@ -573,7 +477,6 @@ namespace MiAO24
         float2 scaled_uv = uv / RenderScale;
 
         float pixZ = tex2D(sDEPTH, scaled_uv).r;
-
         if (pixZ >= RESHADE_DEPTH_LINEARIZATION_FAR_PLANE * 0.999)
         {
             return 1.0;
@@ -595,22 +498,18 @@ namespace MiAO24
         uint2 random_coord = uint2(vpos.xy);
         uint pseudoRandomIndex = (random_coord.y * 2 + random_coord.x) % 5;
         float angle = (pseudoRandomIndex / 5.0) * 2.0 * PI;
-
         float2 noise = SpatioTemporalNoise(uint2(vpos.xy), FRAME_COUNT);
         angle += noise.x * 2.0 * PI;
 
         float s, c;
         sincos(angle, s, c);
-
         float2x2 rotScale = float2x2(c, s, -s, c) * pixelRadius * 100.0;
 
         float obscuranceSum = 0.0;
         float weightSum = 0.0001;
-
         float4 edgesLRTB = CalculateEdges(pixZ, pixLZ, pixRZ, pixTZ, pixBZ);
     
         float falloffCalcMulSq = -1.0 / (effectViewspaceRadius * effectViewspaceRadius);
-
         const int numberOfTaps = g_TapCounts[clamp(QualityLevel, 0, 4)];
         
         for (int i = 0; i < numberOfTaps; i++)
@@ -655,11 +554,11 @@ namespace MiAO24
             return;
         }
 
-        float2 velocity = GetVelocity(uv);
-        
+        float2 velocity = MV_GetVelocity(uv);
+
         // Reprojection
         float2 reprojected_uv = uv + velocity;
-        
+
         // Check bounds
         if (any(reprojected_uv < 0.0) || any(reprojected_uv > 1.0))
         {
@@ -668,7 +567,10 @@ namespace MiAO24
         }
 
         // Confidence & History
-        float confidence = Confidence(uv, velocity);
+        float curr_luma = GetLuminance(GetColor(uv).rgb);
+        float flow_magnitude = length(velocity * BUFFER_DIM);
+        float confidence = MV_GetConfidenceAO(uv, velocity, flow_magnitude, curr_luma, sPrevLuma);
+        
         float2 history_signal = GetLod(sHISTORY_AO, reprojected_uv).rg;
 
         // Neighborhood Clamping 
@@ -676,7 +578,7 @@ namespace MiAO24
         ComputeNeighborhoodMinMax(sAO, scaled_uv, current_ao, sig_min, sig_max);
 
         float2 clipped_history = clamp(history_signal, sig_min, sig_max);
-        
+
         // Blend
         float blend_factor = 0.9 * confidence;
         float2 temporal_signal = lerp(float2(current_ao, current_ao * current_ao), clipped_history, blend_factor);
@@ -699,7 +601,6 @@ namespace MiAO24
             {
                 float t = (float) i / (float) (blur_samples - 1);
                 float2 blur_coord = uv - velocity * 0.5 * t;
-                
                 if (all(blur_coord >= 0.0) && all(blur_coord <= 1.0))
                 {
                     float sampleAO = GetLod(sAO, (RenderScale >= 1.0 ? blur_coord : blur_coord * RenderScale)).r;
@@ -727,7 +628,6 @@ namespace MiAO24
 
         if (linear_depth >= 0.999)
             return color;
-
         if (DebugView == 1) // Raw SSAO
         {
             return GetLod(sFINAL_AO, uv).rrrr;
@@ -735,7 +635,6 @@ namespace MiAO24
         else if (DebugView == 2) // Normals
         {
             float3 debugNormals = GetLod(sNORMALS, uv).rgb;
-            
             debugNormals = debugNormals * 2.0 - 1.0;
             debugNormals.x = -debugNormals.x;
             debugNormals.z = -debugNormals.z;
@@ -745,7 +644,6 @@ namespace MiAO24
     
         float ao = GetLod(sFINAL_AO, uv).r;
         color.rgb *= ao;
-    
         return color;
     }
     
@@ -785,4 +683,3 @@ namespace MiAO24
         }
     }
 }
-

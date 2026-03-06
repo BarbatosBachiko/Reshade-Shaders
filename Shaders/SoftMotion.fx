@@ -11,8 +11,7 @@
 
 #include "ReShade.fxh"
 #include "ReShadeUI.fxh"
-
-static const float3 LUMA = float3(0.2126, 0.7152, 0.0722);
+#include "BaBa_MV.fxh"
 
 uniform int Mode <
     __UNIFORM_COMBO_INT1
@@ -48,28 +47,6 @@ uniform int DebugView <
 //----------------|
 // :: Textures  ::|
 //----------------|
-#ifndef USE_MARTY_LAUNCHPAD_MOTION
-    #define USE_MARTY_LAUNCHPAD_MOTION 0
-#endif
-#ifndef USE_VORT_MOTION
-    #define USE_VORT_MOTION 0
-#endif
-
-#if USE_MARTY_LAUNCHPAD_MOTION
-    namespace Deferred { 
-        texture MotionVectorsTex { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; }; 
-        sampler sMotionVectorsTex { Texture = MotionVectorsTex; };
-    }
-    #define GET_MOTION(uv) tex2Dlod(Deferred::sMotionVectorsTex, float4(uv, 0, 0)).xy
-#elif USE_VORT_MOTION
-    texture2D MotVectTexVort { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
-    sampler2D sMotVectTexVort { Texture = MotVectTexVort; MagFilter=POINT; MinFilter=POINT; MipFilter=POINT; AddressU=Clamp; AddressV=Clamp; };
-    #define GET_MOTION(uv) tex2Dlod(sMotVectTexVort, float4(uv, 0, 0)).xy
-#else
-    texture texMotionVectors { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
-    sampler sTexMotionVectorsSampler { Texture = texMotionVectors; MagFilter=POINT; MinFilter=POINT; MipFilter=POINT; AddressU=Clamp; AddressV=Clamp; };
-    #define GET_MOTION(uv) tex2Dlod(sTexMotionVectorsSampler, float4(uv, 0, 0)).xy
-#endif
 
 texture HistoryTex { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RGBA8; };
 sampler sHistoryTex { Texture = HistoryTex; };
@@ -78,31 +55,9 @@ sampler sHistoryTex { Texture = HistoryTex; };
 // :: Functions ::|
 //----------------|
 
-float GetLuma(float3 color)
-{
-    return dot(color, LUMA);
-}
-
-float GetConfidence(float2 uv, float2 velocity, float curr_luma)
-{
-    float2 prev_uv = uv + velocity;
-    if (any(prev_uv < 0.0) || any(prev_uv > 1.0)) return 0.0;
-    float prev_luma = GetLuma(tex2D(sHistoryTex, prev_uv).rgb);
-    
-    float flow_mag = length(velocity * float2(BUFFER_WIDTH, BUFFER_HEIGHT));
-    if (flow_mag <= 1.0) return 1.0;
-    float2 diff = velocity - GET_MOTION(prev_uv);
-    
-    float conf = rcp(flow_mag * 0.05 + 1.0);
-    conf *= rcp((length(diff) / length(velocity)) + 1.0);
-    conf *= exp(-abs(curr_luma - prev_luma) * 5.0);    
-
-    return conf;
-}
-
 void PS_FrameBlend(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outColor : SV_Target)
 {
-    float2 motion = GET_MOTION(uv);
+    float2 motion = MV_GetVelocity(uv);
 
     // Motion Vectors
     if (DebugView == 1) 
@@ -112,8 +67,7 @@ void PS_FrameBlend(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 ou
     }
 
     float3 currColor = tex2Dlod(ReShade::BackBuffer, float4(uv, 0, 0)).rgb;
-    float currLuma = GetLuma(currColor); 
-    float conf = GetConfidence(uv, motion, currLuma);
+    float conf = MV_GetConfidence(uv);
 
     if (DebugView == 2)
     {
@@ -123,7 +77,7 @@ void PS_FrameBlend(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 ou
 
     float2 offsetUV = uv + (motion * MotionScale);
     float3 altColor;
-
+    
     if (Mode == 0) // Interpolation
         altColor = tex2D(sHistoryTex, offsetUV).rgb;
     else // Extrapolation
@@ -139,7 +93,7 @@ void PS_UpdateHistory(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4
 
 technique SoftMotion <
     ui_label = "SoftMotion";
-    ui_tooltip = "Blending or projecting frames using motion vectors, It doesn't generate new frames or predict the future. It's more of a motion blur based on motion vectors with temporal blending.";
+    ui_tooltip = "Blending or projecting frames using motion vectors. It doesn't generate new frames or predict the future. It's more of a motion blur based on motion vectors with temporal blending.";
 >
 {
     pass { VertexShader = PostProcessVS; PixelShader = PS_FrameBlend; }
