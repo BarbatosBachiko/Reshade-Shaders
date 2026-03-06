@@ -53,7 +53,6 @@ static const float2 ZERO_LOD = float2(0.0, 0.0);
 #define c_phi 1
 #define n_phi 5
 #define p_phi 1
-#define ConfidenceSensitivity 1.0
 
 //---------|
 // :: UI ::|
@@ -571,26 +570,6 @@ namespace Barbatos_XeGTAO110
         return (a_unit > 1.0) ? (p_clip + v_clip / a_unit) : history_sample;
     }
     
-    float2 GetVelocity(float2 texcoord)
-    {
-        float2 pixel_size = ReShade::PixelSize;
-        float closest_depth = 1.0;
-        float2 closest_velocity = 0.0;
-        static const float2 offsets[5] = { float2(0, 0), float2(0, -1), float2(-1, 0), float2(1, 0), float2(0, 1) };
-        [unroll] 
-        for (int i = 0; i < 5; i++)
-        {
-            float2 s_coord = texcoord + offsets[i] * pixel_size;
-            float s_depth = getDepth(s_coord);
-            if (s_depth < closest_depth)
-            {
-                closest_depth = s_depth;
-                closest_velocity = SampleMotionVectors(s_coord);
-            }
-        }
-        return closest_velocity;
-    }
-    
     void ComputeNeighborhoodMinMax_Scalar(sampler2D color_tex, float2 texcoord, float2 ao_texcoord, float center_val, out float val_min, out float val_max)
     {
         float4 r_quad = tex2DgatherR(color_tex, ao_texcoord);
@@ -606,25 +585,6 @@ namespace Barbatos_XeGTAO110
         const float high_threshold = 20.0;
         float vel_mag = length(velocity_pixels);
         return saturate((high_threshold - vel_mag) / (high_threshold - low_threshold));
-    }
-    
-    float Confidence(float2 uv, float2 velocity, float flow_magnitude)
-    {
-        float2 prev_uv = uv + velocity;
-        if (any(prev_uv < 0.0) || any(prev_uv > 1.0))
-            return 0.0;
-        float curr_luma = GetLuminance(GetColor(uv).rgb);
-        float prev_luma = tex2D(sB_PrevLuma, prev_uv).r;
-        float luma_error = abs(curr_luma - prev_luma);
-        if (flow_magnitude <= 0.5)
-            return 1.0;
-        float2 destination_velocity = SampleMotionVectors(prev_uv);
-        float error = length(velocity - destination_velocity);
-        float normalized_error = (error * ConfidenceSensitivity) / (length(velocity) + 1e-6);
-        float length_conf = rcp(flow_magnitude * 0.02 + 1.0);
-        float consistency_conf = rcp(normalized_error + 1.0);
-        float photometric_conf = exp(-luma_error * 1.5);
-        return consistency_conf * length_conf * photometric_conf;
     }
 
     //--------------------|
@@ -825,7 +785,7 @@ namespace Barbatos_XeGTAO110
         if (!EnableTemporal)
             return float4(current_signal.xxxx);
         // Temporal
-        float2 velocity = GetVelocity(input.uv);
+        float2 velocity = MV_GetVelocity(input.uv);
         float2 reprojected_uv = input.uv + velocity;
         float history_signal = GetLod(sHistoryParams, float4(reprojected_uv, 0, 0)).r;
         
@@ -837,7 +797,8 @@ namespace Barbatos_XeGTAO110
             return float4(current_signal.xxxx);
         float2 velocity_pixels = velocity * BUFFER_SCREEN_SIZE;
         float flow_magnitude = length(velocity_pixels);
-        float confidence = Confidence(input.uv, velocity, flow_magnitude);
+        float curr_luma_ao = GetLuminance(GetColor(input.uv).rgb);
+        float confidence = MV_GetConfidenceAO(input.uv, velocity, flow_magnitude, curr_luma_ao, sB_PrevLuma);
         
         float val_min, val_max;
         ComputeNeighborhoodMinMax_Scalar(sAO, input.uv, ao_texcoord, current_signal, val_min, val_max);
@@ -926,8 +887,10 @@ namespace Barbatos_XeGTAO110
         }
         else if (ViewMode == 4) // Confidence Check
         {
-            float2 velocity = GetVelocity(input.uv);
-            float conf = Confidence(input.uv, velocity, length(velocity * BUFFER_SCREEN_SIZE));
+            float2 velocity = MV_GetVelocity(input.uv);
+            float  flow_mag = length(velocity * BUFFER_SCREEN_SIZE);
+            float  curr_luma_ao = GetLuminance(GetColor(input.uv).rgb);
+            float  conf = MV_GetConfidenceAO(input.uv, velocity, flow_mag, curr_luma_ao, sB_PrevLuma);
             return float4(conf.xxx, 1.0);
         }
 
