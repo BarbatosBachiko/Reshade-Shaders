@@ -1,8 +1,7 @@
 /*----------------------------------------------|
 | :: Barbatos SSR (Screen-Space Reflections) :: |
 |-----------------------------------------------|
-|
-| Version: 1.2.2                                |
+| Version: 1.3.0                                |
 | Author: Barbatos                              |
 | License: MIT                                  |
 '----------------------------------------------*/
@@ -147,7 +146,7 @@ uniform float SurfaceDetailsRadius <
     ui_tooltip = "Controls the radius of the micro-surface details.";
     ui_type = "drag";
     ui_min = 1.0; ui_max = 100.0; ui_step = 1.0;
-> = 40.0;
+> = 10.0;
 
 uniform float SobelEdgeThreshold <
     ui_category = "Material";
@@ -313,7 +312,7 @@ uniform int ViewMode <
 #endif
 
 #ifndef ENABLE_RAY_FALLBACK
-#define ENABLE_RAY_FALLBACK 0
+#define ENABLE_RAY_FALLBACK 1
 #endif
 
 // Defines & Constants
@@ -337,7 +336,7 @@ uniform int FRAME_COUNT < source = "framecount"; >;
 // :: Textures :: |
 //----------------|
 
-namespace Barbatos_SSR122
+namespace Barbatos_SSR130
 {
     texture Normal
     {
@@ -601,6 +600,11 @@ namespace Barbatos_SSR122
 
     float3 ApplySurfaceDetails(float2 texcoord, float3 normal, float depth)
     {
+        if (SurfaceDetails <= 0.0)
+        {
+            normal.x = -normal.x;
+            return normal;
+        }
 
         float viewDistance = max(depth * FAR_PLANE, 1.0);
         float radius = clamp(SurfaceDetailsRadius / viewDistance, 0.0, 8192.0);
@@ -710,6 +714,8 @@ namespace Barbatos_SSR122
         float currK = startK + deltaK * t;
         float2 stepUV = deltaUV * stepSize;
         float stepK = deltaK * stepSize;
+        float prevRayDepth = 1.0 / max(abs(currK - stepK), 1e-10);
+
         [loop]
         for (int i = 0; i < num_steps; ++i)
         {
@@ -719,7 +725,6 @@ namespace Barbatos_SSR122
             float sceneDepth = GetDepth(currUV);
             float depthDiff = rayDepth - sceneDepth;
             // Adaptive thickness 
-            float prevRayDepth = 1.0 / (currK - stepK);
             float rayStepSizeZ = abs(rayDepth - prevRayDepth);
             float adaptiveThickness = max(geoThickness, rayStepSizeZ * 1.5);
             adaptiveThickness *= (1.0 + rayDepth * 0.2);
@@ -746,9 +751,9 @@ namespace Barbatos_SSR122
                 return result;
             }
             
+            prevRayDepth = rayDepth;
             currUV += stepUV;
             currK += stepK;
-            t += stepSize;
         }
 
         return result;
@@ -906,9 +911,9 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
 #endif
     }
     
-    //-------------------------|
-    // :: Spatio-Temporal   :: |
-    //-------------------------|
+    //------------|
+    // :: TAA  :: |
+    //------------|
     float3 TAA_Compress(float3 color)
     {
         return color / (10.0 + color);
@@ -974,7 +979,19 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         }
         
         float3 current_compressed = TAA_Compress(current_reflection.rgb);
-        // Neigh MIN/MAX
+        // TA
+        float2 velocity = MV_GetVelocity(viewUV);
+        float2 reprojected_view_uv = viewUV + velocity;
+        if (any(saturate(reprojected_view_uv) != reprojected_view_uv) || FRAME_COUNT <= 1)
+            return current_reflection;
+        float4 history_reflection = GetLod(sHistoryParams, reprojected_view_uv);
+        float history_depth = GetDepth(reprojected_view_uv);
+        float vel_mag = length(velocity * float2(BUFFER_WIDTH, BUFFER_HEIGHT));
+        float depth_tolerance = EnableAntiSmear ? 0.05 : (0.05 + vel_mag * 0.015);
+        if (abs(history_depth - depth) > depth_tolerance) 
+            return current_reflection;
+
+        // Neigh MIN/MAX 
         float4 color_min = float4(current_compressed, current_reflection.a);
         float4 color_max = color_min;
         float4 r1 = GetLod(sReflection, lowres_uv + float2( px.x, 0.0));
@@ -987,17 +1004,6 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         float4 c4 = float4(TAA_Compress(r4.rgb), r4.a);
         color_min = min(color_min, min(min(c1, c2), min(c3, c4)));
         color_max = max(color_max, max(max(c1, c2), max(c3, c4)));
-        // TA
-        float2 velocity = MV_GetVelocity(viewUV);
-        float2 reprojected_view_uv = viewUV + velocity;
-        if (any(saturate(reprojected_view_uv) != reprojected_view_uv) || FRAME_COUNT <= 1)
-            return current_reflection;
-        float4 history_reflection = GetLod(sHistoryParams, reprojected_view_uv);
-        float history_depth = GetDepth(reprojected_view_uv);
-        float vel_mag = length(velocity * float2(BUFFER_WIDTH, BUFFER_HEIGHT));
-        float depth_tolerance = EnableAntiSmear ? 0.05 : (0.05 + vel_mag * 0.015);
-        if (abs(history_depth - depth) > depth_tolerance) 
-            return current_reflection;
         float3 history_compressed = TAA_Compress(history_reflection.rgb);
 
         float motion_sensitivity = EnableAntiSmear ? 3.0 : 0.1;
@@ -1036,7 +1042,8 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
     //--------------------|
     void PS_CopyColor(VS_OUTPUT input, out float4 outColor : SV_Target)
     {
-        outColor = float4(GetColor(input.uv).rgb, GetLocalRoughness(input.uv));
+        float localRoughness = (RoughnessDetection > 0.0) ? GetLocalRoughness(input.uv) : 0.0;
+        outColor = float4(GetColor(input.uv).rgb, localRoughness);
     }
     
     void PS_GenNormals(VS_OUTPUT input, out float4 outNormal : SV_Target)
@@ -1328,6 +1335,9 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         float4 reflectionSample = GetActiveHistory(input.uv);
         float3 reflectionColor = reflectionSample.rgb;
         float reflectionMask = reflectionSample.a;
+
+        float estimatedRoughness_out = GetLod(sTexColorCopy, input.uv).a;
+        float netRoughness_out = saturate(SurfaceGlossiness + (estimatedRoughness_out * RoughnessDetection));
         // Color Grading
         float3 tint = Use_Color_Temperature ?
             KelvinToRGB(Color_Temperature) : SSR_Tint;
@@ -1364,10 +1374,13 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         float3 finalColor;
         if (BlendMode == 0) // Default PBR 
         {
+            float roughBias = netRoughness_out * netRoughness_out;
+            float3 F_adjusted = lerp(F, float3(1.0, 1.0, 1.0), roughBias);
+
             float validReflection = reflectionMask * saturate(Intensity);
-            float3 kD = 1.0 - (F * validReflection);
+            float3 kD = 1.0 - (F_adjusted * validReflection);
             kD *= lerp(1.0, 1.0 - Metallic, validReflection);
-            float3 specularLight = reflectionColor * F * Intensity * reflectionMask;
+            float3 specularLight = reflectionColor * F_adjusted * Intensity * reflectionMask;
             finalColor = (scene * kD) + specularLight;
         }
         else // Legacy Blending modes
