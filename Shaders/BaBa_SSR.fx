@@ -1,6 +1,7 @@
 /*----------------------------------------------|
 | :: Barbatos SSR (Screen-Space Reflections) :: |
 |-----------------------------------------------|
+|
 | Version: 1.2.2                                |
 | Author: Barbatos                              |
 | License: MIT                                  |
@@ -10,29 +11,11 @@
 #include "ReShadeUI.fxh"
 #include "Blending.fxh"
 #include "BaBa_MV.fxh"
+#include "BaBa_ColorSpace.fxh"
 
 //----------|
 // :: UI :: |
 //----------|
-
-uniform int HDR_Input_Format <
-    ui_category = "HDR";
-    ui_label = "Input Format";
-    ui_tooltip = "Select the color space of the game.\n"
-                 "Auto = Detect automatically (Recommended)\n"
-                 "SDR/HDR formats = Force specific color space\n"
-                 "Raw = No conversion applied";
-    ui_type = "combo";
-    ui_items = "Auto\0sRGB (SDR)\0scRGB (HDR Linear)\0HDR10 (PQ)\0Raw (No Conversion)\0";
-> = 0;
-
-uniform float HDR_Peak_Nits <
-    ui_category = "HDR";
-    ui_label = "HDR Peak Brightness (Nits)";
-    ui_tooltip = "Set this to match your monitor's maximum HDR brightness capabilities (e.g., 400 for DisplayHDR 400, 1000 for high-end HDR). Only affects HDR formats.";
-    ui_type = "drag";
-    ui_min = 400.0; ui_max = 10000.0; ui_step = 10.0;
-> = 1000.0;
 
 //Reflections
 uniform float Intensity <
@@ -331,7 +314,6 @@ uniform int ViewMode <
 #define GetColor(c) tex2Dlod(ReShade::BackBuffer, float4((c).xy, 0, 0))
 #define GetLod(s,c) tex2Dlod(s, float4((c).xy, 0, 0))
 #define fmod(x, y) (frac((x)*rcp(y)) * (y))
-#define SDR_Inverse_Power 0.05
 
 static const float DEG2RAD = 0.017453292;
 // PI / 180.0
@@ -347,7 +329,7 @@ uniform int FRAME_COUNT < source = "framecount"; >;
 // :: Textures :: |
 //----------------|
 
-namespace Barbatos_SSR121
+namespace Barbatos_SSR122
 {
     texture Normal
     {
@@ -356,6 +338,7 @@ namespace Barbatos_SSR121
         Format = RGBA16F;
         MipLevels = 6;
     };
+
     sampler sNormal
     {
         Texture = Normal;
@@ -469,7 +452,7 @@ namespace Barbatos_SSR121
     void VS_Barbatos_SSR(in uint id : SV_VertexID, out VS_OUTPUT outStruct)
     {
         outStruct.uv.x = (id == 2) ?
-        2.0 : 0.0;
+            2.0 : 0.0;
         outStruct.uv.y = (id == 1) ? 2.0 : 0.0;
         outStruct.vpos = float4(outStruct.uv * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
 
@@ -506,136 +489,7 @@ namespace Barbatos_SSR121
         float t2 = t * t;
         return f0 + (1.0 - f0) * (t2 * t2 * t);
     }
-    
-    float3 HSVToRGB(float3 c)
-    {
-        const float4 K = float4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
-        float3 p = abs(frac(c.xxx + K.xyz) * 6.0 - K.www);
-        return c.z * lerp(K.xxx, saturate(p - K.xxx), c.y);
-    }
 
-    //------------------------|
-    // :: Color Management :: |
-    //------------------------|
-
-    static const float3 LUMA_709 = float3(0.2126, 0.7152, 0.0722);
-    static const float3 LUMA_2020 = float3(0.2627, 0.6780, 0.0593);
-
-    int GetHDRMode()
-    {
-        if (HDR_Input_Format != 0)
-            return HDR_Input_Format;
-#if BUFFER_COLOR_SPACE == 1
-        return 1;
-#elif BUFFER_COLOR_SPACE == 2
-        return 2;
-#elif BUFFER_COLOR_SPACE == 3
-        return 3;
-#else
-        return 1;
-#endif
-    }
-
-    float3 PQ2Linear(float3 color)
-    {
-        float m1 = 0.1593017578125;
-        float m2 = 78.84375;
-        float c1 = 0.8359375;
-        float c2 = 18.8515625;
-        float c3 = 18.6875;
-        float3 val = max(pow(abs(color), 1.0 / m2) - c1, 0.0);
-        float3 den = c2 - c3 * pow(abs(color), 1.0 / m2);
-        float3 linearHdr = pow(abs(val / den), 1.0 / m1);
-        return linearHdr * (10000.0 / HDR_Peak_Nits);
-    }
-
-    float3 Linear2PQ(float3 linearColor)
-    {
-        float m1 = 0.1593017578125;
-        float m2 = 78.84375;
-        float c1 = 0.8359375;
-        float c2 = 18.8515625;
-        float c3 = 18.6875;
-        float3 Y = max(0.0, linearColor * (HDR_Peak_Nits / 10000.0));
-        float3 num = c1 + c2 * pow(Y, m1);
-        float3 den = 1.0 + c3 * pow(Y, m1);
-        return pow(num / den, m2);
-    }
-
-    float3 sRGB2Linear(float3 x)
-    {
-        float3 linear_srgb = (x < 0.04045) ?
-        (x / 12.92) : pow(abs((x + 0.055) / 1.055), 2.4);
-        float3 safe_rgb = min(linear_srgb, 0.95);
-        // Per-channel Inverse Reinhard
-        float3 expanded_rgb = (safe_rgb / max(1.0 - safe_rgb, 0.001));
-        return expanded_rgb * SDR_Inverse_Power;
-    }
-
-    float3 Linear2sRGB(float3 x)
-    {
-        x = max(x, 0.0);
-        x = x / max(SDR_Inverse_Power, 0.001);
-        x = x / (1.0 + x);
-        return (x < 0.0031308) ?
-        (12.92 * x) : (1.055 * pow(abs(x), 1.0 / 2.4) - 0.055);
-    }
-	
-    float3 Input2Linear(float3 color)
-    {
-        int mode = GetHDRMode();
-        if (mode == 4)
-            return color;
-        else if (mode == 2)
-            return color * (80.0 / HDR_Peak_Nits);
-        else if (mode == 3)
-            return PQ2Linear(color);
-        else
-            return sRGB2Linear(color);
-    }
-
-    float3 Linear2Output(float3 color)
-    {
-        int mode = GetHDRMode();
-        if (mode == 4)
-            return color;
-        else if (mode == 2)
-            return color * (HDR_Peak_Nits / 80.0);
-        else if (mode == 3)
-            return Linear2PQ(color);
-        else
-            return Linear2sRGB(color);
-    }
-
-    float GetLuminance(float3 color)
-    {
-        int mode = GetHDRMode();
-        float3 lumaCoeff = (mode == 2 || mode == 3) ? LUMA_2020 : LUMA_709;
-        return dot(color, lumaCoeff);
-    }
-
-    float3 KelvinToRGB(float k)
-    {
-        float3 color;
-        k = clamp(k, 1000.0, 40000.0) / 100.0;
-        if (k <= 66.0)
-        {
-            color.r = 255.0;
-            color.g = 99.4708025861 * log(k) - 161.1195681661;
-            if (k <= 19.0)
-                color.b = 0.0;
-            else
-                color.b = 138.5177312231 * log(k - 10.0) - 305.0447927307;
-        }
-        else
-        {
-            color.r = 329.698727446 * pow(k - 60.0, -0.1332047592);
-            color.g = 288.1221695283 * pow(k - 60.0, -0.0755148492);
-            color.b = 255.0;
-        }
-        return saturate(color / 255.0);
-    }
-    
     //------------|
     // :: Noise ::|
     //------------|
@@ -910,12 +764,12 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
     float3 V_stretch = normalize(float3(alpha * V_local.x, alpha * V_local.y, V_local.z));
     
     float3 T1 = (V_stretch.z < 0.9999) ?
-    normalize(cross(V_stretch, float3(0.0, 0.0, 1.0))) : float3(1.0, 0.0, 0.0);
+        normalize(cross(V_stretch, float3(0.0, 0.0, 1.0))) : float3(1.0, 0.0, 0.0);
     float3 T2 = cross(T1, V_stretch);
     float a = 1.0 / (1.0 + V_stretch.z);
     float r = sqrt(Xi.x);
     float phi = (Xi.y < a) ?
-    (Xi.y / a) * 3.14159265359 : 3.14159265359 + (Xi.y - a) / (1.0 - a) * 3.14159265359;
+        (Xi.y / a) * 3.14159265359 : 3.14159265359 + (Xi.y - a) / (1.0 - a) * 3.14159265359;
     float P1 = r * cos(phi);
     float P2 = r * sin(phi) * ((Xi.y < a) ? 1.0 : V_stretch.z);
     float3 N_local = P1 * T1 + P2 * T2 + sqrt(max(0.0, 1.0 - P1 * P1 - P2 * P2)) * V_stretch;
@@ -1021,7 +875,7 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
     float4 GetActiveHistory(float2 uv)
     {
         return (fmod((float) FRAME_COUNT, 2.0) < 0.5) ?
-        GetLod(sHistory0, uv) : GetLod(sHistory1, uv);
+            GetLod(sHistory0, uv) : GetLod(sHistory1, uv);
     }
 
     float3 ClipToAABB(float3 aabb_min, float3 aabb_max, float3 history_sample)
@@ -1042,10 +896,8 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         
         if (depth >= 0.999)
             return 0.0;
-
         float2 lowres_uv = viewUV * RenderResolution;
         float4 current_reflection = GetLod(sReflection, lowres_uv);
-        
         if (!EnableSmoothing)
             return current_reflection;
 
@@ -1054,17 +906,14 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         float c_depth = c_gbuffer.a;
 
         float2 px = ReShade::PixelSize;
-
         if (EnableSpatioTemporal)
         {
             float estimatedRoughness = GetLod(sTexColorCopy, viewUV).a;
             float netRoughness = saturate(SurfaceGlossiness + (estimatedRoughness * RoughnessDetection));
         
             float targetLOD = netRoughness * 5.0;
-            
             float4 lod_reflection = tex2Dlod(sReflection, float4(lowres_uv, 0, targetLOD));
             float4 lod_gbuffer = tex2Dlod(sNormal, float4(viewUV, 0, targetLOD));
-            
             // Normal Sharpness
             float3 nR = SampleGBuffer(viewUV + float2(px.x, 0.0)).rgb;
             float3 nL = SampleGBuffer(viewUV + float2(-px.x, 0.0)).rgb;
@@ -1078,49 +927,39 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         }
         
         float3 current_compressed = TAA_Compress(current_reflection.rgb);
-
         // Neigh MIN/MAX
         float4 color_min = float4(current_compressed, current_reflection.a);
         float4 color_max = color_min;
-
         float4 r1 = GetLod(sReflection, lowres_uv + float2( px.x, 0.0));
         float4 r2 = GetLod(sReflection, lowres_uv + float2(-px.x, 0.0));
         float4 r3 = GetLod(sReflection, lowres_uv + float2(0.0,  px.y));
         float4 r4 = GetLod(sReflection, lowres_uv + float2(0.0, -px.y));
-
         float4 c1 = float4(TAA_Compress(r1.rgb), r1.a);
         float4 c2 = float4(TAA_Compress(r2.rgb), r2.a);
         float4 c3 = float4(TAA_Compress(r3.rgb), r3.a);
         float4 c4 = float4(TAA_Compress(r4.rgb), r4.a);
-
         color_min = min(color_min, min(min(c1, c2), min(c3, c4)));
         color_max = max(color_max, max(max(c1, c2), max(c3, c4)));
-        
         // TA
         float2 velocity = MV_GetVelocity(viewUV);
         float2 reprojected_view_uv = viewUV + velocity;
-        
         if (any(saturate(reprojected_view_uv) != reprojected_view_uv) || FRAME_COUNT <= 1)
             return current_reflection;
-
         float4 history_reflection = GetLod(sHistoryParams, reprojected_view_uv);
         float history_depth = GetDepth(reprojected_view_uv);
         float vel_mag = length(velocity * float2(BUFFER_WIDTH, BUFFER_HEIGHT));
-        
         float depth_tolerance = EnableAntiSmear ? 0.05 : (0.05 + vel_mag * 0.015);
         if (abs(history_depth - depth) > depth_tolerance) 
             return current_reflection;
-
         float3 history_compressed = TAA_Compress(history_reflection.rgb);
 
         float motion_sensitivity = EnableAntiSmear ? 3.0 : 0.1;
         float static_factor = saturate(1.0 - vel_mag * motion_sensitivity);
-        
         // Expand the color box during motion to allow ghosting to smooth out noise
-        float relax_amount = EnableAntiSmear ? (0.25 * static_factor) : (0.3 + vel_mag * 0.1);
+        float relax_amount = EnableAntiSmear ?
+            (0.25 * static_factor) : (0.3 + vel_mag * 0.1);
         color_min -= relax_amount;
         color_max += relax_amount;
-        
         float3 clipped_history_rgb = ClipToAABB(color_min.rgb, color_max.rgb, history_compressed);
         float clipped_history_a = clamp(history_reflection.a, color_min.a, color_max.a);
 
@@ -1139,7 +978,6 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         
         final_feedback *= conf_multiplier;
         final_feedback = clamp(final_feedback, 0.0, max_feedback);
-
         float3 result_compressed = lerp(current_compressed, clipped_history_rgb, final_feedback);
         float result_alpha = lerp(current_reflection.a, clipped_history_a, final_feedback);
 
@@ -1230,6 +1068,7 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
                 float2(0.125, -0.375), float2(-0.125, 0.375),
                 float2(-0.375, -0.125), float2(0.375, 0.125),
                
+
                 float2(0.375, -0.375), float2(-0.375, 0.375),
                 float2(0.125, 0.125), float2(-0.125, -0.125)
             };
@@ -1443,7 +1282,6 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         float4 reflectionSample = GetActiveHistory(input.uv);
         float3 reflectionColor = reflectionSample.rgb;
         float reflectionMask = reflectionSample.a;
-
         // Color Grading
         float3 tint = Use_Color_Temperature ?
             KelvinToRGB(Color_Temperature) : SSR_Tint;

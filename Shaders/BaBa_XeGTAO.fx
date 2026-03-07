@@ -16,11 +16,12 @@
 /*----------------------------------------------|
 | ::           Barbatos XeGTAO               :: |
 '-----------------------------------------------|
-| Version: 1.1.0                                |
+| Version: 1.2                                  |
 | Author: Barbatos                              |
 '----------------------------------------------*/
 
 #include "ReShade.fxh"
+#include "BaBa_MV.fxh"
 
 #ifndef USE_HILBERT_LUT
     #define USE_HILBERT_LUT 1 
@@ -213,6 +214,23 @@ uniform float HeightmapDepthThreshold <
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.001;
 > = 0.900;
 
+uniform int SmartSurfaceMode <
+    ui_category = "Advanced";
+    ui_label = "Normal Smoothing Quality";
+    ui_tooltip = "Blurs the normals to prevent blocky artifacts on low-poly geometry.\n"
+                 "Higher quality uses more samples but is slightly heavier.";
+    ui_type = "combo";
+    ui_items = "Off\0Performance\0Balanced\0Quality\0";
+> = 1;
+
+uniform float Smooth_Threshold <
+    ui_category = "Advanced";
+    ui_label = "Normal Smooth Threshold";
+    ui_tooltip = "Limits how far the normal blur can spread. Lower values preserve hard geometry edges but reduce overall smoothing.";
+    ui_type = "drag";
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+> = 0.5;
+
 uniform int ViewMode <
     ui_type = "combo";
     ui_items = "None\0AO\0Normals\0Depth\0Confidence Check\0";
@@ -226,9 +244,8 @@ uniform int FRAME_COUNT < source = "framecount"; >;
 //----------------|
 // :: Textures  ::|
 //----------------|
-#include "BaBa_MV.fxh"
 
-namespace Barbatos_XeGTAO110
+namespace Barbatos_XeGTAO120
 {
     texture texNormalEdges
     {
@@ -245,6 +262,18 @@ namespace Barbatos_XeGTAO110
     {
         Texture = texNormalEdges;
         S_LC
+    };
+
+    texture texNormalEdges1
+    {
+        Width = BUFFER_WIDTH;
+        Height = BUFFER_HEIGHT;
+        Format = RG16F;
+    };
+    sampler sNormalEdges1
+    {
+        Texture = texNormalEdges1;
+        S_PC
     };
 
     texture B_PrevLuma
@@ -824,6 +853,62 @@ namespace Barbatos_XeGTAO110
         return float4(temporal_val.xxx, 1.0);
     }
     
+    float2 ComputeSmoothedNormal(float2 uv, float2 direction, sampler sInput)
+    {
+        float2 color = tex2Dlod(sInput, float4(uv, 0.0, 0.0)).xy;
+        float center_depth = getDepth(uv);
+
+        float SNWidth = (SmartSurfaceMode == 1) ? 5.5 : ((SmartSurfaceMode == 2) ? 2.5 : 1.0);
+        int SNSamples = (SmartSurfaceMode == 1) ? 1 : ((SmartSurfaceMode == 2) ? 3 : 30);
+        
+        float2 p = ReShade::PixelSize * SNWidth * direction;
+        float T = rcp(max(Smooth_Threshold * saturate(2.0 * (1.0 - center_depth)), 0.0001));
+        
+        float2 s1 = 0.0;
+        float sc = 0.0;
+        
+        [loop]
+        for (int x = -SNSamples; x <= SNSamples; x++)
+        {
+            float2 sample_uv = uv + (p * x);
+            float2 s = tex2Dlod(sInput, float4(sample_uv, 0.0, 0.0)).xy;
+            float s_depth = getDepth(sample_uv);
+            
+            float diff = length(s - color) + abs(s_depth - center_depth) * (RESHADE_DEPTH_LINEARIZATION_FAR_PLANE * Smooth_Threshold);
+            diff = 1.0 - saturate(diff * T);
+            
+            s1 += s * diff;
+            sc += diff;
+        }
+        return (sc > 0.0001) ? (s1 / sc) : color;
+    }
+
+    void PS_SmoothNormals_H(VS_OUTPUT input, out float4 outNormal : SV_Target)
+    {
+        float depth = getDepth(input.uv);
+        if (SmartSurfaceMode == 0 || depth >= DepthThreshold)
+        {
+            outNormal = float4(tex2Dlod(sNormalEdges, float4(input.uv, 0.0, 0.0)).xy, 0.0, 1.0);
+            return;
+        }
+        
+        float2 smoothed = ComputeSmoothedNormal(input.uv, float2(1.0, 0.0), sNormalEdges);
+        outNormal = float4(smoothed, 0.0, 1.0);
+    }
+
+    void PS_SmoothNormals_V(VS_OUTPUT input, out float4 outNormal : SV_Target)
+    {
+        float depth = getDepth(input.uv);
+        if (SmartSurfaceMode == 0 || depth >= DepthThreshold)
+        {
+            outNormal = float4(tex2Dlod(sNormalEdges1, float4(input.uv, 0.0, 0.0)).xy, 0.0, 1.0);
+            return;
+        }
+        
+        float2 smoothed = ComputeSmoothedNormal(input.uv, float2(0.0, 1.0), sNormalEdges1);
+        outNormal = float4(smoothed, 0.0, 1.0);
+    }
+
     void PS_SpatioTemporal0(VS_OUTPUT input, out float4 outHistory : SV_Target)
     {
 #if __RENDERER__ >= 0xa000 
@@ -908,6 +993,18 @@ namespace Barbatos_XeGTAO110
             PixelShader = PS_NormalsEdges;
             RenderTarget = texNormalEdges;
             ClearRenderTargets = true;
+        }
+        pass SmoothNormals_H
+        {
+            VertexShader = VS_GTAO;
+            PixelShader = PS_SmoothNormals_H;
+            RenderTarget = texNormalEdges1;
+        }
+        pass SmoothNormals_V
+        {
+            VertexShader = VS_GTAO;
+            PixelShader = PS_SmoothNormals_V;
+            RenderTarget = texNormalEdges;
         }
         pass GTAO_Main
         {
