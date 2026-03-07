@@ -1251,8 +1251,7 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
 
             reflectionColor = GetGlossySample(uvFb, scaled_uv, estimatedRoughness, normal, pScale);
             float baseAlpha = smoothstep(0.0, 0.2, 1.0 - scaled_uv.y);
-            float ghostKiller = smoothstep(0.0, 0.4, SurfaceGlossiness + (estimatedRoughness * 0.5));
-            reflectionAlpha = baseAlpha * ghostKiller;
+            reflectionAlpha = baseAlpha	;
         }
 #endif
         
