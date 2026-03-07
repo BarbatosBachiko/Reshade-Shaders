@@ -868,10 +868,6 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         {
             anisoScaleX = 1.0 + (Anisotropy * 15.0);
             anisoScaleY = 1.0 / (1.0 + Anisotropy * 2.0);
-            // Hitung tangent "atas" permukaan di view-space lalu proyeksikan ke screen.
-            // Untuk dinding vertikal: tangentUp = (0,-1,0) → screen Y → blur vertikal (sama seperti asli).
-            // Untuk permukaan miring: tangentUp ikut miring → blur ikut menyesuaikan orientasi nyata.
-            // Gunakan right-vector sebagai fallback agar floor tidak menghasilkan tangent nol.
             float NdotUp = dot(n, float3(0, 0, 0));
             float3 refAxis = abs(NdotUp) < 0.9 ? float3(0, 0, 1) : float3(0, 0, 1);
             float3 tangentUp = normalize(refAxis - n * dot(n, refAxis));
