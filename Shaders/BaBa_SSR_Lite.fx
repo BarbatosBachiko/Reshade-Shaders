@@ -489,9 +489,9 @@ namespace Barbatos_SSR_Lite34
         outColor = float4(finalColor, 1.0);
     }
 
-    technique Barbatos_SSR_Lite
+    technique BaBa_SSR_Lite
     <
-    ui_label = "Barbatos: SSR_Lite";
+    ui_label = "BaBa: SSR Lite";
     ui_tooltip = "Screen space reflection focused on mobile GPUs";
     >
     {
@@ -515,5 +515,3 @@ namespace Barbatos_SSR_Lite34
         }
     }
 }
-
-

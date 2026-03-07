@@ -62,7 +62,10 @@ float4 PS_Sharpen(float4 pos : SV_Position, float2 texcoord : TexCoord) : SV_Tar
     return float4(sharpened, 1.0);
 }
 
-technique JaSharpen
+technique BaBa_JaSharpen
+<
+    ui_label = "BaBa: Ja Sharpen";
+>
 {
     pass
     {

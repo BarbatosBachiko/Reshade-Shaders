@@ -91,8 +91,8 @@ void PS_UpdateHistory(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4
     outColor = tex2Dlod(ReShade::BackBuffer, float4(uv, 0, 0));
 }
 
-technique SoftMotion <
-    ui_label = "SoftMotion";
+technique BaBa_SoftMotion <
+    ui_label = "BaBa: Soft Motion";
     ui_tooltip = "Blending or projecting frames using motion vectors. It doesn't generate new frames or predict the future. It's more of a motion blur based on motion vectors with temporal blending.";
 >
 {

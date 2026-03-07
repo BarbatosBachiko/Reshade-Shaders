@@ -752,8 +752,8 @@ namespace Barbatos_Flow
         confidence = GetLod(sConfidence, uv).x;
     }
 
-    technique BarbatosFlow <
-        ui_label = "BaBaFlow";
+    technique BaBa_Flow <
+        ui_label = "BaBa: Flow";
         ui_tooltip = "Dense Real-time Optical Flow.";
     >
     {

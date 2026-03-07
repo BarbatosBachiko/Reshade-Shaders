@@ -278,7 +278,10 @@ namespace VividTone
         return float4(color, 1.0);
     }
 
-    technique VividTone
+    technique BaBa_VividTone
+    <
+    ui_label = "BaBa: Vivid Tone";
+    >
     {
         pass LuminanceCalculation
         {

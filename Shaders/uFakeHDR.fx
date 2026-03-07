@@ -124,7 +124,10 @@ namespace uFakeHDR
         return ApplyDither(final_color, i.magicDot);
     }
 
-    technique uFakeHDR
+    technique BaBa_FakeHDR
+    <
+    ui_label = "BaBa: Fake HDR";
+    >
     {
         pass
         {

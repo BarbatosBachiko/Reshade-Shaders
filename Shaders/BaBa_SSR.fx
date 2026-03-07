@@ -1497,7 +1497,7 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
     
     technique BaBa_SSR
     <
-    ui_label = "BaBa: Sreen Space Reflections";
+    ui_label = "BaBa: Screen Space Reflections";
     >
     {
         pass GenNormals

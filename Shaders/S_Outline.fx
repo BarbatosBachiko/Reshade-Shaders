@@ -233,7 +233,10 @@ void PS_OutlineOnly(float4 vpos : SV_Position, float2 uv : TEXCOORD, out float4 
     outColor = float4(final_color, 1.0);
 }
 
-technique S_Outline
+technique BaBa_S_Outline
+<
+    ui_label = "BaBa: S Outline";
+>
 {
     pass Outline
     {

@@ -106,9 +106,9 @@ float4 MainPS(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     return float4(saturate(result), 1.0);
 }
 
-technique B_Deband
+technique BaBa_Deband
  <
-    ui_label = "Barbatos: Deband";
+    ui_label = "BaBa: Deband";
  >
 {
     pass

@@ -897,7 +897,10 @@ namespace Barbatos_XeGTAO110
         return originalColor;
     }
 
-    technique Barbatos_XeGTAO
+    technique BaBa_XeGTAO
+    <
+    ui_label = "BaBa: XeGTAO";
+    >
     {
         pass NormalsEdges
         {

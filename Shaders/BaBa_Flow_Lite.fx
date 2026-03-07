@@ -446,7 +446,10 @@ namespace Barbatos_Flow_Lite
         return tex2D(sFinalFlow, uv).xy;
     }
 
-    technique BaBA_Flow_Lite
+    technique BaBa_Flow_Lite
+    <
+    ui_label = "BaBa: Flow Lite";
+    >
     {
         pass
         {

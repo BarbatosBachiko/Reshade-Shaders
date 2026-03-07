@@ -307,7 +307,10 @@ float3 PS_FinalCombine(VS_OUTPUT input) : SV_Target
     return lerp(original, original * ratio, Strength);
 }
 
-technique PerceptualHDR
+technique BaBa_PHDR
+<
+    ui_label = "BaBa: PHDR";
+>
 {
     pass Luma
     {

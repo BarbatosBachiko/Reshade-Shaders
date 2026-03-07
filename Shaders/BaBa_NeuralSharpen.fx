@@ -339,7 +339,7 @@ namespace Barbatos_NS
         outColor = float4(finalColor, 1.0);
     }
 
-    technique Barbatos_NS
+    technique BaBa_NeuralSharpen
     <
     ui_label = "BaBa: Neural Sharpen";
     >

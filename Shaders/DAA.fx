@@ -316,9 +316,9 @@ float4 OutPut(float4 pos : SV_Position, float2 t : TEXCOORD) : SV_Target
     }
 }
 
-technique DAA
+technique BaBa_DAA
 <
-    ui_label = "Directional Anti-Aliasing.";
+    ui_label = "BaBa: DAA";
     ui_tooltip = "Directional SpatioTemporal Anti-Aliasing.";
 >
 {

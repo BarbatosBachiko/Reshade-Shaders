@@ -270,8 +270,8 @@ namespace NEOSPACE
         return orig;
     }
 
-    technique Barbatos_NVSharpen <
-		ui_label = "Barbatos: NVSharpen";>
+    technique BaBa_NVSharpen <
+		ui_label = "BaBa: NVSharpen";>
     {
         pass
         {

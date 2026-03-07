@@ -360,7 +360,9 @@ void PS_Composite(float4 pos : SV_Position, float2 uv : TEXCOORD, out float3 out
     }
 }
 
-technique DepthDarkening <
+technique BaBa_DepthDarkening
+<
+    ui_label = "BaBa: Depth Darkening";
     ui_tooltip = "Enhances scene depth perception using Unsharp Masking on the Depth Buffer.\n";
 >
 {

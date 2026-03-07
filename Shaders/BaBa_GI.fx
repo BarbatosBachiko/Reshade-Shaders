@@ -1317,9 +1317,9 @@ namespace Barbatos_GI_100
         outColor = float4(Linear2Output(finalColor), 1.0);
     }
     
-    technique Barbatos_GI
+    technique BaBa_GI
     <
-    ui_label = "Barbatos: GI";
+    ui_label = "BaBa: GI";
     ui_tooltip = "GI, AO and Shadows";
     >
     {
