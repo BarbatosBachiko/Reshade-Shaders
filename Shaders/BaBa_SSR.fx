@@ -631,7 +631,6 @@ namespace Barbatos_SSR122
         float3 finalNormal = normal;
         if (SurfaceDetails > 0.0 && dot(sobel, sobel) >= (SobelEdgeThreshold * SobelEdgeThreshold))
         {
-            float detailFade = clamp(10.0 / viewDistance, 0.0, 1.0); 
             float height = SurfaceDetails * 2.0;
             
             float3 bump = float3(sobel.x * height, sobel.y * height, 1.0);
