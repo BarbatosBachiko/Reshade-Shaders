@@ -141,6 +141,14 @@ uniform float SurfaceDetails <
     ui_min = 0.0; ui_max = 5.0; ui_step = 0.01;
 > = 0.3;
 
+uniform float SurfaceDetailsRadius <
+    ui_category = "Material";
+    ui_label = "Micro-Surface Details Radius";
+    ui_tooltip = "Controls the radius of the micro-surface details.";
+    ui_type = "drag";
+    ui_min = 1.0; ui_max = 100.0; ui_step = 1.0;
+> = 40.0;
+
 uniform float SobelEdgeThreshold <
     ui_category = "Material";
     ui_label = "Detail Edge Threshold";
@@ -305,7 +313,7 @@ uniform int ViewMode <
 #endif
 
 #ifndef ENABLE_RAY_FALLBACK
-#define ENABLE_RAY_FALLBACK 1
+#define ENABLE_RAY_FALLBACK 0
 #endif
 
 // Defines & Constants
@@ -538,15 +546,48 @@ namespace Barbatos_SSR122
         return float2(ndc.x, -ndc.y) * 0.5 + 0.5;
     }
 
+    float3 GetViewPosForNormal(float2 uv, float2 pScale)
+    {
+        float z     = GetDepth(uv) * FAR_PLANE + 1.0;
+        float2 ndc  = uv * 2.0 - 1.0;
+        return float3(ndc.x * pScale.x * z, -ndc.y * pScale.y * z, z);
+    }
+
     float3 CalculateNormal(float2 uv, float2 pScale)
     {
-        float3 center = UVToViewPos(uv, GetDepth(uv), pScale);
-        float3 offset_x = UVToViewPos(uv + float2(ReShade::PixelSize.x, 0), GetDepth(uv + float2(ReShade::PixelSize.x, 0)), pScale);
-        float3 offset_y = UVToViewPos(uv + float2(0, ReShade::PixelSize.y), GetDepth(uv + float2(0, ReShade::PixelSize.y)), pScale);
-        float3 n = cross(center - offset_x, center - offset_y);
-        
+        float2 offset = ReShade::PixelSize;
+
+        float3 pos_c  = GetViewPosForNormal(uv,                              pScale);
+        float3 pos_l  = GetViewPosForNormal(uv + float2(-offset.x,  0.0),    pScale);
+        float3 pos_r  = GetViewPosForNormal(uv + float2( offset.x,  0.0),    pScale);
+        float3 pos_u  = GetViewPosForNormal(uv + float2( 0.0, -offset.y),    pScale);
+        float3 pos_d  = GetViewPosForNormal(uv + float2( 0.0,  offset.y),    pScale);
+        float3 pos_l2 = GetViewPosForNormal(uv + float2(-2.0*offset.x, 0.0), pScale);
+        float3 pos_r2 = GetViewPosForNormal(uv + float2( 2.0*offset.x, 0.0), pScale);
+        float3 pos_u2 = GetViewPosForNormal(uv + float2( 0.0, -2.0*offset.y),pScale);
+        float3 pos_d2 = GetViewPosForNormal(uv + float2( 0.0,  2.0*offset.y),pScale);
+
+        float3 dl  = pos_c - pos_l;
+        float3 dr  = pos_r - pos_c;
+        float3 du  = pos_c - pos_u;
+        float3 dd  = pos_d - pos_c;
+
+        float3 dl2 = pos_c  - pos_l2;
+        float3 dr2 = pos_r2 - pos_c;
+        float3 du2 = pos_c  - pos_u2;
+        float3 dd2 = pos_d2 - pos_c;
+
+        float dxl = abs(dl.z + (dl.z - dl2.z));
+        float dxr = abs(dr.z + (dr.z - dr2.z));
+        float dyu = abs(du.z + (du.z - du2.z));
+        float dyd = abs(dd.z + (dd.z - dd2.z));
+
+        float3 hor = dxl < dxr ? dl : dr;
+        float3 ver = dyu < dyd ? du : dd;
+
+        float3 n = cross(hor, ver);
         n.x = -n.x;
-        
+
         float lenSq = dot(n, n);
         return (lenSq > 1e-25) ?
             n * rsqrt(lenSq) : float3(0, 0, -1);
@@ -561,7 +602,9 @@ namespace Barbatos_SSR122
     float3 ApplySurfaceDetails(float2 texcoord, float3 normal, float depth)
     {
 
-        float radius = lerp(3.0, 0.5, saturate(depth * 20.0));
+        float viewDistance = max(depth * FAR_PLANE, 1.0);
+        float radius = clamp(SurfaceDetailsRadius / viewDistance, 0.0, 8192.0);
+        
         float2 p = ReShade::PixelSize * radius;
 
         float2 kernelWeight[9] =
@@ -588,8 +631,8 @@ namespace Barbatos_SSR122
         float3 finalNormal = normal;
         if (SurfaceDetails > 0.0 && dot(sobel, sobel) >= (SobelEdgeThreshold * SobelEdgeThreshold))
         {
-            float detailFade = lerp(1.0, 0.2, saturate(depth * 25.0));
-            float height = SurfaceDetails * 10.0 * detailFade;
+            float detailFade = clamp(10.0 / viewDistance, 0.0, 1.0); 
+            float height = SurfaceDetails * 2.0;
             
             float3 bump = float3(sobel.x * height, sobel.y * height, 1.0);
             bump = normalize(bump);
@@ -778,7 +821,7 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
 }
 #endif
 
-    float3 GetGlossySample(float2 sample_uv, float2 pixel_uv, float local_roughness)
+    float3 GetGlossySample(float2 sample_uv, float2 pixel_uv, float local_roughness, float3 n, float2 pScale)
     {
         float netRoughness = saturate(SurfaceGlossiness + (local_roughness * RoughnessDetection));
         if (netRoughness <= 0.001)
@@ -825,7 +868,16 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         {
             anisoScaleX = 1.0 + (Anisotropy * 15.0);
             anisoScaleY = 1.0 / (1.0 + Anisotropy * 2.0);
-            float angle = radians(Anisotropy_Rotation);
+            // Hitung tangent "atas" permukaan di view-space lalu proyeksikan ke screen.
+            // Untuk dinding vertikal: tangentUp = (0,-1,0) → screen Y → blur vertikal (sama seperti asli).
+            // Untuk permukaan miring: tangentUp ikut miring → blur ikut menyesuaikan orientasi nyata.
+            // Gunakan right-vector sebagai fallback agar floor tidak menghasilkan tangent nol.
+            float NdotUp = dot(n, float3(0, 0, 0));
+            float3 refAxis = abs(NdotUp) < 0.9 ? float3(0, 0, 1) : float3(0, 0, 1);
+            float3 tangentUp = normalize(refAxis - n * dot(n, refAxis));
+            float2 screenTangent = float2(tangentUp.x / max(pScale.x, 1e-6),
+                                         -tangentUp.y / max(pScale.y, 1e-6));
+            float angle = atan2(screenTangent.y, screenTangent.x);
             sincos(angle, sinRot, cosRot);
         }
 
@@ -1175,7 +1227,7 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         float reflectionAlpha = 0.0;
         if (hit.found)
         {
-            reflectionColor = GetGlossySample(hit.uv, scaled_uv, estimatedRoughness);
+            reflectionColor = GetGlossySample(hit.uv, scaled_uv, estimatedRoughness, normal, pScale);
             // Calculate Fading
             float distFactor = saturate(1.0 - length(hit.viewPos - viewPos) / 10.0);
             float fadeRange = max(FadeDistance, 0.001);
@@ -1201,7 +1253,7 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
             float3 fbViewPos = viewPos + r.direction * adaptiveDist;
             float2 uvFb = saturate(ViewPosToUV(fbViewPos, pScale).xy);
 
-            reflectionColor = GetGlossySample(uvFb, scaled_uv, estimatedRoughness);
+            reflectionColor = GetGlossySample(uvFb, scaled_uv, estimatedRoughness, normal, pScale);
             float baseAlpha = smoothstep(0.0, 0.2, 1.0 - scaled_uv.y);
             float ghostKiller = smoothstep(0.0, 0.4, SurfaceGlossiness + (estimatedRoughness * 0.5));
             reflectionAlpha = baseAlpha * ghostKiller;
