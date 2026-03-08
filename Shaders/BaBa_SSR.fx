@@ -1,7 +1,7 @@
 /*----------------------------------------------|
 | :: Barbatos SSR (Screen-Space Reflections) :: |
 |-----------------------------------------------|
-| Version: 1.3.0                                |
+| Version: 1.3.1                                |
 | Author: Barbatos                              |
 | License: MIT                                  |
 '----------------------------------------------*/
@@ -987,7 +987,8 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         float4 history_reflection = GetLod(sHistoryParams, reprojected_view_uv);
         float history_depth = GetDepth(reprojected_view_uv);
         float vel_mag = length(velocity * float2(BUFFER_WIDTH, BUFFER_HEIGHT));
-        float depth_tolerance = EnableAntiSmear ? 0.05 : (0.05 + vel_mag * 0.015);
+        // Tighter depth rejection during motion — more motion = stricter disocclusion guard
+        float depth_tolerance = EnableAntiSmear ? 0.05 : max(0.01, 0.05 - vel_mag * 0.025);
         if (abs(history_depth - depth) > depth_tolerance) 
             return current_reflection;
 
@@ -1006,11 +1007,12 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         color_max = max(color_max, max(max(c1, c2), max(c3, c4)));
         float3 history_compressed = TAA_Compress(history_reflection.rgb);
 
-        float motion_sensitivity = EnableAntiSmear ? 3.0 : 0.1;
+        // AntiSmear
+        float motion_sensitivity = EnableAntiSmear ? 2 : 0.1;
         float static_factor = saturate(1.0 - vel_mag * motion_sensitivity);
-        // Expand the color box during motion to allow ghosting to smooth out noise
+
         float relax_amount = EnableAntiSmear ?
-            (0.25 * static_factor) : (0.3 + vel_mag * 0.1);
+            (0.08 + 0.14 * static_factor) : max(0.02, 0.14 - vel_mag * 0.16);
         color_min -= relax_amount;
         color_max += relax_amount;
         float3 clipped_history_rgb = ClipToAABB(color_min.rgb, color_max.rgb, history_compressed);
@@ -1020,14 +1022,14 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         float luma_diff = max(diff.r, max(diff.g, diff.b));
 
         float max_feedback = 1.0 - (1.0 / (float) max(1, MaxFrames));
-        float min_feedback = EnableAntiSmear ? 0.30 : 0.85;
+        float min_feedback = EnableAntiSmear ? 0.55 : 0.58;
         
-        float dynamic_feedback = lerp(max_feedback, min_feedback, saturate(luma_diff * 4.0));
-        float final_static_factor = EnableAntiSmear ? static_factor : lerp(0.8, 1.0, static_factor);
+        float dynamic_feedback = lerp(max_feedback, min_feedback, saturate(luma_diff * 7.0));
+        float final_static_factor = EnableAntiSmear ? static_factor : lerp(0.2, 1.0, static_factor);
         float final_feedback = lerp(dynamic_feedback, max_feedback, final_static_factor);
         
         float flowConfidence = MV_GetConfidence(viewUV);
-        float conf_multiplier = EnableAntiSmear ? pow(abs(flowConfidence), 2.0) : lerp(0.3, 1.0, flowConfidence);
+        float conf_multiplier = EnableAntiSmear ? pow(abs(flowConfidence), 1.4) : lerp(0.05, 1.0, flowConfidence);
         
         final_feedback *= conf_multiplier;
         final_feedback = clamp(final_feedback, 0.0, max_feedback);
