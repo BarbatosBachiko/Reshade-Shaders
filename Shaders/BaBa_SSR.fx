@@ -1,7 +1,7 @@
 /*----------------------------------------------|
 | :: Barbatos SSR (Screen-Space Reflections) :: |
 |-----------------------------------------------|
-| Version: 1.3.1                                |
+| Version: 1.3.5                                |
 | Author: Barbatos                              |
 | License: MIT                                  |
 '----------------------------------------------*/
@@ -63,11 +63,11 @@ uniform int RayTraceQuality <
     ui_category = "Reflections";
     ui_label = "Ray Tracing Quality";
     ui_tooltip = "Defines the amount of steps rays take to find intersections.\n"
-                 "Normal: 16 steps (Good performance)\n"
+                 "Normal: 12 steps (Good performance)\n"
                  "High: 32 steps (Better accuracy)\n"
                  "Extreme: 128 steps (Perfect accuracy, heavy performance impact)";
     ui_type = "combo";
-    ui_items = "Normal (16 steps)\0High (32 steps)\0Extreme (128 steps)\0";
+    ui_items = "Normal (12 steps)\0High (32 steps)\0Extreme (128 steps)\0";
 > = 0;
 
 uniform float RenderResolution <
@@ -336,7 +336,7 @@ uniform int FRAME_COUNT < source = "framecount"; >;
 // :: Textures :: |
 //----------------|
 
-namespace Barbatos_SSR130
+namespace Barbatos_SSR135
 {
     texture Normal
     {
@@ -830,10 +830,11 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         float netRoughness = saturate(SurfaceGlossiness + (local_roughness * RoughnessDetection));
         if (netRoughness <= 0.001)
             return tex2Dlod(sTexColorCopy, float4(sample_uv, 0, 0)).rgb;
-#if ENABLE_VNDF
-    return tex2Dlod(sTexColorCopy, float4(sample_uv, 0, 0)).rgb;
-#else
 
+#if ENABLE_VNDF
+        float mipLevel = netRoughness * 4.0; 
+        return tex2Dlod(sTexColorCopy, float4(sample_uv, 0, mipLevel)).rgb;
+#else
         float specularPower = pow(2.0, 10.0 * (1.0 - netRoughness) + 1.0);
         float coneTheta = specularPowerToConeAngle(specularPower) * 0.5;
     
@@ -852,14 +853,14 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         uint pixelIndex = uint(virtual_vpos.y * BUFFER_WIDTH + virtual_vpos.x);
         uint perFrameSeedBase = uint(FRAME_COUNT);
         float3 blueNoiseSeed = float3(
-        frac(pixelIndex * 0.1031),
-        frac(pixelIndex * 0.11369),
-        frac(pixelIndex * 0.13787)
-    );
+            frac(pixelIndex * 0.1031),
+            frac(pixelIndex * 0.11369),
+            frac(pixelIndex * 0.13787)
+        );
         float3 seq = float3(
-        float2(3242174889u * perFrameSeedBase, 2447445414u * perFrameSeedBase) / 4294967296.0,
-        float(2654435769u * perFrameSeedBase) / 4294967296.0
-    );
+            float2(3242174889u * perFrameSeedBase, 2447445414u * perFrameSeedBase) / 4294967296.0,
+            float(2654435769u * perFrameSeedBase) / 4294967296.0
+        );
         float3 rand = 2.0 * abs(frac(seq + blueNoiseSeed) - 0.5);
         float2 rand_noise = rand.xy;
 
@@ -868,6 +869,7 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         float sinRot = 0.0;
         float cosRot = 1.0;
         bool useAnisotropy = (Anisotropy > 0.01);
+
         if (useAnisotropy)
         {
             anisoScaleX = 1.0 + (Anisotropy * 15.0);
@@ -882,16 +884,13 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         }
 
         float2 offset = ConcentricSquareMapping(rand_noise);
-
         float2 bn_uv = virtual_vpos / 1024.0;
         float2 golden_offset = float2(0.61803398875, 0.73205080757) * fmod((float)FRAME_COUNT, 64.0);
         bn_uv += golden_offset;
-
         float blue_noise_val = tex2Dlod(sTexBlueNoise, float4(bn_uv, 0, 0)).r;
         float scrambleAngle = blue_noise_val * 6.283185307;
         float s_scram, c_scram;
         sincos(scrambleAngle, s_scram, c_scram);
-    
         float2 scrambledOffset;
         scrambledOffset.x = offset.x * c_scram - offset.y * s_scram;
         scrambledOffset.y = offset.x * s_scram + offset.y * c_scram;
@@ -941,99 +940,83 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         return (ma_unit > 1.0) ? (p_clip + v_clip / ma_unit) : history_sample;
     }
 
-   float4 ComputeDenoise(VS_OUTPUT input, sampler sHistoryParams)
+float4 ComputeDenoise(VS_OUTPUT input, sampler sHistoryParams)
+{
+    float2 viewUV = input.uv;
+    float depth = GetDepth(viewUV);
+    
+    if (depth >= 0.999)
+        return 0.0;
+
+    float2 lowres_uv = viewUV * RenderResolution;
+    float4 current_reflection = GetLod(sReflection, lowres_uv);
+
+    if (!EnableSmoothing)
+        return current_reflection;
+
+    float4 c_gbuffer = SampleGBuffer(viewUV);
+    float3 c_norm = c_gbuffer.rgb;
+    float c_depth = c_gbuffer.a;
+    float2 px = ReShade::PixelSize;
+
+    // SpatioTemporal Pre-filter
+    if (EnableSpatioTemporal)
     {
-        float2 viewUV = input.uv;
-        float depth = GetDepth(viewUV);
-        
-        if (depth >= 0.999)
-            return 0.0;
-        float2 lowres_uv = viewUV * RenderResolution;
-        float4 current_reflection = GetLod(sReflection, lowres_uv);
-        if (!EnableSmoothing)
-            return current_reflection;
+        float estimatedRoughness = GetLod(sTexColorCopy, viewUV).a;
+        float netRoughness = saturate(SurfaceGlossiness + (estimatedRoughness * RoughnessDetection));
+        float targetLOD = netRoughness * 5.0;
 
-        float4 c_gbuffer = SampleGBuffer(viewUV);
-        float3 c_norm = c_gbuffer.rgb;
-        float c_depth = c_gbuffer.a;
+        float4 lod_reflection = tex2Dlod(sReflection, float4(lowres_uv, 0, targetLOD));
+        float4 lod_gbuffer = tex2Dlod(sNormal, float4(viewUV, 0, targetLOD));
 
-        float2 px = ReShade::PixelSize;
-        if (EnableSpatioTemporal)
-        {
-            float estimatedRoughness = GetLod(sTexColorCopy, viewUV).a;
-            float netRoughness = saturate(SurfaceGlossiness + (estimatedRoughness * RoughnessDetection));
-        
-            float targetLOD = netRoughness * 5.0;
-            float4 lod_reflection = tex2Dlod(sReflection, float4(lowres_uv, 0, targetLOD));
-            float4 lod_gbuffer = tex2Dlod(sNormal, float4(viewUV, 0, targetLOD));
-            // Normal Sharpness
-            float3 nR = SampleGBuffer(viewUV + float2(px.x, 0.0)).rgb;
-            float3 nL = SampleGBuffer(viewUV + float2(-px.x, 0.0)).rgb;
-            float3 nD = SampleGBuffer(viewUV + float2(0.0, px.y)).rgb;
-            float3 nU = SampleGBuffer(viewUV + float2(0.0, -px.y)).rgb;
-            
-            float normal_sharpness = length(c_norm - nR) + length(c_norm - nL) + length(c_norm - nD) + length(c_norm - nU);
-            float edge_mask = saturate(1.0 - (normal_sharpness * 2.5));
-            float depth_mask = exp(-abs(c_depth - lod_gbuffer.a) * (10.0 / (c_depth + 0.1)));
-            current_reflection = lerp(current_reflection, lod_reflection, edge_mask * depth_mask);
-        }
-        
-        float3 current_compressed = TAA_Compress(current_reflection.rgb);
-        // TA
-        float2 velocity = MV_GetVelocity(viewUV);
-        float2 reprojected_view_uv = viewUV + velocity;
-        if (any(saturate(reprojected_view_uv) != reprojected_view_uv) || FRAME_COUNT <= 1)
-            return current_reflection;
-        float4 history_reflection = GetLod(sHistoryParams, reprojected_view_uv);
-        float history_depth = GetDepth(reprojected_view_uv);
-        float vel_mag = length(velocity * float2(BUFFER_WIDTH, BUFFER_HEIGHT));
-        // Tighter depth rejection during motion — more motion = stricter disocclusion guard
-        float depth_tolerance = EnableAntiSmear ?
-            0.05 : max(0.01, 0.05 - vel_mag * 0.025);
-        if (abs(history_depth - depth) > depth_tolerance) 
-            return current_reflection;
-        // Neigh MIN/MAX 
-        float4 color_min = float4(current_compressed, current_reflection.a);
-        float4 color_max = color_min;
-        float4 r1 = GetLod(sReflection, lowres_uv + float2( px.x, 0.0));
-        float4 r2 = GetLod(sReflection, lowres_uv + float2(-px.x, 0.0));
-        float4 r3 = GetLod(sReflection, lowres_uv + float2(0.0,  px.y));
-        float4 r4 = GetLod(sReflection, lowres_uv + float2(0.0, -px.y));
-        float4 c1 = float4(TAA_Compress(r1.rgb), r1.a);
-        float4 c2 = float4(TAA_Compress(r2.rgb), r2.a);
-        float4 c3 = float4(TAA_Compress(r3.rgb), r3.a);
-        float4 c4 = float4(TAA_Compress(r4.rgb), r4.a);
-        color_min = min(color_min, min(min(c1, c2), min(c3, c4)));
-        color_max = max(color_max, max(max(c1, c2), max(c3, c4)));
-        float3 history_compressed = TAA_Compress(history_reflection.rgb);
-        // AntiSmear
-        float motion_sensitivity = EnableAntiSmear ? 2 : 0.1;
-        float static_factor = saturate(1.0 - vel_mag * motion_sensitivity);
+        float3 nR = SampleGBuffer(viewUV + float2(px.x, 0.0)).rgb;
+        float3 nL = SampleGBuffer(viewUV + float2(-px.x, 0.0)).rgb;
+        float3 nD = SampleGBuffer(viewUV + float2(0.0, px.y)).rgb;
+        float3 nU = SampleGBuffer(viewUV + float2(0.0, -px.y)).rgb;
 
-        float relax_amount = EnableAntiSmear ?
-            (0.08 + 0.14 * static_factor) : max(0.02, 0.14 - vel_mag * 0.16);
-        color_min -= relax_amount;
-        color_max += relax_amount;
-        float3 clipped_history_rgb = ClipToAABB(color_min.rgb, color_max.rgb, history_compressed);
-        float clipped_history_a = clamp(history_reflection.a, color_min.a, color_max.a);
+        float normal_sharpness = length(c_norm - nR) + length(c_norm - nL) + length(c_norm - nD) + length(c_norm - nU);
+        float edge_mask = saturate(1.0 - (normal_sharpness * 2.5));
+        float depth_mask = exp(-abs(c_depth - lod_gbuffer.a) * (10.0 / (c_depth + 0.1)));
 
-        float3 diff = abs(current_compressed - clipped_history_rgb);
-        float luma_diff = max(diff.r, max(diff.g, diff.b));
-
-        float max_feedback = 1.0 - (1.0 / (float) max(1, MaxFrames));
-        float min_feedback = EnableAntiSmear ? 0.55 : 0.58;
-        
-        float dynamic_feedback = lerp(max_feedback, min_feedback, saturate(luma_diff * 7.0));
-        float final_static_factor = EnableAntiSmear ? static_factor : lerp(0.2, 1.0, static_factor);
-        float final_feedback = lerp(dynamic_feedback, max_feedback, final_static_factor);
-        
-        // TAA Flow Confidence
-        final_feedback = clamp(final_feedback, 0.0, max_feedback);
-        float3 result_compressed = lerp(current_compressed, clipped_history_rgb, final_feedback);
-        float result_alpha = lerp(current_reflection.a, clipped_history_a, final_feedback);
-
-        return float4(TAA_Resolve(result_compressed), result_alpha);
+        current_reflection = lerp(current_reflection, lod_reflection, edge_mask * depth_mask);
     }
+
+    float3 current_compressed = TAA_Compress(current_reflection.rgb);
+    float2 velocity = MV_GetVelocity(viewUV);
+    float2 reprojected_view_uv = viewUV + velocity;
+
+    // Depth Rejection
+    float reprojected_depth = GetDepth(reprojected_view_uv);
+    float depth_tolerance = 0.01 + (depth * 0.05); 
+
+    if (any(saturate(reprojected_view_uv) != reprojected_view_uv) || 
+        FRAME_COUNT <= 1 || 
+        abs(depth - reprojected_depth) > depth_tolerance)
+    {
+        return current_reflection; 
+    }
+
+    float4 history_reflection = GetLod(sHistoryParams, reprojected_view_uv);
+    float3 history_compressed = TAA_Compress(history_reflection.rgb);
+
+    float raw_confidence = MV_GetConfidence(viewUV);
+    float confidence = saturate(raw_confidence + log2(2.0 - raw_confidence) * 0.35);
+
+    // Luma Disocclusion
+    float3 diff = abs(current_compressed - history_compressed);
+    float luma_diff = max(diff.r, max(diff.g, diff.b));
+    
+    float max_feedback = 1.0 - (1.0 / (float) max(1, MaxFrames));
+    float blendVal = confidence * max_feedback;
+
+    float penalty = EnableAntiSmear ? 4.0 : 2.0;
+    blendVal *= saturate(1.0 - (luma_diff * penalty));
+
+    float3 result_compressed = lerp(current_compressed, history_compressed, blendVal);
+    float result_alpha = lerp(current_reflection.a, history_reflection.a, blendVal);
+
+    return float4(TAA_Resolve(result_compressed), result_alpha);
+}
 
     //--------------------|
     // :: Pixel Shaders ::|
@@ -1205,7 +1188,7 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         }
 
         // Quality 
-        int ray_steps = 16;
+        int ray_steps = 12;
         float max_dist = 4.0;
         
         if (RayTraceQuality == 1)
