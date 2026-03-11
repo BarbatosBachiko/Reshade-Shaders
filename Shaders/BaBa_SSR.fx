@@ -941,7 +941,7 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         return (ma_unit > 1.0) ? (p_clip + v_clip / ma_unit) : history_sample;
     }
 
-    float4 ComputeDenoise(VS_OUTPUT input, sampler sHistoryParams)
+   float4 ComputeDenoise(VS_OUTPUT input, sampler sHistoryParams)
     {
         float2 viewUV = input.uv;
         float depth = GetDepth(viewUV);
@@ -988,10 +988,10 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         float history_depth = GetDepth(reprojected_view_uv);
         float vel_mag = length(velocity * float2(BUFFER_WIDTH, BUFFER_HEIGHT));
         // Tighter depth rejection during motion — more motion = stricter disocclusion guard
-        float depth_tolerance = EnableAntiSmear ? 0.05 : max(0.01, 0.05 - vel_mag * 0.025);
+        float depth_tolerance = EnableAntiSmear ?
+            0.05 : max(0.01, 0.05 - vel_mag * 0.025);
         if (abs(history_depth - depth) > depth_tolerance) 
             return current_reflection;
-
         // Neigh MIN/MAX 
         float4 color_min = float4(current_compressed, current_reflection.a);
         float4 color_max = color_min;
@@ -1006,7 +1006,6 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         color_min = min(color_min, min(min(c1, c2), min(c3, c4)));
         color_max = max(color_max, max(max(c1, c2), max(c3, c4)));
         float3 history_compressed = TAA_Compress(history_reflection.rgb);
-
         // AntiSmear
         float motion_sensitivity = EnableAntiSmear ? 2 : 0.1;
         float static_factor = saturate(1.0 - vel_mag * motion_sensitivity);
@@ -1028,10 +1027,7 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         float final_static_factor = EnableAntiSmear ? static_factor : lerp(0.2, 1.0, static_factor);
         float final_feedback = lerp(dynamic_feedback, max_feedback, final_static_factor);
         
-        float flowConfidence = MV_GetConfidence(viewUV);
-        float conf_multiplier = EnableAntiSmear ? pow(abs(flowConfidence), 1.4) : lerp(0.05, 1.0, flowConfidence);
-        
-        final_feedback *= conf_multiplier;
+        // TAA Flow Confidence
         final_feedback = clamp(final_feedback, 0.0, max_feedback);
         float3 result_compressed = lerp(current_compressed, clipped_history_rgb, final_feedback);
         float result_alpha = lerp(current_reflection.a, clipped_history_a, final_feedback);
