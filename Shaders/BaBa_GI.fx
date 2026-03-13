@@ -1,7 +1,7 @@
 /*----------------------------------------------|
 | ::              Barbatos GI                :: |
 |-----------------------------------------------|
-| Version: 1.1                                  |
+| Version: 1.1.5                                |
 | Author: Barbatos                              |
 | License: MIT                                  |
 '----------------------------------------------*/
@@ -274,7 +274,7 @@ uniform float TIMER < source = "timer"; >;
 #define BUFFER_COLOR_SPACE 0
 #endif
 
-namespace Barbatos_GI_100
+namespace Barbatos_GI_115
 {
     texture Normal
     {
@@ -868,11 +868,19 @@ namespace Barbatos_GI_100
                 bool validHit = Manual_Sun_Enabled ? true : (dot(rayDir, hitNormal) < 0.1);
                 if (validHit)
                 {
-                    float3 rawAlbedo = tex2Dlod(sTexColorCopy, float4(hitUV, 0, 3.0)).rgb;
+                  float3 rawAlbedo = tex2Dlod(sTexColorCopy, float4(hitUV, 0, 3.0)).rgb;
+                    float3 linearAlbedo = Input2Linear(rawAlbedo);
+                    
+                    // Boost bounce energy 
+                    float albedoLuma = GetLuminance(linearAlbedo);
+                    float3 chroma = linearAlbedo - albedoLuma;
+                    linearAlbedo = saturate(albedoLuma + chroma * 1.5); 
+                    linearAlbedo *= 1.5;
+
                     if (!Manual_Sun_Enabled)
-                        totalRadiance += Input2Linear(rawAlbedo);
+                        totalRadiance += linearAlbedo;
                     else
-                        totalRadiance += Input2Linear(rawAlbedo) * Sun_Shadow_Fill;
+                        totalRadiance += linearAlbedo * Sun_Shadow_Fill;
                 }
         
                 float distFactor = saturate(hitDist / max(0.001, AO_Radius));
@@ -1294,17 +1302,18 @@ namespace Barbatos_GI_100
             finalAO = lerp(1.0, finalAO, fade);
             float3 occludedScene = scene * finalAO;
             float3 bouncedLight = processedGI * Intensity * depthWeight * fade;
-            //Split Toning
-            float sceneLuma = GetLuminance(scene);
-            float luma_normalized = saturate(sceneLuma / (paper_white_norm * 3.0));
+          // Split Toning
+        float sceneLuma = GetLuminance(scene);
+        float luma_normalized = saturate(sceneLuma / (paper_white_norm * 3.0));
 
-            float shadowCurve = 1.0 - smoothstep(GI_Split_Balance - 0.2, GI_Split_Balance + 0.2, luma_normalized);
-            float highlightCurve = smoothstep(GI_Split_Balance - 0.2, GI_Split_Balance + 0.2, luma_normalized);
+        float shadowCurve = 1.0 - smoothstep(GI_Split_Balance - 0.2, GI_Split_Balance + 0.2, luma_normalized);
+        float highlightCurve = smoothstep(GI_Split_Balance - 0.2, GI_Split_Balance + 0.2, luma_normalized);
+        float3 surfaceIntegration = lerp(float3(1.0, 1.0, 1.0), max(scene, 0.05), GI_Color_Bleed);
+        
+        float3 shadowLight = bouncedLight * surfaceIntegration * shadowCurve * GI_Shadow_Tint;
+        float3 litLight = bouncedLight * surfaceIntegration * highlightCurve * GI_Highlight_Tint;
 
-            float3 shadowIntegration = (lerp(1.0, scene, GI_Color_Bleed) + 0.02);
-            float3 shadowLight = bouncedLight * shadowIntegration * shadowCurve * GI_Shadow_Tint;
-            float3 litLight = bouncedLight * scene * highlightCurve * GI_Highlight_Tint;
-            finalColor = occludedScene + shadowLight + litLight;
+        finalColor = occludedScene + shadowLight + litLight;
         }
 
         // Widget Overlay
