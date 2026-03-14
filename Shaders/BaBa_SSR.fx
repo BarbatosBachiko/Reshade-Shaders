@@ -1,10 +1,10 @@
 /*----------------------------------------------|
 | :: Barbatos SSR (Screen-Space Reflections) :: |
 |-----------------------------------------------|
-| Version: 1.3.6                                |
+| Version: 1.4.0                                |
 | Author: Barbatos                              |
 | License: MIT                                  |
-'----------------------------------------------*/
+|----------------------------------------------*/
 
 #include "ReShade.fxh"
 #include "ReShadeUI.fxh"
@@ -15,7 +15,6 @@
 //----------|
 // :: UI :: |
 //----------|
-
 //Reflections
 uniform float Intensity <
     ui_category = "Reflections";
@@ -69,6 +68,12 @@ uniform int RayTraceQuality <
     ui_type = "combo";
     ui_items = "Normal (12 steps)\0High (32 steps)\0Extreme (128 steps)\0";
 > = 0;
+
+uniform bool EnableRayJitter <
+    ui_category = "Reflections";
+    ui_label = "Enable Ray Jitter";
+    ui_tooltip = "Applies noise to the ray marching steps to trade banding artifacts for noise (which is then smoothed by the denoiser).";
+> = true;
 
 uniform float RenderResolution <
     ui_category = "Reflections";
@@ -298,7 +303,8 @@ uniform float DebugGeometryOverlay <
     ui_label = "Debug Geometry Overlay";
     ui_tooltip = "Draws geometry outlines over the debug views to provide spatial context.";
     ui_type = "drag";
-    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+    ui_min = 0.0;
+    ui_max = 1.0; ui_step = 0.01;
 > = 0.8;
 
 uniform float DebugGeometrySensitivity <
@@ -318,7 +324,7 @@ uniform float DebugGeometrySensitivity <
 #endif
 
 #ifndef ENABLE_RAY_FALLBACK
-#define ENABLE_RAY_FALLBACK 1
+#define ENABLE_RAY_FALLBACK 0
 #endif
 
 // Defines & Constants
@@ -343,7 +349,7 @@ uniform int FRAME_COUNT < source = "framecount"; >;
 // :: Textures :: |
 //----------------|
 
-namespace Barbatos_SSR136
+namespace Barbatos_SSR140
 {
     texture Normal
     {
@@ -543,6 +549,7 @@ namespace Barbatos_SSR136
             float2(-0.250000,  0.166667),
             float2( 0.250000, -0.388889),
             float2(-0.375000, -0.055556),
+        
             float2( 0.125000,  0.277778),
             float2(-0.125000, -0.277778),
             float2( 0.375000,  0.055556),
@@ -550,13 +557,13 @@ namespace Barbatos_SSR136
             float2( 0.062500, -0.462963),
             float2(-0.187500, -0.129630),
             float2( 0.312500,  0.203704),
-            float2(-0.312500, -0.351852),
+         
+           float2(-0.312500, -0.351852),
             float2( 0.187500, -0.018519),
             float2(-0.062500,  0.314815),
             float2( 0.437500, -0.240741),
             float2(-0.468750,  0.092593)
         };
-
         int frame = FRAME_COUNT % 16;
         return TAA_Jitter[frame];
     }
@@ -596,7 +603,6 @@ namespace Barbatos_SSR136
         float3 pos_r2 = GetViewPosForNormal(uv + float2( 2.0*offset.x, 0.0), pScale);
         float3 pos_u2 = GetViewPosForNormal(uv + float2( 0.0, -2.0*offset.y),pScale);
         float3 pos_d2 = GetViewPosForNormal(uv + float2( 0.0,  2.0*offset.y),pScale);
-
         float3 dl  = pos_c - pos_l;
         float3 dr  = pos_r - pos_c;
         float3 du  = pos_c - pos_u;
@@ -856,10 +862,10 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         float netRoughness = saturate(SurfaceGlossiness + (local_roughness * RoughnessDetection));
         if (netRoughness <= 0.001)
             return tex2Dlod(sTexColorCopy, float4(sample_uv, 0, 0)).rgb;
-#if ENABLE_VNDF
+        #if ENABLE_VNDF
         float mipLevel = netRoughness * 4.0; 
         return tex2Dlod(sTexColorCopy, float4(sample_uv, 0, mipLevel)).rgb;
-#else
+        #else
         float specularPower = pow(2.0, 10.0 * (1.0 - netRoughness) + 1.0);
         float coneTheta = specularPowerToConeAngle(specularPower) * 0.5;
     
@@ -931,7 +937,7 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         }
 
         return tex2Dlod(sTexColorCopy, float4(sample_uv + offset * blurRadiusUV, 0, mipLevel)).rgb;
-#endif
+        #endif
     }
     
     //------------|
@@ -950,7 +956,7 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
     float4 GetActiveHistory(float2 uv)
     {
         return (fmod((float) FRAME_COUNT, 2.0) < 0.5) ?
-            GetLod(sHistory0, uv) : GetLod(sHistory1, uv);
+        GetLod(sHistory0, uv) : GetLod(sHistory1, uv);
     }
 
     float4 ClipToAABB(float4 aabb_min, float4 aabb_max, float4 history_sample)
@@ -970,20 +976,15 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         float depth = GetDepth(viewUV);
         if (depth >= 0.999)
             return 0.0;
-
         float2 lowres_uv = viewUV * RenderResolution;
         float4 current_reflection = GetLod(sReflection, lowres_uv);
-
         if (!EnableSmoothing)
             return current_reflection;
 
         float4 current_compressed = TAA_Compress(current_reflection);
-
-        // RGBA NEIGHBORHOOD VARIANCE CLIPPING
         float4 m1 = 0.0;
         float4 m2 = 0.0;
         float2 lowres_px = ReShade::PixelSize / max(RenderResolution, 0.3);
-
         [unroll]
         for (int y = -1; y <= 1; y++)
         {
@@ -998,7 +999,6 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
             }
         }
         
-        // Calculate Mean and Spatial Standard Deviation for Color (RGB) and Mask (A)
         m1 /= 9.0;
         m2 /= 9.0;
         float4 std_dev = sqrt(abs(m2 - m1 * m1));
@@ -1006,15 +1006,14 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         float2 velocity = MV_GetVelocity(viewUV);
         float motion_factor = saturate(length(velocity) * 100.0);
         
-        float gamma = lerp(4.0, 1.0, saturate(motion_factor * 2.0));
+        float gamma = EnableAntiSmear ? lerp(3.0, 1.5, saturate(motion_factor * 2.0)) : 3.0;
         float4 aabb_min = m1 - std_dev * gamma;
         float4 aabb_max = m1 + std_dev * gamma;
-
         float2 reprojected_view_uv = viewUV + velocity;
 
         // Depth Rejection
         float reprojected_depth = GetDepth(reprojected_view_uv);
-        float depth_tolerance = 0.01 + (depth * 0.05); 
+        float depth_tolerance = 0.02 + (depth * 0.1); 
 
         if (any(saturate(reprojected_view_uv) != reprojected_view_uv) || 
             FRAME_COUNT <= 1 || 
@@ -1025,28 +1024,16 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
 
         float4 history_reflection = GetLod(sHistoryParams, reprojected_view_uv);
         float4 history_compressed = TAA_Compress(history_reflection);
-
         // Variance clipping in 4D bounds 
         float4 clipped_history = ClipToAABB(aabb_min, aabb_max, history_compressed);
-        float clip_weight = lerp(0.1, 1.0, saturate(motion_factor * 5.0));
+        float clip_weight = EnableAntiSmear ? lerp(0.2, 0.85, saturate(motion_factor * 3.0)) : 0.15;
         history_compressed = lerp(history_compressed, clipped_history, clip_weight);
-
         float confidence = saturate(MV_GetConfidence(viewUV));
-
-        // Luma Disocclusion 
-        float3 diff = abs(current_compressed.rgb - history_compressed.rgb);
-        float max_diff = max(diff.r, max(diff.g, diff.b));
-        float max_dev = max(std_dev.r, max(std_dev.g, std_dev.b));
-        float luma_diff = max(0.0, max_diff - (max_dev * 2.0));
-
         float max_feedback = 1.0 - (1.0 / (float) max(1, MaxFrames));
-        float penalty = EnableAntiSmear ? 2.0 : 0.5;
-        penalty *= lerp(0.0, 1.0, saturate(motion_factor * 5.0));
-        float luma_factor = saturate(1.0 - (luma_diff * penalty));
-
-        float blendVal = max_feedback * confidence * luma_factor;
+        float motion_penalty = EnableAntiSmear ?
+        lerp(1.0, 0.4, saturate(motion_factor * 2.0)) : 1.0;
+        float blendVal = max_feedback * confidence * motion_penalty;
         float4 result_compressed = lerp(current_compressed, history_compressed, blendVal);
-        
         return TAA_Resolve(result_compressed);
     }
     
@@ -1056,7 +1043,7 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
     void PS_CopyColor(VS_OUTPUT input, out float4 outColor : SV_Target)
     {
         float localRoughness = (RoughnessDetection > 0.0) ?
-            GetLocalRoughness(input.uv) : 0.0;
+        GetLocalRoughness(input.uv) : 0.0;
         outColor = float4(GetColor(input.uv).rgb, localRoughness);
     }
     
@@ -1146,7 +1133,6 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         float2 pScale = input.pScale;
         float3 normal = normalize(gbuffer.rgb);
         float3 viewPos = UVToViewPos(scaled_uv, depth, pScale);
-        
         // Sub-Pixel TAAU Jitter: Perturb the view position infinitesimally
         float3 jittered_viewPos = viewPos;
         if (EnableTAAUpscaling)
@@ -1173,7 +1159,6 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
             orientationIntensity = 1.0;
         else if (abs(normal.y) <= OrientationThreshold && showWall)
             orientationIntensity = 1.0;
-        
         if (orientationIntensity <= 0.0)
         {
             outReflection = 0.0;
@@ -1184,7 +1169,13 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         float frame = fmod((float)FRAME_COUNT, 64.0);
         float4 bn = tex2Dlod(sTexBlueNoise, float4(bn_uv, 0, 0));
         
-        float ray_jitter = frac(bn.b + 0.51248584407 * frame);
+        // Ray Jitter 
+        float ray_jitter = 0.0;
+        if (EnableRayJitter)
+        {
+            ray_jitter = frac(bn.b + 0.51248584407 * frame);
+        }
+
         Ray r;
         r.origin = viewPos;
 
@@ -1204,7 +1195,7 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         r.direction = normalize(reflectDir);
 #else
         r.direction = normalize(reflect(-viewDir, normal));
-#endif
+        #endif
 
         float bias = 0.0005 + (depth * 0.02);
         r.origin += r.direction * bias;
@@ -1267,7 +1258,7 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
 
             reflectionColor = GetGlossySample(uvFb, scaled_uv, estimatedRoughness, normal, pScale);
             float baseAlpha = smoothstep(0.0, 0.2, 1.0 - scaled_uv.y);
-            reflectionAlpha = baseAlpha	;
+            reflectionAlpha = baseAlpha ;
         }
 #endif
         
@@ -1295,7 +1286,6 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         if (ViewMode != 0)
         {
             float3 debugColor = 0.0;
-
             if (ViewMode == 1)
             {
                 debugColor = Linear2Output(GetActiveHistory(input.uv).rgb);
@@ -1332,11 +1322,9 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
             if (DebugGeometryOverlay > 0.0)
             {
                 float2 px = ReShade::PixelSize;
-                
                 float dC = GetDepth(input.uv);
                 float dR = GetDepth(input.uv + float2(px.x, 0.0));
                 float dD = GetDepth(input.uv + float2(0.0, px.y));
-                
                 float3 nC = CalculateNormal(input.uv, input.pScale);
                 float3 nR = CalculateNormal(input.uv + float2(px.x, 0.0), input.pScale);
                 float3 nD = CalculateNormal(input.uv + float2(0.0, px.y), input.pScale);
@@ -1349,10 +1337,8 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
 
                 float depth_edge = smoothstep(0.0, depth_threshold, depth_diff);
                 float norm_edge = smoothstep(0.0, norm_threshold, norm_diff);
-
                 float final_edge = max(depth_edge, norm_edge);
                 if (dC >= 0.999) final_edge = 0.0;
-
                 debugColor = lerp(debugColor, float3(0.0, 0.0, 0.0), final_edge * DebugGeometryOverlay);
             }
 
@@ -1375,10 +1361,8 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         float4 reflectionSample = GetActiveHistory(input.uv);
         float3 reflectionColor = reflectionSample.rgb;
         float reflectionMask = reflectionSample.a;
-        
         float estimatedRoughness_out = GetLod(sTexColorCopy, input.uv).a;
         float netRoughness_out = saturate(SurfaceGlossiness + (estimatedRoughness_out * RoughnessDetection));
-        
         // Color Grading
         float3 tint = Use_Color_Temperature ?
             KelvinToRGB(Color_Temperature) : SSR_Tint;
@@ -1386,7 +1370,6 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         
         float paper_white_norm = 80.0 / HDR_Peak_Nits;
         float mid_gray = paper_white_norm * 0.18;
-        
         // Contrast
         reflectionColor = (reflectionColor - mid_gray) * SSR_Contrast + mid_gray;
         reflectionColor = max(0.0, reflectionColor);
@@ -1395,22 +1378,18 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         float reflLum = GetLuminance(reflectionColor);
         float3 chroma = reflectionColor - reflLum;
         reflectionColor = reflLum + chroma * (SSR_Vibrance);
-        
         float luma_normalized = saturate(reflLum / (paper_white_norm * 3.0));
         float shadowCurve = 1.0 - smoothstep(SSR_Split_Balance - 0.2, SSR_Split_Balance + 0.2, luma_normalized);
         float highlightCurve = smoothstep(SSR_Split_Balance - 0.2, SSR_Split_Balance + 0.2, luma_normalized);
-        
         // Split Tint
         float3 splitTint = shadowCurve * SSR_Shadow_Tint + highlightCurve * SSR_Highlight_Tint;
         reflectionColor = reflectionColor * splitTint;
         float splitTintAlpha = max(splitTint.r, max(splitTint.g, splitTint.b));
         reflectionMask *= saturate(splitTintAlpha);
-        
         //Scene Highlight Preservation
         float sceneLuma = GetLuminance(scene);
         float highlightProtectionMask = smoothstep(paper_white_norm, paper_white_norm * 4.0, sceneLuma);
         reflectionMask *= saturate(1.0 - (highlightProtectionMask * Preserve_Scene_Highlights));
-        
         // PBR & Blending
         float3 viewDir = -normalize(UVToViewPos(input.uv, depth, input.pScale));
         float VdotN = saturate(dot(viewDir, normal));
@@ -1418,8 +1397,7 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         float3 F = F_Schlick(VdotN, f0);
 
         float3 finalColor;
-        
-     if (BlendMode == 0) // Default PBR 
+        if (BlendMode == 0) // Default PBR 
         {
             float roughBias = netRoughness_out * netRoughness_out;
             float3 F_adjusted = lerp(F, float3(1.0, 1.0, 1.0), roughBias);
