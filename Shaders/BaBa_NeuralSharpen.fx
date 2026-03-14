@@ -8,12 +8,12 @@
 |----------------------------------------------*/
 
 #include "ReShade.fxh"
-#include "Barbatos_SWeights.fxh" 
+#include "BaBa_Model_A.fxh" 
+#include "BaBa_Model_B.fxh" 
 
 //----------|
 // :: UI :: |
 //----------|
-
 uniform int ModelType <
     ui_type = "combo";
     ui_items = "Model A\0Model B\0";
@@ -49,7 +49,7 @@ uniform int ViewMode <
 //----------------|
 // :: Textures :: |
 //----------------|
-namespace Barbatos_NS
+namespace Barbatos_NS120
 {
     texture TexLuma
     {
@@ -94,11 +94,10 @@ namespace Barbatos_NS
     float RunNet_A(float2 uv)
     {
         const float2 pixel = ReShade::PixelSize;
-        
         // LAYER 1: 3x3 Conv
-        float4 L1_0 = BarbatosSWeights::ModelA::Local_B[0];
-        float4 L1_1 = BarbatosSWeights::ModelA::Local_B[1];
-        float4 L1_2 = BarbatosSWeights::ModelA::Local_B[2];
+        float4 L1_0 = ModelA::Local_B[0];
+        float4 L1_1 = ModelA::Local_B[1];
+        float4 L1_2 = ModelA::Local_B[2];
 
         int w_idx = 0;
         [unroll]
@@ -108,76 +107,76 @@ namespace Barbatos_NS
             for (int x = -1; x <= 1; x++)
             {
                 const float val = tex2D(sTexLuma, uv + float2(x, y) * pixel).r;
-                L1_0 += val * BarbatosSWeights::ModelA::Local_W[w_idx];
-                L1_1 += val * BarbatosSWeights::ModelA::Local_W[w_idx + 1];
-                L1_2 += val * BarbatosSWeights::ModelA::Local_W[w_idx + 2];
+                L1_0 += val * ModelA::Local_W[w_idx];
+                L1_1 += val * ModelA::Local_W[w_idx + 1];
+                L1_2 += val * ModelA::Local_W[w_idx + 2];
                 w_idx += 3;
             }
         }
         
         // PReLU 1
-        L1_0 = max(0, L1_0) + min(0, L1_0) * BarbatosSWeights::ModelA::Local_A[0];
-        L1_1 = max(0, L1_1) + min(0, L1_1) * BarbatosSWeights::ModelA::Local_A[1];
-        L1_2 = max(0, L1_2) + min(0, L1_2) * BarbatosSWeights::ModelA::Local_A[2];
-        
+        L1_0 = max(0, L1_0) + min(0, L1_0) * ModelA::Local_A[0];
+        L1_1 = max(0, L1_1) + min(0, L1_1) * ModelA::Local_A[1];
+        L1_2 = max(0, L1_2) + min(0, L1_2) * ModelA::Local_A[2];
+
         // LAYER 2: 1x1 Dense
-        float4 L2_0 = BarbatosSWeights::ModelA::Mix_B[0];
-        float4 L2_1 = BarbatosSWeights::ModelA::Mix_B[1];
-        float4 L2_2 = BarbatosSWeights::ModelA::Mix_B[2];
+        float4 L2_0 = ModelA::Mix_B[0];
+        float4 L2_1 = ModelA::Mix_B[1];
+        float4 L2_2 = ModelA::Mix_B[2];
         
         int m_idx = 0;
         // Group 0
-        L2_0.x += dot(L1_0, BarbatosSWeights::ModelA::Mix_W[m_idx++]);
-        L2_0.y += dot(L1_0, BarbatosSWeights::ModelA::Mix_W[m_idx++]);
-        L2_0.z += dot(L1_0, BarbatosSWeights::ModelA::Mix_W[m_idx++]);
-        L2_0.w += dot(L1_0, BarbatosSWeights::ModelA::Mix_W[m_idx++]);
-        L2_0.x += dot(L1_1, BarbatosSWeights::ModelA::Mix_W[m_idx++]);
-        L2_0.y += dot(L1_1, BarbatosSWeights::ModelA::Mix_W[m_idx++]);
-        L2_0.z += dot(L1_1, BarbatosSWeights::ModelA::Mix_W[m_idx++]);
-        L2_0.w += dot(L1_1, BarbatosSWeights::ModelA::Mix_W[m_idx++]);
-        L2_0.x += dot(L1_2, BarbatosSWeights::ModelA::Mix_W[m_idx++]);
-        L2_0.y += dot(L1_2, BarbatosSWeights::ModelA::Mix_W[m_idx++]);
-        L2_0.z += dot(L1_2, BarbatosSWeights::ModelA::Mix_W[m_idx++]);
-        L2_0.w += dot(L1_2, BarbatosSWeights::ModelA::Mix_W[m_idx++]);
+        L2_0.x += dot(L1_0, ModelA::Mix_W[m_idx++]);
+        L2_0.y += dot(L1_0, ModelA::Mix_W[m_idx++]);
+        L2_0.z += dot(L1_0, ModelA::Mix_W[m_idx++]);
+        L2_0.w += dot(L1_0, ModelA::Mix_W[m_idx++]);
+        L2_0.x += dot(L1_1, ModelA::Mix_W[m_idx++]);
+        L2_0.y += dot(L1_1, ModelA::Mix_W[m_idx++]);
+        L2_0.z += dot(L1_1, ModelA::Mix_W[m_idx++]);
+        L2_0.w += dot(L1_1, ModelA::Mix_W[m_idx++]);
+        L2_0.x += dot(L1_2, ModelA::Mix_W[m_idx++]);
+        L2_0.y += dot(L1_2, ModelA::Mix_W[m_idx++]);
+        L2_0.z += dot(L1_2, ModelA::Mix_W[m_idx++]);
+        L2_0.w += dot(L1_2, ModelA::Mix_W[m_idx++]);
         
         // Group 1
-        L2_1.x += dot(L1_0, BarbatosSWeights::ModelA::Mix_W[m_idx++]);
-        L2_1.y += dot(L1_0, BarbatosSWeights::ModelA::Mix_W[m_idx++]);
-        L2_1.z += dot(L1_0, BarbatosSWeights::ModelA::Mix_W[m_idx++]);
-        L2_1.w += dot(L1_0, BarbatosSWeights::ModelA::Mix_W[m_idx++]);
-        L2_1.x += dot(L1_1, BarbatosSWeights::ModelA::Mix_W[m_idx++]);
-        L2_1.y += dot(L1_1, BarbatosSWeights::ModelA::Mix_W[m_idx++]);
-        L2_1.z += dot(L1_1, BarbatosSWeights::ModelA::Mix_W[m_idx++]);
-        L2_1.w += dot(L1_1, BarbatosSWeights::ModelA::Mix_W[m_idx++]);
-        L2_1.x += dot(L1_2, BarbatosSWeights::ModelA::Mix_W[m_idx++]);
-        L2_1.y += dot(L1_2, BarbatosSWeights::ModelA::Mix_W[m_idx++]);
-        L2_1.z += dot(L1_2, BarbatosSWeights::ModelA::Mix_W[m_idx++]);
-        L2_1.w += dot(L1_2, BarbatosSWeights::ModelA::Mix_W[m_idx++]);
+        L2_1.x += dot(L1_0, ModelA::Mix_W[m_idx++]);
+        L2_1.y += dot(L1_0, ModelA::Mix_W[m_idx++]);
+        L2_1.z += dot(L1_0, ModelA::Mix_W[m_idx++]);
+        L2_1.w += dot(L1_0, ModelA::Mix_W[m_idx++]);
+        L2_1.x += dot(L1_1, ModelA::Mix_W[m_idx++]);
+        L2_1.y += dot(L1_1, ModelA::Mix_W[m_idx++]);
+        L2_1.z += dot(L1_1, ModelA::Mix_W[m_idx++]);
+        L2_1.w += dot(L1_1, ModelA::Mix_W[m_idx++]);
+        L2_1.x += dot(L1_2, ModelA::Mix_W[m_idx++]);
+        L2_1.y += dot(L1_2, ModelA::Mix_W[m_idx++]);
+        L2_1.z += dot(L1_2, ModelA::Mix_W[m_idx++]);
+        L2_1.w += dot(L1_2, ModelA::Mix_W[m_idx++]);
 
         // Group 2
-        L2_2.x += dot(L1_0, BarbatosSWeights::ModelA::Mix_W[m_idx++]);
-        L2_2.y += dot(L1_0, BarbatosSWeights::ModelA::Mix_W[m_idx++]);
-        L2_2.z += dot(L1_0, BarbatosSWeights::ModelA::Mix_W[m_idx++]);
-        L2_2.w += dot(L1_0, BarbatosSWeights::ModelA::Mix_W[m_idx++]);
-        L2_2.x += dot(L1_1, BarbatosSWeights::ModelA::Mix_W[m_idx++]);
-        L2_2.y += dot(L1_1, BarbatosSWeights::ModelA::Mix_W[m_idx++]);
-        L2_2.z += dot(L1_1, BarbatosSWeights::ModelA::Mix_W[m_idx++]);
-        L2_2.w += dot(L1_1, BarbatosSWeights::ModelA::Mix_W[m_idx++]);
-        L2_2.x += dot(L1_2, BarbatosSWeights::ModelA::Mix_W[m_idx++]);
-        L2_2.y += dot(L1_2, BarbatosSWeights::ModelA::Mix_W[m_idx++]);
-        L2_2.z += dot(L1_2, BarbatosSWeights::ModelA::Mix_W[m_idx++]);
-        L2_2.w += dot(L1_2, BarbatosSWeights::ModelA::Mix_W[m_idx++]);
+        L2_2.x += dot(L1_0, ModelA::Mix_W[m_idx++]);
+        L2_2.y += dot(L1_0, ModelA::Mix_W[m_idx++]);
+        L2_2.z += dot(L1_0, ModelA::Mix_W[m_idx++]);
+        L2_2.w += dot(L1_0, ModelA::Mix_W[m_idx++]);
+        L2_2.x += dot(L1_1, ModelA::Mix_W[m_idx++]);
+        L2_2.y += dot(L1_1, ModelA::Mix_W[m_idx++]);
+        L2_2.z += dot(L1_1, ModelA::Mix_W[m_idx++]);
+        L2_2.w += dot(L1_1, ModelA::Mix_W[m_idx++]);
+        L2_2.x += dot(L1_2, ModelA::Mix_W[m_idx++]);
+        L2_2.y += dot(L1_2, ModelA::Mix_W[m_idx++]);
+        L2_2.z += dot(L1_2, ModelA::Mix_W[m_idx++]);
+        L2_2.w += dot(L1_2, ModelA::Mix_W[m_idx++]);
 
         // PReLU 2
-        L2_0 = max(0, L2_0) + min(0, L2_0) * BarbatosSWeights::ModelA::Mix_A[0];
-        L2_1 = max(0, L2_1) + min(0, L2_1) * BarbatosSWeights::ModelA::Mix_A[1];
-        L2_2 = max(0, L2_2) + min(0, L2_2) * BarbatosSWeights::ModelA::Mix_A[2];
-        
+        L2_0 = max(0, L2_0) + min(0, L2_0) * ModelA::Mix_A[0];
+        L2_1 = max(0, L2_1) + min(0, L2_1) * ModelA::Mix_A[1];
+        L2_2 = max(0, L2_2) + min(0, L2_2) * ModelA::Mix_A[2];
+
         // LAYER 3: Output
-        float res = BarbatosSWeights::ModelA::Out_Bias;
-        res += dot(L2_0, BarbatosSWeights::ModelA::Out_W[0]);
-        res += dot(L2_1, BarbatosSWeights::ModelA::Out_W[1]);
-        res += dot(L2_2, BarbatosSWeights::ModelA::Out_W[2]);
+        float res = ModelA::Out_Bias;
+        res += dot(L2_0, ModelA::Out_W[0]);
+        res += dot(L2_1, ModelA::Out_W[1]);
+        res += dot(L2_2, ModelA::Out_W[2]);
 
         return tanh(res);
     }
@@ -185,11 +184,10 @@ namespace Barbatos_NS
     float RunNet_B(float2 uv)
     {
         const float2 pixel = ReShade::PixelSize;
-        
         // LAYER 1
-        float4 L1_0 = BarbatosSWeights::ModelB::Local_B[0];
-        float4 L1_1 = BarbatosSWeights::ModelB::Local_B[1];
-        float4 L1_2 = BarbatosSWeights::ModelB::Local_B[2];
+        float4 L1_0 = ModelB::Local_B[0];
+        float4 L1_1 = ModelB::Local_B[1];
+        float4 L1_2 = ModelB::Local_B[2];
 
         int w_idx = 0;
         [unroll]
@@ -199,76 +197,76 @@ namespace Barbatos_NS
             for (int x = -1; x <= 1; x++)
             {
                 const float val = tex2D(sTexLuma, uv + float2(x, y) * pixel).r;
-                L1_0 += val * BarbatosSWeights::ModelB::Local_W[w_idx];
-                L1_1 += val * BarbatosSWeights::ModelB::Local_W[w_idx + 1];
-                L1_2 += val * BarbatosSWeights::ModelB::Local_W[w_idx + 2];
+                L1_0 += val * ModelB::Local_W[w_idx];
+                L1_1 += val * ModelB::Local_W[w_idx + 1];
+                L1_2 += val * ModelB::Local_W[w_idx + 2];
                 w_idx += 3;
             }
         }
         
         // PReLU 1
-        L1_0 = max(0, L1_0) + min(0, L1_0) * BarbatosSWeights::ModelB::Local_A[0];
-        L1_1 = max(0, L1_1) + min(0, L1_1) * BarbatosSWeights::ModelB::Local_A[1];
-        L1_2 = max(0, L1_2) + min(0, L1_2) * BarbatosSWeights::ModelB::Local_A[2];
-        
+        L1_0 = max(0, L1_0) + min(0, L1_0) * ModelB::Local_A[0];
+        L1_1 = max(0, L1_1) + min(0, L1_1) * ModelB::Local_A[1];
+        L1_2 = max(0, L1_2) + min(0, L1_2) * ModelB::Local_A[2];
+
         // LAYER 2
-        float4 L2_0 = BarbatosSWeights::ModelB::Mix_B[0];
-        float4 L2_1 = BarbatosSWeights::ModelB::Mix_B[1];
-        float4 L2_2 = BarbatosSWeights::ModelB::Mix_B[2];
+        float4 L2_0 = ModelB::Mix_B[0];
+        float4 L2_1 = ModelB::Mix_B[1];
+        float4 L2_2 = ModelB::Mix_B[2];
         
         int m_idx = 0;
         // Group 0
-        L2_0.x += dot(L1_0, BarbatosSWeights::ModelB::Mix_W[m_idx++]);
-        L2_0.y += dot(L1_0, BarbatosSWeights::ModelB::Mix_W[m_idx++]);
-        L2_0.z += dot(L1_0, BarbatosSWeights::ModelB::Mix_W[m_idx++]);
-        L2_0.w += dot(L1_0, BarbatosSWeights::ModelB::Mix_W[m_idx++]);
-        L2_0.x += dot(L1_1, BarbatosSWeights::ModelB::Mix_W[m_idx++]);
-        L2_0.y += dot(L1_1, BarbatosSWeights::ModelB::Mix_W[m_idx++]);
-        L2_0.z += dot(L1_1, BarbatosSWeights::ModelB::Mix_W[m_idx++]);
-        L2_0.w += dot(L1_1, BarbatosSWeights::ModelB::Mix_W[m_idx++]);
-        L2_0.x += dot(L1_2, BarbatosSWeights::ModelB::Mix_W[m_idx++]);
-        L2_0.y += dot(L1_2, BarbatosSWeights::ModelB::Mix_W[m_idx++]);
-        L2_0.z += dot(L1_2, BarbatosSWeights::ModelB::Mix_W[m_idx++]);
-        L2_0.w += dot(L1_2, BarbatosSWeights::ModelB::Mix_W[m_idx++]);
+        L2_0.x += dot(L1_0, ModelB::Mix_W[m_idx++]);
+        L2_0.y += dot(L1_0, ModelB::Mix_W[m_idx++]);
+        L2_0.z += dot(L1_0, ModelB::Mix_W[m_idx++]);
+        L2_0.w += dot(L1_0, ModelB::Mix_W[m_idx++]);
+        L2_0.x += dot(L1_1, ModelB::Mix_W[m_idx++]);
+        L2_0.y += dot(L1_1, ModelB::Mix_W[m_idx++]);
+        L2_0.z += dot(L1_1, ModelB::Mix_W[m_idx++]);
+        L2_0.w += dot(L1_1, ModelB::Mix_W[m_idx++]);
+        L2_0.x += dot(L1_2, ModelB::Mix_W[m_idx++]);
+        L2_0.y += dot(L1_2, ModelB::Mix_W[m_idx++]);
+        L2_0.z += dot(L1_2, ModelB::Mix_W[m_idx++]);
+        L2_0.w += dot(L1_2, ModelB::Mix_W[m_idx++]);
         
         // Group 1
-        L2_1.x += dot(L1_0, BarbatosSWeights::ModelB::Mix_W[m_idx++]);
-        L2_1.y += dot(L1_0, BarbatosSWeights::ModelB::Mix_W[m_idx++]);
-        L2_1.z += dot(L1_0, BarbatosSWeights::ModelB::Mix_W[m_idx++]);
-        L2_1.w += dot(L1_0, BarbatosSWeights::ModelB::Mix_W[m_idx++]);
-        L2_1.x += dot(L1_1, BarbatosSWeights::ModelB::Mix_W[m_idx++]);
-        L2_1.y += dot(L1_1, BarbatosSWeights::ModelB::Mix_W[m_idx++]);
-        L2_1.z += dot(L1_1, BarbatosSWeights::ModelB::Mix_W[m_idx++]);
-        L2_1.w += dot(L1_1, BarbatosSWeights::ModelB::Mix_W[m_idx++]);
-        L2_1.x += dot(L1_2, BarbatosSWeights::ModelB::Mix_W[m_idx++]);
-        L2_1.y += dot(L1_2, BarbatosSWeights::ModelB::Mix_W[m_idx++]);
-        L2_1.z += dot(L1_2, BarbatosSWeights::ModelB::Mix_W[m_idx++]);
-        L2_1.w += dot(L1_2, BarbatosSWeights::ModelB::Mix_W[m_idx++]);
+        L2_1.x += dot(L1_0, ModelB::Mix_W[m_idx++]);
+        L2_1.y += dot(L1_0, ModelB::Mix_W[m_idx++]);
+        L2_1.z += dot(L1_0, ModelB::Mix_W[m_idx++]);
+        L2_1.w += dot(L1_0, ModelB::Mix_W[m_idx++]);
+        L2_1.x += dot(L1_1, ModelB::Mix_W[m_idx++]);
+        L2_1.y += dot(L1_1, ModelB::Mix_W[m_idx++]);
+        L2_1.z += dot(L1_1, ModelB::Mix_W[m_idx++]);
+        L2_1.w += dot(L1_1, ModelB::Mix_W[m_idx++]);
+        L2_1.x += dot(L1_2, ModelB::Mix_W[m_idx++]);
+        L2_1.y += dot(L1_2, ModelB::Mix_W[m_idx++]);
+        L2_1.z += dot(L1_2, ModelB::Mix_W[m_idx++]);
+        L2_1.w += dot(L1_2, ModelB::Mix_W[m_idx++]);
 
         // Group 2
-        L2_2.x += dot(L1_0, BarbatosSWeights::ModelB::Mix_W[m_idx++]);
-        L2_2.y += dot(L1_0, BarbatosSWeights::ModelB::Mix_W[m_idx++]);
-        L2_2.z += dot(L1_0, BarbatosSWeights::ModelB::Mix_W[m_idx++]);
-        L2_2.w += dot(L1_0, BarbatosSWeights::ModelB::Mix_W[m_idx++]);
-        L2_2.x += dot(L1_1, BarbatosSWeights::ModelB::Mix_W[m_idx++]);
-        L2_2.y += dot(L1_1, BarbatosSWeights::ModelB::Mix_W[m_idx++]);
-        L2_2.z += dot(L1_1, BarbatosSWeights::ModelB::Mix_W[m_idx++]);
-        L2_2.w += dot(L1_1, BarbatosSWeights::ModelB::Mix_W[m_idx++]);
-        L2_2.x += dot(L1_2, BarbatosSWeights::ModelB::Mix_W[m_idx++]);
-        L2_2.y += dot(L1_2, BarbatosSWeights::ModelB::Mix_W[m_idx++]);
-        L2_2.z += dot(L1_2, BarbatosSWeights::ModelB::Mix_W[m_idx++]);
-        L2_2.w += dot(L1_2, BarbatosSWeights::ModelB::Mix_W[m_idx++]);
+        L2_2.x += dot(L1_0, ModelB::Mix_W[m_idx++]);
+        L2_2.y += dot(L1_0, ModelB::Mix_W[m_idx++]);
+        L2_2.z += dot(L1_0, ModelB::Mix_W[m_idx++]);
+        L2_2.w += dot(L1_0, ModelB::Mix_W[m_idx++]);
+        L2_2.x += dot(L1_1, ModelB::Mix_W[m_idx++]);
+        L2_2.y += dot(L1_1, ModelB::Mix_W[m_idx++]);
+        L2_2.z += dot(L1_1, ModelB::Mix_W[m_idx++]);
+        L2_2.w += dot(L1_1, ModelB::Mix_W[m_idx++]);
+        L2_2.x += dot(L1_2, ModelB::Mix_W[m_idx++]);
+        L2_2.y += dot(L1_2, ModelB::Mix_W[m_idx++]);
+        L2_2.z += dot(L1_2, ModelB::Mix_W[m_idx++]);
+        L2_2.w += dot(L1_2, ModelB::Mix_W[m_idx++]);
 
         // PReLU 2
-        L2_0 = max(0, L2_0) + min(0, L2_0) * BarbatosSWeights::ModelB::Mix_A[0];
-        L2_1 = max(0, L2_1) + min(0, L2_1) * BarbatosSWeights::ModelB::Mix_A[1];
-        L2_2 = max(0, L2_2) + min(0, L2_2) * BarbatosSWeights::ModelB::Mix_A[2];
-        
+        L2_0 = max(0, L2_0) + min(0, L2_0) * ModelB::Mix_A[0];
+        L2_1 = max(0, L2_1) + min(0, L2_1) * ModelB::Mix_A[1];
+        L2_2 = max(0, L2_2) + min(0, L2_2) * ModelB::Mix_A[2];
+
         // LAYER 3
-        float res = BarbatosSWeights::ModelB::Out_Bias;
-        res += dot(L2_0, BarbatosSWeights::ModelB::Out_W[0]);
-        res += dot(L2_1, BarbatosSWeights::ModelB::Out_W[1]);
-        res += dot(L2_2, BarbatosSWeights::ModelB::Out_W[2]);
+        float res = ModelB::Out_Bias;
+        res += dot(L2_0, ModelB::Out_W[0]);
+        res += dot(L2_1, ModelB::Out_W[1]);
+        res += dot(L2_2, ModelB::Out_W[2]);
 
         return tanh(res);
     }
@@ -309,7 +307,7 @@ namespace Barbatos_NS
 
         float3 ycbcr = RGBToYCbCr(c);
         float sharpenedLuma = max(0.0, ycbcr.x + (residual * Intensity));
-        
+
         // Anti-Halo Local Min/Max Clamping
         if (AntiHalo > 0.0)
         {
@@ -341,7 +339,7 @@ namespace Barbatos_NS
 
     technique BaBa_NeuralSharpen
     <
-    ui_label = "BaBa: Neural Sharpen";
+        ui_label = "BaBa: Neural Sharpen";
     >
     {
         pass
