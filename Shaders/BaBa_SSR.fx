@@ -930,6 +930,16 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         return (fmod((float) FRAME_COUNT, 2.0) < 0.5) ?
         GetLod(sHistory0, uv) : GetLod(sHistory1, uv);
     }
+    float4 ClipToAABB(float4 aabb_min, float4 aabb_max, float4 history_sample)
+    {
+        float4 p_clip = 0.5 * (aabb_max + aabb_min);
+        float4 e_clip = 0.5 * (aabb_max - aabb_min) + 1e-6;
+        float4 v_clip = history_sample - p_clip;
+        float4 v_unit = v_clip / e_clip;
+        float4 a_unit = abs(v_unit);
+        float ma_unit = max(a_unit.x, max(a_unit.y, max(a_unit.z, a_unit.w)));
+        return (ma_unit > 1.0) ? (p_clip + v_clip / ma_unit) : history_sample;
+    }
 
     float4 ComputeDenoise(VS_OUTPUT input, sampler sHistoryParams)
 {
