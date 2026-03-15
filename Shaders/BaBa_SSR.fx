@@ -341,7 +341,6 @@ static const float2 TAA_Offsets[5] =
     float2(0, 0), float2(0, -1), float2(-1, 0), float2(1, 0), float2(0, 1)
 };
 
-#define Anisotropy_Rotation 90
 uniform int FRAME_COUNT < source = "framecount"; >;
 #define EnableTAAUpscaling 1
 
@@ -539,33 +538,6 @@ namespace Barbatos_SSR140
         float2 sincosPhi;
         sincos(phi, sincosPhi.y, sincosPhi.x);
         return r * sincosPhi;
-    }
-
-    float2 GetTAAJitter()
-    {
-        static const float2 TAA_Jitter[16] = 
-        {
-            float2( 0.000000, -0.166667),
-            float2(-0.250000,  0.166667),
-            float2( 0.250000, -0.388889),
-            float2(-0.375000, -0.055556),
-        
-            float2( 0.125000,  0.277778),
-            float2(-0.125000, -0.277778),
-            float2( 0.375000,  0.055556),
-            float2(-0.437500,  0.388889),
-            float2( 0.062500, -0.462963),
-            float2(-0.187500, -0.129630),
-            float2( 0.312500,  0.203704),
-         
-           float2(-0.312500, -0.351852),
-            float2( 0.187500, -0.018519),
-            float2(-0.062500,  0.314815),
-            float2( 0.437500, -0.240741),
-            float2(-0.468750,  0.092593)
-        };
-        int frame = FRAME_COUNT % 16;
-        return TAA_Jitter[frame];
     }
 
     //------------------------------------|
@@ -1117,6 +1089,23 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         float2 scaled_uv = input.uv / RenderResolution;
         float depth = GetDepth(scaled_uv);
 
+        // TAA Upscaling Jitter
+        if (EnableTAAUpscaling)
+        {
+            const float2 jitterOffsets[8] =
+            {
+                float2(0.125, -0.375), float2(-0.125, 0.375),
+                float2(-0.375, -0.125), float2(0.375, 0.125),
+               
+
+                float2(0.375, -0.375), float2(-0.375, 0.375),
+                float2(0.125, 0.125), float2(-0.125, -0.125)
+            };
+            uint jitter_idx = uint(fmod((float)FRAME_COUNT, 8.0));
+            float2 jitter = jitterOffsets[jitter_idx] * (ReShade::PixelSize / RenderResolution);
+            scaled_uv += jitter;
+        }
+
         if (any(scaled_uv < 0.001) || any(scaled_uv > 0.999))
         {
             outReflection = 0.0;
@@ -1135,16 +1124,7 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         float3 viewPos = UVToViewPos(scaled_uv, depth, pScale);
         // Sub-Pixel TAAU Jitter: Perturb the view position infinitesimally
         float3 jittered_viewPos = viewPos;
-        if (EnableTAAUpscaling)
-        {
-            float2 jitter = GetTAAJitter();
-            float2 jitter_uv = jitter * (ReShade::PixelSize / RenderResolution);
-            float3 view_offset = float3(jitter_uv.x * pScale.x, -jitter_uv.y * pScale.y, 0.0) * depth;
-            jittered_viewPos += view_offset;
-        }
-
-        // Use the jittered view position to calculate the view direction
-        float3 viewDir = -normalize(jittered_viewPos);
+        float3 viewDir = -normalize(viewPos);
         float estimatedRoughness = GetLod(sTexColorCopy, scaled_uv).a;
 
         // Surface Orientation
@@ -1399,13 +1379,10 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         float3 finalColor;
         if (BlendMode == 0) // Default PBR 
         {
-            float roughBias = netRoughness_out * netRoughness_out;
-            float3 F_adjusted = lerp(F, float3(1.0, 1.0, 1.0), roughBias);
-
             float validReflection = reflectionMask * saturate(Intensity);
-            float3 kD = 1.0 - (F_adjusted * validReflection);
+            float3 kD = 1.0 - (F * validReflection);
             kD *= lerp(1.0, 1.0 - Metallic, validReflection);
-            float3 specularLight = reflectionColor * F_adjusted * Intensity * reflectionMask;
+            float3 specularLight = reflectionColor * F * Intensity * reflectionMask;
             finalColor = (scene * kD) + specularLight;
         }
         else // Legacy Blending modes
