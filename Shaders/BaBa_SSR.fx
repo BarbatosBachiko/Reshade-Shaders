@@ -1,7 +1,7 @@
 /*----------------------------------------------|
 | :: Barbatos SSR (Screen-Space Reflections) :: |
 |-----------------------------------------------|
-| Version: 1.4.0                                |
+| Version: 1.4.1                                |
 | Author: Barbatos                              |
 | License: MIT                                  |
 |----------------------------------------------*/
@@ -931,83 +931,63 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         GetLod(sHistory0, uv) : GetLod(sHistory1, uv);
     }
 
-    float4 ClipToAABB(float4 aabb_min, float4 aabb_max, float4 history_sample)
-    {
-        float4 p_clip = 0.5 * (aabb_max + aabb_min);
-        float4 e_clip = 0.5 * (aabb_max - aabb_min) + 1e-6;
-        float4 v_clip = history_sample - p_clip;
-        float4 v_unit = v_clip / e_clip;
-        float4 a_unit = abs(v_unit);
-        float ma_unit = max(a_unit.x, max(a_unit.y, max(a_unit.z, a_unit.w)));
-        return (ma_unit > 1.0) ? (p_clip + v_clip / ma_unit) : history_sample;
-    }
-
     float4 ComputeDenoise(VS_OUTPUT input, sampler sHistoryParams)
+{
+    float2 viewUV = input.uv;
+    float depth = GetDepth(viewUV);
+    if (depth >= 0.999)
+        return 0.0;
+
+    float2 lowres_uv = viewUV * RenderResolution;
+    float4 current_reflection = GetLod(sReflection, lowres_uv);
+
+    if (!EnableSmoothing)
+        return current_reflection;
+
+    float2 velocity = MV_GetVelocity(viewUV);
+    float2 reprojected_view_uv = viewUV + velocity;
+
+    if (any(saturate(reprojected_view_uv) != reprojected_view_uv) || FRAME_COUNT <= 1)
+        return current_reflection;
+
+    float4 history_reflection = GetLod(sHistoryParams, reprojected_view_uv);
+    float4 current_compressed = TAA_Compress(current_reflection);
+    float4 history_compressed = TAA_Compress(history_reflection);
+
+    if (EnableAntiSmear)
     {
-        float2 viewUV = input.uv;
-        float depth = GetDepth(viewUV);
-        if (depth >= 0.999)
-            return 0.0;
-        float2 lowres_uv = viewUV * RenderResolution;
-        float4 current_reflection = GetLod(sReflection, lowres_uv);
-        if (!EnableSmoothing)
-            return current_reflection;
-
-        float4 current_compressed = TAA_Compress(current_reflection);
-        float4 m1 = 0.0;
-        float4 m2 = 0.0;
-        float2 lowres_px = ReShade::PixelSize / max(RenderResolution, 0.3);
-        [unroll]
-        for (int y = -1; y <= 1; y++)
-        {
-            [unroll]
-            for (int x = -1; x <= 1; x++)
-            {
-                float2 neighbor_uv = lowres_uv + float2(x, y) * lowres_px;
-                float4 neighbor_color = TAA_Compress(GetLod(sReflection, neighbor_uv));
-                
-                m1 += neighbor_color;
-                m2 += neighbor_color * neighbor_color;
-            }
-        }
-        
-        m1 /= 9.0;
-        m2 /= 9.0;
-        float4 std_dev = sqrt(abs(m2 - m1 * m1));
-        
-        float2 velocity = MV_GetVelocity(viewUV);
         float motion_factor = saturate(length(velocity) * 100.0);
-        
-        float gamma = EnableAntiSmear ? lerp(3.0, 1.5, saturate(motion_factor * 2.0)) : 3.0;
-        float4 aabb_min = m1 - std_dev * gamma;
-        float4 aabb_max = m1 + std_dev * gamma;
-        float2 reprojected_view_uv = viewUV + velocity;
+        [branch]
+        if (motion_factor > 0.01)
+        		{
+            	float2 lowres_px = ReShade::PixelSize / max(RenderResolution, 0.3);
+            	float4 aabb_min = current_compressed;
+            	float4 aabb_max = current_compressed;
 
-        // Depth Rejection
-        float reprojected_depth = GetDepth(reprojected_view_uv);
-        float depth_tolerance = 0.02 + (depth * 0.1); 
+            	[unroll]
+            	for (int y = -1; y <= 1; y++)
+            	[unroll]
+            	for (int x = -1; x <= 1; x++)
+            	{
+                	float4 n = TAA_Compress(GetLod(sReflection, lowres_uv + float2(x, y) * lowres_px));
+                	aabb_min = min(aabb_min, n);
+                	aabb_max = max(aabb_max, n);
+            	}
 
-        if (any(saturate(reprojected_view_uv) != reprojected_view_uv) || 
-            FRAME_COUNT <= 1 || 
-            abs(depth - reprojected_depth) > depth_tolerance)
-        {
-            return current_reflection;
-        }
+            	float4 clipped = ClipToAABB(aabb_min, aabb_max, history_compressed);
+            	history_compressed = lerp(history_compressed, clipped, motion_factor);
+        	}
+    	}
 
-        float4 history_reflection = GetLod(sHistoryParams, reprojected_view_uv);
-        float4 history_compressed = TAA_Compress(history_reflection);
-        // Variance clipping in 4D bounds 
-        float4 clipped_history = ClipToAABB(aabb_min, aabb_max, history_compressed);
-        float clip_weight = EnableAntiSmear ? lerp(0.2, 0.85, saturate(motion_factor * 3.0)) : 0.15;
-        history_compressed = lerp(history_compressed, clipped_history, clip_weight);
-        float confidence = saturate(MV_GetConfidence(viewUV));
-        float max_feedback = 1.0 - (1.0 / (float) max(1, MaxFrames));
-        float motion_penalty = EnableAntiSmear ?
-        lerp(1.0, 0.4, saturate(motion_factor * 2.0)) : 1.0;
-        float blendVal = max_feedback * confidence * motion_penalty;
-        float4 result_compressed = lerp(current_compressed, history_compressed, blendVal);
-        return TAA_Resolve(result_compressed);
-    }
+    	float raw_confidence = saturate(MV_GetConfidence(viewUV));
+    	float confidence = saturate(raw_confidence + log2(2.0 - raw_confidence) * 0.35);
+
+    	float frames = max(1.0, (float)MaxFrames);
+    	float blendVal = confidence * (frames / (frames + 1.0));
+
+    	float4 result_compressed = lerp(current_compressed, history_compressed, blendVal);
+    	return TAA_Resolve(result_compressed);
+	}
     
     //--------------------|
     // :: Pixel Shaders ::|
