@@ -1,7 +1,7 @@
 /*----------------------------------------------|
 | ::        Barbatos Neural Sharpening       :: |
 |-----------------------------------------------|
-| Version: 1.2                                  |
+| Version: 1.3                                  |
 | Author: Barbatos                              |
 | License: MIT                                  |
 | 12-Channel Neural Network                     |
@@ -16,7 +16,7 @@
 //----------|
 uniform int ModelType <
     ui_type = "combo";
-    ui_items = "Model A\0Model B\0";
+    ui_items = "Model A2\0Model B2\0";
     ui_label = "Model Type";
     ui_tooltip = "Model A: Model trained to deliver controlled sharpness. \nModel B: Model trained to deliver raw sharpness.";
 > = 0;
@@ -24,10 +24,10 @@ uniform int ModelType <
 uniform float Intensity <
     ui_type = "drag";
     ui_min = 0.0; 
-    ui_max = 4.0;
-    ui_step = 0.1;
+    ui_max = 2.0;
+    ui_step = 0.05;
     ui_label = "Intensity";
-> = 2.0;
+> = 1.0;
 
 uniform float AntiHalo <
     ui_type = "drag";
@@ -280,17 +280,14 @@ namespace Barbatos_NS120
     {
         const float3 c = tex2D(ReShade::BackBuffer, uv).rgb;
         float residual = 0.0;
-        float normFactor = 5.0;
 
         if (ModelType == 0) // Model A
         {
             residual = RunNet_A(uv);
-            normFactor = 5.0;
         }
         else // Model B
         {
             residual = RunNet_B(uv);
-            normFactor = 20.0;
         }
 
         /* Debug Mode
@@ -302,7 +299,6 @@ namespace Barbatos_NS120
         }
         */
 
-        residual = residual / normFactor;
         residual = clamp(residual, -0.15, 0.15);
 
         float3 ycbcr = RGBToYCbCr(c);
@@ -321,6 +317,7 @@ namespace Barbatos_NS120
                 [unroll]
                 for (int x = -1; x <= 1; x++)
                 {
+    
                     float lumaTap = tex2D(sTexLuma, uv + float2(x, y) * pixel).r;
                     minLuma = min(minLuma, lumaTap);
                     maxLuma = max(maxLuma, lumaTap);
