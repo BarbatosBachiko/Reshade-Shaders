@@ -7,11 +7,10 @@
 #define BUFFER_COLOR_SPACE 0
 #endif
 
-#define SDR_Inverse_Power 0.05
-
 //----------|
 // :: UI :: |
 //----------|
+
 uniform int HDR_Input_Format <
     ui_category_closed = true;
     ui_category = "HDR";
@@ -33,6 +32,13 @@ uniform float HDR_Peak_Nits <
     ui_min = 400.0; ui_max = 10000.0; ui_step = 10.0;
 > = 1000.0;
 
+uniform bool SDR_Enable_ITM <
+    ui_category_closed = true;
+    ui_category = "HDR";
+    ui_label = "Enable SDR Inverse Tonemapping";
+    ui_tooltip = "Expands SDR brightness to HDR range using Inverse Reinhard.";
+> = true;
+
 uniform bool SDR_ITM_Hue_Preserving <
     ui_category_closed = true;
     ui_category = "HDR";
@@ -47,6 +53,13 @@ uniform bool SDR_ITM_Hue_Preserving <
 
 static const float3 LUMA_709 = float3(0.2126, 0.7152, 0.0722);
 static const float3 LUMA_2020 = float3(0.2627, 0.6780, 0.0593);
+
+// PQ Constants 
+static const float PQ_M1 = 0.1593017578125;
+static const float PQ_M2 = 78.84375;
+static const float PQ_C1 = 0.8359375;
+static const float PQ_C2 = 18.8515625;
+static const float PQ_C3 = 18.6875;
 
 int GetHDRMode()
 {
@@ -66,37 +79,28 @@ int GetHDRMode()
 
 float3 PQ2Linear(float3 color)
 {
-    float m1 = 0.1593017578125;
-    float m2 = 78.84375;
-    float c1 = 0.8359375;
-    float c2 = 18.8515625;
-    float c3 = 18.6875;
-
-    float3 val = max(pow(abs(color), 1.0 / m2) - c1, 0.0);
-    float3 den = c2 - c3 * pow(abs(color), 1.0 / m2);
-    float3 linearHdr = pow(abs(val / den), 1.0 / m1);
+    float3 val = max(pow(abs(color), 1.0 / PQ_M2) - PQ_C1, 0.0);
+    float3 den = PQ_C2 - PQ_C3 * pow(abs(color), 1.0 / PQ_M2);
+    float3 linearHdr = pow(abs(val / den), 1.0 / PQ_M1);
 
     return linearHdr * (10000.0 / HDR_Peak_Nits);
 }
 
 float3 Linear2PQ(float3 linearColor)
 {
-    float m1 = 0.1593017578125;
-    float m2 = 78.84375;
-    float c1 = 0.8359375;
-    float c2 = 18.8515625;
-    float c3 = 18.6875;
-
     float3 Y = max(0.0, linearColor * (HDR_Peak_Nits / 10000.0));
-    float3 num = c1 + c2 * pow(Y, m1);
-    float3 den = 1.0 + c3 * pow(Y, m1);
+    float3 num = PQ_C1 + PQ_C2 * pow(Y, PQ_M1);
+    float3 den = 1.0 + PQ_C3 * pow(Y, PQ_M1);
     
-    return pow(num / den, m2);
+    return pow(num / den, PQ_M2);
 }
 
 float3 sRGB2Linear(float3 x)
 {
     float3 linear_srgb = (x < 0.04045) ? (x / 12.92) : pow(abs((x + 0.055) / 1.055), 2.4);
+
+    if (!SDR_Enable_ITM)
+        return linear_srgb;
 
     float3 expanded_rgb;
     if (SDR_ITM_Hue_Preserving)
@@ -105,6 +109,7 @@ float3 sRGB2Linear(float3 x)
         float luma = dot(linear_srgb, LUMA_709);
         float safe_luma = min(luma, 0.99); 
         float expanded_luma = safe_luma / max(1.0 - safe_luma, 0.001);
+        
         expanded_rgb = linear_srgb * (expanded_luma / max(luma, 1e-5));
     }
     else
@@ -121,18 +126,21 @@ float3 Linear2sRGB(float3 x)
 {
     x = max(x, 0.0);
 
-    if (SDR_ITM_Hue_Preserving)
+    if (SDR_Enable_ITM)
     {
-        // Hue-Preserving Reinhard
-        float luma = dot(x, LUMA_709);
-        float compressed_luma = luma / (1.0 + luma);
-        
-        x = x * (compressed_luma / max(luma, 1e-5));
-    }
-    else
-    {
-        // Per-channel Reinhard
-        x = x / (1.0 + x);
+        if (SDR_ITM_Hue_Preserving)
+        {
+            // Hue-Preserving Reinhard
+            float luma = dot(x, LUMA_709);
+            float compressed_luma = luma / (1.0 + luma);
+            
+            x = x * (compressed_luma / max(luma, 1e-5));
+        }
+        else
+        {
+            // Per-channel Reinhard
+            x = x / (1.0 + x);
+        }
     }
     
     return (x < 0.0031308) ? (12.92 * x) : (1.055 * pow(abs(x), 1.0 / 2.4) - 0.055);
@@ -183,6 +191,7 @@ float3 KelvinToRGB(float k)
     {
         color.r = 255.0;
         color.g = 99.4708025861 * log(k) - 161.1195681661;
+        
         if (k <= 19.0)
             color.b = 0.0;
         else
@@ -194,6 +203,7 @@ float3 KelvinToRGB(float k)
         color.g = 288.1221695283 * pow(k - 60.0, -0.0755148492);
         color.b = 255.0;
     }
+    
     return saturate(color / 255.0);
 }
     
