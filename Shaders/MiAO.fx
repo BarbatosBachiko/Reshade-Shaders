@@ -19,7 +19,7 @@ THE SOFTWARE.
 /*-------------------------------------------------|
 | ::                   MiAO                     :: |
 '--------------------------------------------------|
-| Version: 1.5                                     |
+| Version: 1.5.5                                   |
 | Author: Barbatos                                 |
 | License: MIT                                     |
 | Description: Simple ambient occlusion with repur-|
@@ -51,7 +51,8 @@ uniform float ShadowPow <
     ui_type = "drag";
     ui_category = "Basic Settings";
     ui_label = "Intensity";
-    ui_min = 0.1; ui_max = 8.0; ui_step = 0.01;
+    ui_min = 0.1;
+    ui_max = 8.0; ui_step = 0.01;
     ui_tooltip = "Global strength of the ambient occlusion effect.";
 > = 1.5;
 
@@ -59,7 +60,8 @@ uniform float Radius <
     ui_type = "drag";
     ui_category = "Basic Settings";
     ui_label = "Radius";
-    ui_min = 0.1; ui_max = 10.0; ui_step = 0.01;
+    ui_min = 0.1;
+    ui_max = 10.0; ui_step = 0.01;
     ui_tooltip = "World-space radius of the ambient occlusion effect.";
 > = 5.0;
 
@@ -67,7 +69,8 @@ uniform float EffectShadowClamp <
     ui_type = "drag";
     ui_category = "Basic Settings";
     ui_label = "Clamp";
-    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+    ui_min = 0.0;
+    ui_max = 1.0; ui_step = 0.01;
     ui_tooltip = "Limits the maximum amount of occlusion to prevent excessive darkening.";
 > = 0.98;
 
@@ -83,9 +86,9 @@ uniform float RenderScale <
     ui_type = "drag";
     ui_category = "Performance & Quality";
     ui_label = "Render Scale";
-    ui_min = 0.5; ui_max = 1.0; ui_step = 0.01;
+    ui_min = 0.3; ui_max = 1.0; ui_step = 0.01;
     ui_tooltip = "Renders AO at a lower resolution for better performance, then upscales it.";
-> = 0.8;
+> = 0.5;
 
 uniform bool EnableTemporal <
     ui_category = "Performance & Quality";
@@ -138,6 +141,7 @@ uniform int DebugView <
 > = 0;
 
 uniform int FRAME_COUNT < source = "framecount"; >;
+
 static const int g_TapCounts[5] = { 3, 5, 12, 20, 31 };
 static const float DEG2RAD = 0.017453292; // PI / 180.0
 #define TWO_PI 6.2831854
@@ -155,12 +159,13 @@ texture texPrevLuma
     Height = BUFFER_HEIGHT;
     Format = R8;
 };
+
 sampler sPrevLuma
 {
     Texture = texPrevLuma;
 };
 
-namespace MiAO150
+namespace MiAO155
 {
     texture DEPTH
     {
@@ -220,6 +225,36 @@ namespace MiAO150
         Texture = History1;
         MagFilter = LINEAR;
         MinFilter = LINEAR;
+    };
+    
+    texture texAtrousA
+    {
+        Width = BUFFER_WIDTH;
+        Height = BUFFER_HEIGHT;
+        Format = R16F;
+    };
+    sampler sAtrousA
+    {
+        Texture = texAtrousA;
+        MagFilter = LINEAR;
+        MinFilter = LINEAR;
+        AddressU = Clamp;
+        AddressV = Clamp;
+    };
+
+    texture texAtrousB
+    {
+        Width = BUFFER_WIDTH;
+        Height = BUFFER_HEIGHT;
+        Format = R16F;
+    };
+    sampler sAtrousB
+    {
+        Texture = texAtrousB;
+        MagFilter = LINEAR;
+        MinFilter = LINEAR;
+        AddressU = Clamp;
+        AddressV = Clamp;
     };
 
     texture RS_Prev
@@ -353,11 +388,13 @@ namespace MiAO150
     -0.39005, 0.92968, 1.32165, 0.97041, 0.59024, -0.03566, -1.72452, 1.28163,
     2.27953, 0.24276, 1.67147, 2.05600, 2.10187, 0.73659, 1.63937
     };
+
     static const float K_MipLevels[31] =
     {
      -2.00, -1.50, -1.00, -1.00, -0.90, -0.80, -0.70, -0.60, -0.50, -0.40, -0.30, -0.20,
      -0.50, -0.45, -0.40, -0.35, -0.30, -0.25, -0.20, -0.15, -0.10, -0.05, 0.00, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40
     };
+
     float4 GetSamplePattern(int index, float2 noise)
     {
         float2 offset = frac(R2 * float(index) + noise);
@@ -420,7 +457,6 @@ namespace MiAO150
         float2 samplePos = uv * texSize;
         float2 texPos1 = floor(samplePos - 0.5) + 0.5;
         float2 f = samplePos - texPos1;
-
         float2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
         float2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
         float2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));
@@ -445,7 +481,6 @@ namespace MiAO150
         result += GetLod(sInput, float2(texPos0.x, texPos12.y)).r * w0.x * w12.y;
         result += GetLod(sInput, float2(texPos12.x, texPos12.y)).r * w12.x * w12.y;
         result += GetLod(sInput, float2(texPos3.x, texPos12.y)).r * w3.x * w12.y;
-
         result += GetLod(sInput, float2(texPos0.x, texPos3.y)).r * w0.x * w3.y;
         result += GetLod(sInput, float2(texPos12.x, texPos3.y)).r * w12.x * w3.y;
         result += GetLod(sInput, float2(texPos3.x, texPos3.y)).r * w3.x * w3.y;
@@ -510,7 +545,6 @@ namespace MiAO150
         
         if (any(uv > RenderScale)) return 1.0;
         float2 scaled_uv = uv / RenderScale;
-
         float pixZ = tex2D(sDEPTH, scaled_uv).r;
         if (pixZ >= RESHADE_DEPTH_LINEARIZATION_FAR_PLANE * 0.999) return 1.0;
 
@@ -519,14 +553,12 @@ namespace MiAO150
         float pixRZ = GetLod(sDEPTH, scaled_uv + float2(p.x, 0)).r;
         float pixTZ = GetLod(sDEPTH, scaled_uv - float2(0, p.y)).r;
         float pixBZ = GetLod(sDEPTH, scaled_uv + float2(0, p.y)).r;
-
         float3 pixCenterPos = DepthBufferUVToViewSpace(scaled_uv, pixZ, input.pScale);
         float3 pixelNormal = normalize(tex2D(sNORMALS, scaled_uv).rgb * 2.0 - 1.0);
 
         float activeRadiusDistanceScale = EnableDistantRadius ? 1.0 : 0.0;
         float effectViewspaceRadius = Radius + (pixZ * activeRadiusDistanceScale);
         float pixelRadius = effectViewspaceRadius / pixZ;
-    
         uint2 random_coord = uint2(vpos.xy);
         uint pseudoRandomIndex = (random_coord.y * 2 + random_coord.x) % 5;
         float angle = (pseudoRandomIndex / 5.0) * 2.0 * PI;
@@ -551,7 +583,6 @@ namespace MiAO150
 
         float obscurance = obscuranceSum / weightSum;
         float fadeOut = 1.0;
-        
         if (FadeOutTo > FadeOutFrom)
         {
             fadeOut = saturate((FadeOutTo - pixZ) / (FadeOutTo - FadeOutFrom));
@@ -574,20 +605,15 @@ namespace MiAO150
         float rawDepth = GetDepth(viewUV);
         
         if (rawDepth >= 0.999) return 1.0;
-
         float current_ao = GetLod(sAO, input.uv).r;
         float prevRenderScale = tex2Dlod(sRS_Prev, float4(0, 0, 0, 0)).x;
-        
         if (abs(RenderScale - prevRenderScale) > 0.001 || !EnableTemporal || FRAME_COUNT < 2)
             return current_ao;
-
         float2 velocity = MV_GetVelocity(viewUV);
         float2 reprojected_view_uv = viewUV + velocity;
         float2 reprojected_buffer_uv = reprojected_view_uv * RenderScale;
-
         if (any(reprojected_view_uv < 0.0) || any(reprojected_view_uv > 1.0))
             return current_ao;
-
         float history_ao = SampleHistoryCatmullRom_Scalar(sHistoryParams, reprojected_buffer_uv, float2(BUFFER_WIDTH, BUFFER_HEIGHT));
 
         // Variance Clipping
@@ -614,11 +640,9 @@ namespace MiAO150
         float gamma = 1.25;
         float val_min = m1 - gamma * sigma;
         float val_max = m1 + gamma * sigma;
-
         float flow_magnitude = length(velocity * float2(BUFFER_WIDTH, BUFFER_HEIGHT));
         float curr_luma = GetLuminance(Input2Linear(GetColor(viewUV).rgb));
         float raw_confidence = saturate(MV_GetConfidenceAO(viewUV, velocity, flow_magnitude, curr_luma, sPrevLuma));
-
         float relax_amount = 0.15 * raw_confidence;
         val_min -= relax_amount;
         val_max += relax_amount;
@@ -646,6 +670,65 @@ namespace MiAO150
         outHistory = ComputeTAA(input, sHistory0);
     }
 
+    float AtrousFilter(VS_OUTPUT input, sampler sInputTex, float stepWidth)
+    {
+        if (any(input.uv > RenderScale)) discard;
+
+        float2 fullResUV = input.uv / RenderScale;
+
+        float c_ao = GetLod(sInputTex, input.uv).r;
+        float3 c_norm = GetLod(sNORMALS, fullResUV).rgb * 2.0 - 1.0;
+        float c_depth = GetLod(sDEPTH, fullResUV).r;
+
+        static const float kernel[3] = { 1.0, 2.0 / 3.0, 1.0 / 6.0 };
+        float sum = c_ao;
+        float cum_w = 1.0;
+
+        float2 px = ReShade::PixelSize * stepWidth; 
+        float depth_weight_factor = 1.0 / (0.1 * c_depth + 1e-6);
+
+        [unroll]
+        for (int x = -2; x <= 2; x++)
+        {
+            [unroll]
+            for (int y = -2; y <= 2; y++)
+            {
+                if (x == 0 && y == 0) continue;
+
+                float2 uv_offset = input.uv + float2(x, y) * px;
+                float2 fullResUV_offset = uv_offset / RenderScale;
+
+                float s_ao = GetLod(sInputTex, uv_offset).r;
+                float3 s_norm = GetLod(sNORMALS, fullResUV_offset).rgb * 2.0 - 1.0;
+                float s_depth = GetLod(sDEPTH, fullResUV_offset).r;
+
+                float w_z = exp(-abs(c_depth - s_depth) * depth_weight_factor);
+                float dotN = max(0.0, dot(c_norm, s_norm));
+                float w_n = pow(dotN, 4.0);
+
+                float k_w = kernel[abs(x)] * kernel[abs(y)];
+                float weight = w_z * w_n * k_w;
+
+                sum += s_ao * weight;
+                cum_w += weight;
+            }
+        }
+        return sum / max(cum_w, 0.0001);
+    }
+
+    void PS_Atrous1(VS_OUTPUT input, out float outAO : SV_Target)
+    {
+        if (FRAME_COUNT % 2 == 0)
+            outAO = AtrousFilter(input, sHistory0, 1.0);
+        else
+            outAO = AtrousFilter(input, sHistory1, 1.0);
+    }
+
+    void PS_AtrousFinal(VS_OUTPUT input, out float outAO : SV_Target)
+    {
+        outAO = AtrousFilter(input, sAtrousA, 3.0);
+    }
+
     float JointBilateralUpsample(float2 uv, float highDepth)
     {
         float2 lowResUV = uv * RenderScale;
@@ -653,7 +736,6 @@ namespace MiAO150
 
         float sumAO = 0.0;
         float sumWeight = 0.0;
-
         float2 texelSize = ReShade::PixelSize;
         float2 baseUV = (floor(lowResUV / texelSize) + 0.5) * texelSize;
 
@@ -666,12 +748,7 @@ namespace MiAO150
             for (int y = -1; y <= 1; y++)
             {
                 float2 sampleUV = baseUV + float2(x, y) * texelSize;
-                float sampleAO;
-
-                if ((FRAME_COUNT % 2) == 0)
-                    sampleAO = GetLod(sHistory0, sampleUV).r;
-                else
-                    sampleAO = GetLod(sHistory1, sampleUV).r;
+                float sampleAO = GetLod(sAtrousB, sampleUV).r;
 
                 float2 fullResSampleUV = sampleUV / RenderScale;
                 float lowDepth = GetLod(sDEPTH, fullResSampleUV).r;
@@ -683,6 +760,7 @@ namespace MiAO150
                 float wSpatial = exp(-0.5 * float(x * x + y * y));
 
                 float weight = wDepth * wNormal * wSpatial;
+
                 sumAO += sampleAO * weight;
                 sumWeight += weight;
             }
@@ -690,8 +768,7 @@ namespace MiAO150
 
         if (sumWeight < 1e-6)
         {
-            if ((FRAME_COUNT % 2) == 0) return GetLod(sHistory0, lowResUV).r;
-            else return GetLod(sHistory1, lowResUV).r;
+            return GetLod(sAtrousB, lowResUV).r;
         }
 
         return sumAO / sumWeight;
@@ -715,10 +792,7 @@ namespace MiAO150
 
         if (RenderScale >= 0.99)
         {
-            if ((FRAME_COUNT % 2) == 0)
-                ao = GetLod(sHistory0, uv).r;
-            else
-                ao = GetLod(sHistory1, uv).r;
+            ao = GetLod(sAtrousB, uv).r;
         }
         else
         {
@@ -741,7 +815,6 @@ namespace MiAO150
     
         float3 linearColor = Input2Linear(color.rgb);
         linearColor *= ao;
-        
         return float4(Linear2Output(linearColor), color.a);
     }
     
@@ -777,6 +850,18 @@ namespace MiAO150
             VertexShader = VS_MiAO_Odd;
             PixelShader = PS_SpatioTemporal1;
             RenderTarget = History1;
+        }
+        pass DenoiseStep1
+        {
+            VertexShader = VS_MiAO;
+            PixelShader = PS_Atrous1;
+            RenderTarget = texAtrousA;
+        }
+        pass DenoiseStep2
+        {
+            VertexShader = VS_MiAO;
+            PixelShader = PS_AtrousFinal;
+            RenderTarget = texAtrousB;
         }
         pass UpdateLuma
         {
