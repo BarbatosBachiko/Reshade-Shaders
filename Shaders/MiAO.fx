@@ -19,7 +19,7 @@ THE SOFTWARE.
 /*-------------------------------------------------|
 | ::                   MiAO                     :: |
 '--------------------------------------------------|
-| Version: 1.4                                     |
+| Version: 1.5                                     |
 | Author: Barbatos                                 |
 | License: MIT                                     |
 | Description: Simple ambient occlusion with repur-|
@@ -29,11 +29,11 @@ THE SOFTWARE.
 #include "ReShade.fxh"
 #include "ReShadeUI.fxh"
 #include "BaBa_MV.fxh"
+#include "BaBa_ColorSpace.fxh"
 
 //--------------------|
 // :: Preprocessor :: |
 //--------------------|
-
 #define GetDepth(coords) (ReShade::GetLinearizedDepth(coords))
 #define GetColor(c) tex2Dlod(ReShade::BackBuffer, float4((c).xy, 0, 0))
 #define GetLod(s,c) tex2Dlod(s, float4((c).xy, 0, 0))
@@ -51,8 +51,7 @@ uniform float ShadowPow <
     ui_type = "drag";
     ui_category = "Basic Settings";
     ui_label = "Intensity";
-    ui_min = 0.1;
-    ui_max = 8.0; ui_step = 0.01;
+    ui_min = 0.1; ui_max = 8.0; ui_step = 0.01;
     ui_tooltip = "Global strength of the ambient occlusion effect.";
 > = 1.5;
 
@@ -60,8 +59,7 @@ uniform float Radius <
     ui_type = "drag";
     ui_category = "Basic Settings";
     ui_label = "Radius";
-    ui_min = 0.1;
-    ui_max = 10.0; ui_step = 0.01;
+    ui_min = 0.1; ui_max = 10.0; ui_step = 0.01;
     ui_tooltip = "World-space radius of the ambient occlusion effect.";
 > = 5.0;
 
@@ -69,8 +67,7 @@ uniform float EffectShadowClamp <
     ui_type = "drag";
     ui_category = "Basic Settings";
     ui_label = "Clamp";
-    ui_min = 0.0;
-    ui_max = 1.0; ui_step = 0.01;
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
     ui_tooltip = "Limits the maximum amount of occlusion to prevent excessive darkening.";
 > = 0.98;
 
@@ -141,16 +138,13 @@ uniform int DebugView <
 > = 0;
 
 uniform int FRAME_COUNT < source = "framecount"; >;
-
 static const int g_TapCounts[5] = { 3, 5, 12, 20, 31 };
-static const float DEG2RAD = 0.017453292;
-// PI / 180.0
+static const float DEG2RAD = 0.017453292; // PI / 180.0
 #define TWO_PI 6.2831854
 
 //----------------|
 // :: Textures :: |
 //----------------|
-
 #ifndef USE_HILBERT_LUT
 #define USE_HILBERT_LUT 1 
 #endif
@@ -161,13 +155,12 @@ texture texPrevLuma
     Height = BUFFER_HEIGHT;
     Format = R8;
 };
-
 sampler sPrevLuma
 {
     Texture = texPrevLuma;
 };
 
-namespace MiAO24
+namespace MiAO150
 {
     texture DEPTH
     {
@@ -203,31 +196,47 @@ namespace MiAO24
         Texture = AO;
     };
 
-    texture FINAL_AO
+    texture History0
     {
         Width = BUFFER_WIDTH;
         Height = BUFFER_HEIGHT;
-        Format = RG16F;
+        Format = R16F;
     };
-    sampler sFINAL_AO
+    sampler sHistory0
     {
-        Texture = FINAL_AO;
+        Texture = History0;
+        MagFilter = LINEAR;
+        MinFilter = LINEAR;
     };
 
-    texture HISTORY_AO
+    texture History1
     {
         Width = BUFFER_WIDTH;
         Height = BUFFER_HEIGHT;
-        Format = RG16F;
+        Format = R16F;
     };
-    sampler sHISTORY_AO
+    sampler sHistory1
     {
-        Texture = HISTORY_AO;
+        Texture = History1;
+        MagFilter = LINEAR;
+        MinFilter = LINEAR;
+    };
+
+    texture RS_Prev
+    {
+        Width = 1;
+        Height = 1;
+        Format = R16F;
+    };
+    sampler sRS_Prev
+    {
+        Texture = RS_Prev;
+        MagFilter = POINT;
+        MinFilter = POINT;
     };
 
 #if USE_HILBERT_LUT
-    texture texHilbertLUT < source = "Barbatos_Hilbert_RGB.png";
-    >
+    texture texHilbertLUT < source = "Barbatos_Hilbert_RGB.png"; >
     {
         Width = 64;
         Height = 64;
@@ -253,24 +262,6 @@ namespace MiAO24
         float2 uv : TEXCOORD0;
         float2 pScale : TEXCOORD1;
     };
-
-    float GetLuminance(float3 linearColor)
-    {
-        return dot(linearColor, float3(0.2126, 0.7152, 0.0722));
-    }
-
-    void ComputeNeighborhoodMinMax(sampler2D color_tex, float2 texcoord, float center_val, out float color_min, out float color_max)
-    {
-        float4 vals = tex2DgatherR(color_tex, texcoord);
-        color_min = min(center_val, min(min(vals.x, vals.y), min(vals.z, vals.w)));
-        color_max = max(center_val, max(max(vals.x, vals.y), max(vals.z, vals.w)));
-    }
-
-    float ComputeTrustFactor(float2 velocity_pixels, float low_threshold = 10.0, float high_threshold = 80.0)
-    {
-        float vel_mag = length(velocity_pixels);
-        return saturate((high_threshold - vel_mag) / (high_threshold - low_threshold));
-    }
 
 #if !USE_HILBERT_LUT
     float hilbert(float2 p, int level)
@@ -312,7 +303,6 @@ namespace MiAO24
 #else
         index = HilbertIndex(pixCoord.x, pixCoord.y);
 #endif
-
         index += 288 * (temporalIndex % 64);
         return frac(0.5 + index * R2);
     }
@@ -425,14 +415,51 @@ namespace MiAO24
         weightSum += weight2 * weightMod;
     }
 
+    float SampleHistoryCatmullRom_Scalar(sampler sInput, float2 uv, float2 texSize)
+    {
+        float2 samplePos = uv * texSize;
+        float2 texPos1 = floor(samplePos - 0.5) + 0.5;
+        float2 f = samplePos - texPos1;
+
+        float2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
+        float2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
+        float2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));
+        float2 w3 = f * f * (-0.5 + 0.5 * f);
+
+        float2 w12 = w1 + w2;
+        float2 offset12 = w2 / (w1 + w2);
+
+        float2 texPos0 = texPos1 - 1.0;
+        float2 texPos3 = texPos1 + 2.0;
+        float2 texPos12 = texPos1 + offset12;
+
+        texPos0 /= texSize;
+        texPos3 /= texSize;
+        texPos12 /= texSize;
+
+        float result = 0.0;
+        result += GetLod(sInput, float2(texPos0.x, texPos0.y)).r * w0.x * w0.y;
+        result += GetLod(sInput, float2(texPos12.x, texPos0.y)).r * w12.x * w0.y;
+        result += GetLod(sInput, float2(texPos3.x, texPos0.y)).r * w3.x * w0.y;
+
+        result += GetLod(sInput, float2(texPos0.x, texPos12.y)).r * w0.x * w12.y;
+        result += GetLod(sInput, float2(texPos12.x, texPos12.y)).r * w12.x * w12.y;
+        result += GetLod(sInput, float2(texPos3.x, texPos12.y)).r * w3.x * w12.y;
+
+        result += GetLod(sInput, float2(texPos0.x, texPos3.y)).r * w0.x * w3.y;
+        result += GetLod(sInput, float2(texPos12.x, texPos3.y)).r * w12.x * w3.y;
+        result += GetLod(sInput, float2(texPos3.x, texPos3.y)).r * w3.x * w3.y;
+
+        return max(result, 0.0);
+    }
+
 /*--------------------.
 | :: Vertex Shader :: |
 '--------------------*/
 
     void VS_MiAO(in uint id : SV_VertexID, out VS_OUTPUT outStruct)
     {
-        outStruct.uv.x = (id == 2) ?
-        2.0 : 0.0;
+        outStruct.uv.x = (id == 2) ? 2.0 : 0.0;
         outStruct.uv.y = (id == 1) ? 2.0 : 0.0;
         outStruct.vpos = float4(outStruct.uv * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
         
@@ -441,16 +468,27 @@ namespace MiAO24
         outStruct.pScale = float2(y * ReShade::AspectRatio, y);
     }
 
+    void VS_MiAO_Even(in uint id : SV_VertexID, out VS_OUTPUT outStruct)
+    {
+        VS_MiAO(id, outStruct);
+        if ((FRAME_COUNT % 2) != 0) outStruct.vpos = float4(-10000.0, -10000.0, 0.0, 1.0);
+    }
+
+    void VS_MiAO_Odd(in uint id : SV_VertexID, out VS_OUTPUT outStruct)
+    {
+        VS_MiAO(id, outStruct);
+        if ((FRAME_COUNT % 2) == 0) outStruct.vpos = float4(-10000.0, -10000.0, 0.0, 1.0);
+    }
+
 /*--------------------.
 | :: Pixel Shaders :: |
 '--------------------*/
 
-    void PS_Prepare(VS_OUTPUT input, out float4 outDepth : SV_Target0, out float4 outNormal : SV_Target1, out float2 outHistory : SV_Target2)
+    void PS_Prepare(VS_OUTPUT input, out float4 outDepth : SV_Target0, out float4 outNormal : SV_Target1)
     {
         float2 uv = input.uv;
         float linear_depth = GetDepth(uv);
         outDepth = ScreenSpaceToViewSpaceDepth(linear_depth);
-        outHistory = GetLod(sFINAL_AO, uv).rg;
 
         float2 p = BUFFER_RCP;
         float3 p_c = DepthBufferUVToViewSpace(uv, outDepth.r, input.pScale);
@@ -470,17 +508,11 @@ namespace MiAO24
         float2 uv = input.uv;
         float4 vpos = input.vpos;
         
-        if (any(uv > RenderScale))
-        {
-            return 1.0;
-        }
+        if (any(uv > RenderScale)) return 1.0;
         float2 scaled_uv = uv / RenderScale;
 
         float pixZ = tex2D(sDEPTH, scaled_uv).r;
-        if (pixZ >= RESHADE_DEPTH_LINEARIZATION_FAR_PLANE * 0.999)
-        {
-            return 1.0;
-        }
+        if (pixZ >= RESHADE_DEPTH_LINEARIZATION_FAR_PLANE * 0.999) return 1.0;
 
         float2 p = BUFFER_RCP;
         float pixLZ = GetLod(sDEPTH, scaled_uv - float2(p.x, 0)).r;
@@ -518,15 +550,14 @@ namespace MiAO24
         }
 
         float obscurance = obscuranceSum / weightSum;
-    
         float fadeOut = 1.0;
+        
         if (FadeOutTo > FadeOutFrom)
         {
             fadeOut = saturate((FadeOutTo - pixZ) / (FadeOutTo - FadeOutFrom));
         }
     
-        float edgeFadeoutFactor = saturate((1.0 - edgesLRTB.x - edgesLRTB.y) * 0.35) +
-                                  saturate((1.0 - edgesLRTB.z - edgesLRTB.w) * 0.35);
+        float edgeFadeoutFactor = saturate((1.0 - edgesLRTB.x - edgesLRTB.y) * 0.35) + saturate((1.0 - edgesLRTB.z - edgesLRTB.w) * 0.35);
         fadeOut *= saturate(1.0 - edgeFadeoutFactor);
         obscurance = min(obscurance, EffectShadowClamp);
         obscurance *= fadeOut;
@@ -536,88 +567,139 @@ namespace MiAO24
         return occlusion;
     }
     
-    void PS_Upscale(VS_OUTPUT input, out float2 outUpscaled : SV_Target)
+    float ComputeTAA(VS_OUTPUT input, sampler sHistoryParams)
     {
-        float2 uv = input.uv;
-        float2 scaled_uv = (RenderScale >= 1.0) ? uv : uv * RenderScale;
-
-        //Denoising
-        float myDepth = GetDepth(uv);
-        float depthGrad = length(float2(ddx(myDepth), ddy(myDepth)));
-        float mip_level = saturate(1.0 - depthGrad * 500.0) * 2.5;
-        float current_ao = tex2Dlod(sAO, float4(scaled_uv, 0, mip_level)).r;
-
-        //Temporal Filter
-        if (!EnableTemporal || FRAME_COUNT < 2)
-        {
-            outUpscaled = float2(current_ao, current_ao * current_ao);
-            return;
-        }
-
-        float2 velocity = MV_GetVelocity(uv);
-
-        // Reprojection
-        float2 reprojected_uv = uv + velocity;
-
-        // Check bounds
-        if (any(reprojected_uv < 0.0) || any(reprojected_uv > 1.0))
-        {
-            outUpscaled = float2(current_ao, current_ao * current_ao);
-            return;
-        }
-
-        // Confidence & History
-        float curr_luma = GetLuminance(GetColor(uv).rgb);
-        float flow_magnitude = length(velocity * BUFFER_DIM);
-        float confidence = MV_GetConfidenceAO(uv, velocity, flow_magnitude, curr_luma, sPrevLuma);
+        if (any(input.uv > RenderScale)) discard;
+        float2 viewUV = input.uv / RenderScale;
+        float rawDepth = GetDepth(viewUV);
         
-        float2 history_signal = GetLod(sHISTORY_AO, reprojected_uv).rg;
+        if (rawDepth >= 0.999) return 1.0;
 
-        // Neighborhood Clamping 
-        float sig_min, sig_max;
-        ComputeNeighborhoodMinMax(sAO, scaled_uv, current_ao, sig_min, sig_max);
+        float current_ao = GetLod(sAO, input.uv).r;
+        float prevRenderScale = tex2Dlod(sRS_Prev, float4(0, 0, 0, 0)).x;
+        
+        if (abs(RenderScale - prevRenderScale) > 0.001 || !EnableTemporal || FRAME_COUNT < 2)
+            return current_ao;
 
-        float2 clipped_history = clamp(history_signal, sig_min, sig_max);
+        float2 velocity = MV_GetVelocity(viewUV);
+        float2 reprojected_view_uv = viewUV + velocity;
+        float2 reprojected_buffer_uv = reprojected_view_uv * RenderScale;
 
-        // Blend
-        float blend_factor = 0.9 * confidence;
-        float2 temporal_signal = lerp(float2(current_ao, current_ao * current_ao), clipped_history, blend_factor);
+        if (any(reprojected_view_uv < 0.0) || any(reprojected_view_uv > 1.0))
+            return current_ao;
 
-        // Spatial Filter 
-        float trust_factor = 1.0;
-        if (confidence < 0.9)
+        float history_ao = SampleHistoryCatmullRom_Scalar(sHistoryParams, reprojected_buffer_uv, float2(BUFFER_WIDTH, BUFFER_HEIGHT));
+
+        // Variance Clipping
+        float m1 = 0.0;
+        float m2 = 0.0;
+        float2 pSize = ReShade::PixelSize;
+
+        [unroll]
+        for (int x = -1; x <= 1; x++)
         {
-            trust_factor = ComputeTrustFactor(velocity * BUFFER_DIM);
-        }
-
-        if (trust_factor < 0.95)
-        {
-            float2 blurred_signal = float2(current_ao, current_ao * current_ao);
-            float valid_samples = 1.0;
-            const int blur_samples = 3;
-            
             [unroll]
-            for (int i = 1; i < blur_samples; i++)
+            for (int y = -1; y <= 1; y++)
             {
-                float t = (float) i / (float) (blur_samples - 1);
-                float2 blur_coord = uv - velocity * 0.5 * t;
-                if (all(blur_coord >= 0.0) && all(blur_coord <= 1.0))
-                {
-                    float sampleAO = GetLod(sAO, (RenderScale >= 1.0 ? blur_coord : blur_coord * RenderScale)).r;
-                    blurred_signal += float2(sampleAO, sampleAO * sampleAO);
-                    valid_samples += 1.0;
-                }
+                float val = GetLod(sAO, input.uv + float2(x, y) * pSize).r;
+                m1 += val;
+                m2 += val * val;
             }
-            blurred_signal /= valid_samples;
-            temporal_signal = lerp(blurred_signal, temporal_signal, trust_factor);
         }
 
-        outUpscaled = temporal_signal;
+        m1 /= 9.0;
+        m2 /= 9.0;
+
+        float sigma = sqrt(abs(m2 - m1 * m1));
+        float gamma = 1.25;
+        float val_min = m1 - gamma * sigma;
+        float val_max = m1 + gamma * sigma;
+
+        float flow_magnitude = length(velocity * float2(BUFFER_WIDTH, BUFFER_HEIGHT));
+        float curr_luma = GetLuminance(Input2Linear(GetColor(viewUV).rgb));
+        float raw_confidence = saturate(MV_GetConfidenceAO(viewUV, velocity, flow_magnitude, curr_luma, sPrevLuma));
+
+        float relax_amount = 0.15 * raw_confidence;
+        val_min -= relax_amount;
+        val_max += relax_amount;
+
+        float clipped_history = clamp(history_ao, val_min, val_max);
+        float clamp_distance = abs(clipped_history - history_ao);
+        float blend_adapt = saturate(1.0 - clamp_distance * 2.0);
+
+        float max_feedback = 0.98;
+        float min_feedback = 0.85;
+        float final_feedback = lerp(min_feedback, max_feedback, raw_confidence) * lerp(0.8, 1.0, blend_adapt);
+
+        return lerp(current_ao, clipped_history, final_feedback);
+    }
+    
+    void PS_SpatioTemporal0(VS_OUTPUT input, out float outHistory : SV_Target)
+    {
+        if ((FRAME_COUNT % 2) != 0) discard;
+        outHistory = ComputeTAA(input, sHistory1);
+    }
+
+    void PS_SpatioTemporal1(VS_OUTPUT input, out float outHistory : SV_Target)
+    {
+        if ((FRAME_COUNT % 2) == 0) discard;
+        outHistory = ComputeTAA(input, sHistory0);
+    }
+
+    float JointBilateralUpsample(float2 uv, float highDepth)
+    {
+        float2 lowResUV = uv * RenderScale;
+        float3 highNormal = GetLod(sNORMALS, uv).rgb * 2.0 - 1.0;
+
+        float sumAO = 0.0;
+        float sumWeight = 0.0;
+
+        float2 texelSize = ReShade::PixelSize;
+        float2 baseUV = (floor(lowResUV / texelSize) + 0.5) * texelSize;
+
+        float depth_weight_factor = 1.0 / (0.1 * highDepth + 1e-6);
+
+        [unroll]
+        for (int x = -1; x <= 1; x++)
+        {
+            [unroll]
+            for (int y = -1; y <= 1; y++)
+            {
+                float2 sampleUV = baseUV + float2(x, y) * texelSize;
+                float sampleAO;
+
+                if ((FRAME_COUNT % 2) == 0)
+                    sampleAO = GetLod(sHistory0, sampleUV).r;
+                else
+                    sampleAO = GetLod(sHistory1, sampleUV).r;
+
+                float2 fullResSampleUV = sampleUV / RenderScale;
+                float lowDepth = GetLod(sDEPTH, fullResSampleUV).r;
+                float3 lowNormal = GetLod(sNORMALS, fullResSampleUV).rgb * 2.0 - 1.0;
+
+                float wDepth = exp(-abs(highDepth - lowDepth) * depth_weight_factor);
+                float dotN = max(0.0, dot(normalize(highNormal), normalize(lowNormal)));
+                float wNormal = pow(dotN, 16.0);
+                float wSpatial = exp(-0.5 * float(x * x + y * y));
+
+                float weight = wDepth * wNormal * wSpatial;
+                sumAO += sampleAO * weight;
+                sumWeight += weight;
+            }
+        }
+
+        if (sumWeight < 1e-6)
+        {
+            if ((FRAME_COUNT % 2) == 0) return GetLod(sHistory0, lowResUV).r;
+            else return GetLod(sHistory1, lowResUV).r;
+        }
+
+        return sumAO / sumWeight;
     }
 
     void PS_StorePrevLuma(VS_OUTPUT input, out float outLuma : SV_Target)
     {
-        outLuma = GetLuminance(GetColor(input.uv).rgb);
+        outLuma = GetLuminance(Input2Linear(GetColor(input.uv).rgb));
     }
 
     float4 PS_Apply(VS_OUTPUT input) : SV_Target
@@ -626,11 +708,26 @@ namespace MiAO24
         float4 color = GetColor(uv);
         float linear_depth = GetDepth(uv);
 
-        if (linear_depth >= 0.999)
-            return color;
+        if (linear_depth >= 0.999) return color;
+
+        float view_depth = ScreenSpaceToViewSpaceDepth(linear_depth);
+        float ao = 1.0;
+
+        if (RenderScale >= 0.99)
+        {
+            if ((FRAME_COUNT % 2) == 0)
+                ao = GetLod(sHistory0, uv).r;
+            else
+                ao = GetLod(sHistory1, uv).r;
+        }
+        else
+        {
+            ao = JointBilateralUpsample(uv, view_depth);
+        }
+
         if (DebugView == 1) // Raw SSAO
         {
-            return GetLod(sFINAL_AO, uv).rrrr;
+            return float4(ao, ao, ao, 1.0);
         }
         else if (DebugView == 2) // Normals
         {
@@ -642,9 +739,15 @@ namespace MiAO24
             return float4(debugNormals * 0.5 + 0.5, 1.0);
         }
     
-        float ao = GetLod(sFINAL_AO, uv).r;
-        color.rgb *= ao;
-        return color;
+        float3 linearColor = Input2Linear(color.rgb);
+        linearColor *= ao;
+        
+        return float4(Linear2Output(linearColor), color.a);
+    }
+    
+    void PS_SaveScale(VS_OUTPUT input, out float outScale : SV_Target)
+    {
+        outScale = RenderScale;
     }
     
     technique MiAO
@@ -655,7 +758,6 @@ namespace MiAO24
             PixelShader = PS_Prepare;
             RenderTarget0 = DEPTH;
             RenderTarget1 = NORMALS;
-            RenderTarget2 = HISTORY_AO;
         }
         pass GenerateAO
         {
@@ -664,22 +766,34 @@ namespace MiAO24
             RenderTarget = AO;
             GenerateMipMaps = true;
         }
-        pass Upscale
+        pass SpatioTemporal0
         {
-            VertexShader = VS_MiAO;
-            PixelShader = PS_Upscale;
-            RenderTarget = FINAL_AO;
+            VertexShader = VS_MiAO_Even;
+            PixelShader = PS_SpatioTemporal0;
+            RenderTarget = History0;
         }
-        pass Apply
+        pass SpatioTemporal1
         {
-            VertexShader = VS_MiAO;
-            PixelShader = PS_Apply;
+            VertexShader = VS_MiAO_Odd;
+            PixelShader = PS_SpatioTemporal1;
+            RenderTarget = History1;
         }
         pass UpdateLuma
         {
             VertexShader = VS_MiAO;
             PixelShader = PS_StorePrevLuma;
             RenderTarget = texPrevLuma;
+        }
+        pass Apply
+        {
+            VertexShader = VS_MiAO;
+            PixelShader = PS_Apply;
+        }
+        pass SaveScale
+        {
+            VertexShader = VS_MiAO;
+            PixelShader = PS_SaveScale;
+            RenderTarget = RS_Prev;
         }
     }
 }

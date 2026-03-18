@@ -13,6 +13,7 @@
 // :: UI :: |
 //----------|
 uniform int HDR_Input_Format <
+    ui_category_closed = true;
     ui_category = "HDR";
     ui_label = "Input Format";
     ui_tooltip = "Select the color space of the game.\n"
@@ -24,6 +25,7 @@ uniform int HDR_Input_Format <
 > = 0;
 
 uniform float HDR_Peak_Nits <
+    ui_category_closed = true;
     ui_category = "HDR";
     ui_label = "HDR Peak Brightness (Nits)";
     ui_tooltip = "Set this to match your monitor's maximum HDR brightness capabilities (e.g., 400 for DisplayHDR 400, 1000 for high-end HDR). Only affects HDR formats.";
@@ -32,6 +34,7 @@ uniform float HDR_Peak_Nits <
 > = 1000.0;
 
 uniform bool SDR_ITM_Hue_Preserving <
+    ui_category_closed = true;
     ui_category = "HDR";
     ui_label = "SDR ITM Hue Preserving";
     ui_tooltip = "Enable to preserve original hues during brightness expansion.\n"
@@ -93,34 +96,30 @@ float3 Linear2PQ(float3 linearColor)
 
 float3 sRGB2Linear(float3 x)
 {
-    float3 linear_srgb = (x < 0.04045) ?
-        (x / 12.92) : pow(abs((x + 0.055) / 1.055), 2.4);
+    float3 linear_srgb = (x < 0.04045) ? (x / 12.92) : pow(abs((x + 0.055) / 1.055), 2.4);
 
     float3 expanded_rgb;
-
     if (SDR_ITM_Hue_Preserving)
     {
         // Hue-Preserving Inverse Reinhard
         float luma = dot(linear_srgb, LUMA_709);
-        float safe_luma = min(luma, 0.95);
+        float safe_luma = min(luma, 0.99); 
         float expanded_luma = safe_luma / max(1.0 - safe_luma, 0.001);
-        
         expanded_rgb = linear_srgb * (expanded_luma / max(luma, 1e-5));
     }
     else
     {
         // Per-channel Inverse Reinhard
-        float3 safe_rgb = min(linear_srgb, 0.95);
+        float3 safe_rgb = min(linear_srgb, 0.99);
         expanded_rgb = (safe_rgb / max(1.0 - safe_rgb, 0.001));
     }
 
-    return expanded_rgb * SDR_Inverse_Power;
+    return expanded_rgb;
 }
 
 float3 Linear2sRGB(float3 x)
 {
     x = max(x, 0.0);
-    x = x / max(SDR_Inverse_Power, 0.001);
 
     if (SDR_ITM_Hue_Preserving)
     {
@@ -136,8 +135,7 @@ float3 Linear2sRGB(float3 x)
         x = x / (1.0 + x);
     }
     
-    return (x < 0.0031308) ?
-        (12.92 * x) : (1.055 * pow(abs(x), 1.0 / 2.4) - 0.055);
+    return (x < 0.0031308) ? (12.92 * x) : (1.055 * pow(abs(x), 1.0 / 2.4) - 0.055);
 }
 
 float3 Input2Linear(float3 color)
@@ -204,4 +202,22 @@ float3 HSVToRGB(float3 c)
     const float4 K = float4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
     float3 p = abs(frac(c.xxx + K.xyz) * 6.0 - K.www);
     return c.z * lerp(K.xxx, saturate(p - K.xxx), c.y);
+}
+
+float3 RGBToYCoCg(float3 c)
+{
+    return float3(
+    0.25 * c.r + 0.5 * c.g + 0.25 * c.b,
+    0.5 * c.r - 0.5 * c.b,
+    -0.25 * c.r + 0.5 * c.g - 0.25 * c.b
+    );
+}
+
+float3 YCoCgToRGB(float3 c)
+{
+    return float3(
+    c.x + c.y - c.z,
+    c.x + c.z,
+    c.x - c.y - c.z
+    );
 }

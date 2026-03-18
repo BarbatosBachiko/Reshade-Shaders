@@ -1,33 +1,19 @@
 /*----------------------------------------------|
 | ::              Barbatos GI                :: |
 |-----------------------------------------------|
-| Version: 1.2                                  |
+| Version: 1.5                                  |
 | Author: Barbatos                              |
 | License: MIT                                  |
 '----------------------------------------------*/
 #include "ReShade.fxh"
+#include "BaBa_ColorSpace.fxh"
 #include "BaBa_MV.fxh"
 
 //----------|
 // :: UI :: |
 //----------|
-//HDR
-uniform int HDR_Input_Format <
-    ui_category = "HDR";
-    ui_label = "Input Format";
-    ui_tooltip = "Auto = Detect automatically (recommended)\nRaw = No conversion";
-    ui_type = "combo";
-    ui_items = "Auto\0sRGB (SDR)\0scRGB (HDR Linear)\0HDR10 (PQ)\0Raw (No Conversion)\0";
-> = 0;
 
-uniform float HDR_Peak_Nits <
-    ui_category = "HDR";
-    ui_label = "HDR Peak Brightness (Nits)";
-    ui_type = "drag";
-    ui_min = 400.0; ui_max = 10000.0; ui_step = 10.0;
-> = 1000.0;
-
-//GI
+// Global Lighting
 uniform float Intensity <
     ui_category = "Global Lighting";
     ui_label = "GI Intensity";
@@ -35,69 +21,81 @@ uniform float Intensity <
     ui_min = 0.0; ui_max = 5.0; ui_step = 0.01;
 > = 1.0;
 
-uniform float Roughness <
-    ui_category = "Global Lighting";
-    ui_label = "Roughness";
-    ui_tooltip = "Controls the glossiness of the reflections.\n0.0 = Mirror, 1.0 = Diffuse.";
-    ui_type = "drag";
-    ui_min = 0.0;
-    ui_max = 1.0; ui_step = 0.01;
-> = 1.0;
-
-uniform float Thickness <
-    ui_category = "Global Lighting";
-    ui_label = "Thickness";
-    ui_type = "drag";
-    ui_min = 0.01;
-    ui_max = 0.2; ui_step = 0.01;
-> = 0.02;
-
 uniform float GI_RenderDistance <
     ui_category = "Global Lighting";
     ui_label = "Render Distance";
     ui_type = "drag";
-    ui_min = 0.0; ui_max = 1.0;
-    ui_step = 0.001;
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.001;
 > = 1.0;
 
+// Raytracing (Advanced)
 uniform int RayCount <
-    ui_category = "Global Lighting";
+    ui_category = "Raytracing (Advanced)";
+    ui_category_closed = true;
     ui_label = "Rays per Pixel";
     ui_type = "drag";
     ui_min = 1; ui_max = 16; ui_step = 1.0;
 > = 2;
 
 uniform int RaySteps <
-    ui_category = "Global Lighting";
+    ui_category = "Raytracing (Advanced)";
     ui_label = "Ray Steps";
     ui_type = "drag";
-    ui_min = 2;
-    ui_max = 16;
+    ui_min = 2; ui_max = 16;
 > = 6;
 
-uniform float Near_Intensity <
-    ui_category = "Global Lighting";
-    ui_label = "Near Field Intensity";
+uniform float Thickness <
+    ui_category = "Raytracing (Advanced)";
+    ui_label = "Thickness";
     ui_type = "drag";
-    ui_min = 0.0;
-    ui_max = 2.0; ui_step = 0.01;
-> = 0.8;
+    ui_min = 0.01; ui_max = 0.2; ui_step = 0.01;
+> = 0.02;
 
 uniform float MaxRayDistance <
-    ui_category =  "Global Lighting";
+    ui_category = "Raytracing (Advanced)";
     ui_label = "Max Ray Distance";
     ui_type = "drag";
-    ui_min = 0.01;
-    ui_max = 0.5; ui_step = 0.001;
+    ui_min = 0.01; ui_max = 0.5; ui_step = 0.001;
 > = 0.100;
 
-//AO
+uniform float Near_Intensity <
+    ui_category = "Raytracing (Advanced)";
+    ui_label = "Near Field Intensity";
+    ui_type = "drag";
+    ui_min = 0.0; ui_max = 2.0; ui_step = 0.01;
+> = 0.8;
+
+uniform float GI_Bounce_Saturation <
+    ui_category = "Raytracing (Advanced)";
+    ui_label = "Bounce Color Saturation";
+    ui_tooltip = "Increases or decreases the color intensity of the bounced light.";
+    ui_type = "drag";
+    ui_min = 0.0; ui_max = 5.0; ui_step = 0.01;
+> = 1.5;
+
+uniform float GI_Bounce_Energy <
+    ui_category = "Raytracing (Advanced)";
+    ui_label = "Bounce Energy Multiplier";
+    ui_tooltip = "Multiplier for the raw bounce light intensity.";
+    ui_type = "drag";
+    ui_min = 0.0; ui_max = 5.0; ui_step = 0.01;
+> = 1.5;
+
+uniform float MultiBounce_Weight <
+    ui_category = "Raytracing (Advanced)";
+    ui_label = "Infinite Bounces Weight";
+    ui_tooltip = "Simulates multiple light bounces by accumulating previous frame GI. \nHigh values may cause glowing feedback loops.";
+    ui_type = "drag";
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+> = 0.0;
+
+// Ambient Occlusion
 uniform float AO_Intensity <
     ui_category = "Ambient Occlusion";
+    ui_category_closed = true;
     ui_label = "AO Intensity";
     ui_type = "drag";
-    ui_min = 0.0;
-    ui_max = 2.0; ui_step = 0.01;
+    ui_min = 0.0; ui_max = 2.0; ui_step = 0.01;
 > = 1.0;
 
 uniform float AO_Radius <
@@ -123,6 +121,7 @@ uniform int AO_BlendMode <
 // Color Grading
 uniform bool Use_Color_Temperature <
     ui_category = "Color Grading";
+    ui_category_closed = true;
     ui_label = "Use Color Temperature";
 > = false;
 
@@ -150,16 +149,14 @@ uniform float GI_Vibrance <
     ui_category = "Color Grading";
     ui_label = "Saturation";
     ui_type = "drag";
-    ui_min = 0.0; ui_max = 10.0;
-    ui_step = 0.1;
+    ui_min = 0.0; ui_max = 10.0; ui_step = 0.1;
 > = 2.0;
 
 uniform float GI_Contrast <
     ui_category = "Color Grading";
     ui_label = "Contrast";
     ui_type = "drag";
-    ui_min = 0.0;
-    ui_max = 2.0;
+    ui_min = 0.0; ui_max = 2.0;
 > = 1.0;
 
 uniform float3 GI_Shadow_Tint <
@@ -181,13 +178,13 @@ uniform float GI_Split_Balance <
     ui_label = "Split Balance";
     ui_tooltip = "Determines the separation point between Shadows and Highlights.";
     ui_type = "drag";
-    ui_min = 0.0;
-    ui_max = 1.0;
+    ui_min = 0.0; ui_max = 1.0;
 > = 0.5;
 
-// Manual Position
+// Manual Light
 uniform bool SSS_Enabled <
     ui_category = "Manual Light";
+    ui_category_closed = true;
     ui_label = "Enable Screen Space Shadows";
     ui_tooltip = "Adds directional shadows";
 > = false;
@@ -208,8 +205,7 @@ uniform float Sun_Azimuth <
     ui_category = "Manual Light";
     ui_label = "Sun Rotation (Azimuth)";
     ui_type = "drag";
-    ui_min = 0.0; ui_max = 360.0;
-    ui_step = 1.0;
+    ui_min = 0.0; ui_max = 360.0; ui_step = 1.0;
 > = 175.0;
 
 uniform float Sun_Elevation <
@@ -223,8 +219,7 @@ uniform float Shadow_Softness <
     ui_category = "Manual Light";
     ui_label = "Sun Shadow Softness";
     ui_type = "drag";
-    ui_min = 0.0;
-    ui_max = 1.0;
+    ui_min = 0.0; ui_max = 1.0;
 > = 0.1;
 
 uniform float Sun_Shadow_Fill <
@@ -243,36 +238,43 @@ uniform float2 Sun_Widget_Pos <
     ui_category = "Manual Light";
     ui_label = "Widget Position";
     ui_type = "drag";
-    ui_min = 0.0; ui_max = 1.0;
-    ui_step = 0.001;
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.001;
 > = float2(0.88, 0.15);
 
 uniform float Sun_Widget_Scale <
     ui_category = "Manual Light";
     ui_label = "Widget Scale";
     ui_type = "drag";
-    ui_min = 0.05; ui_max = 0.5;
-    ui_step = 0.001;
+    ui_min = 0.05; ui_max = 0.5; ui_step = 0.001;
 > = 0.100;
 
+// System / Advanced
 uniform float RenderScale <
-   ui_category = "Advanced";
-    ui_label = "Resolution";
+    ui_category = "System / Debug";
+    ui_category_closed = true;
+    ui_label = "Resolution Scale";
     ui_tooltip = "Scales the rendering resolution of GI.";
     ui_type = "drag";
     ui_min = 0.1; ui_max = 1.0; ui_step = 0.001;
 > = 0.333;
 
-// Tech
+uniform float Roughness <
+    ui_category_closed = true;
+    ui_category = "System / Debug";
+    ui_label = "Roughness";
+    ui_type = "drag";
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+> = 1.0;
+
 uniform float VERTICAL_FOV <
-    ui_category = "Advanced";
-    ui_label = "Camera Vertical FOV";
+    ui_category = "System / Debug";
+    ui_label = "FOV";
     ui_type = "drag";
     ui_min = 15.0; ui_max = 120.0; ui_step = 0.1;
 > = 60.0;
 
 uniform int ViewMode <
-    ui_category = "Advanced";
+    ui_category = "System / Debug";
     ui_label = "Debug View";
     ui_type = "combo";
     ui_items = "Off\0GI Only\0AO Only\0Surface Normals\0Motion Vectors\0Raw LowRes GI\0White World\0Luminance\0";
@@ -289,21 +291,15 @@ uniform int ViewMode <
 
 static const float DEG2RAD = 0.017453292;
 
-static const float2 TAA_Offsets[5] = { float2(0, 0), float2(0, -1), float2(-1, 0), float2(1, 0), float2(0, 1) };
-
 uniform int FRAME_COUNT < source = "framecount"; >;
 uniform float TIMER < source = "timer"; >;
 
-#ifndef BUFFER_COLOR_SPACE
-#define BUFFER_COLOR_SPACE 0
-#endif
-
-namespace Barbatos_GI_115
+namespace Barbatos_RTGI_150
 {
     texture Normal
     {
-        Width = BUFFER_WIDTH;
-        Height = BUFFER_HEIGHT;
+        Width = GW;
+        Height = GH;
         Format = RGBA16F;
     };
     sampler sNormal
@@ -384,8 +380,8 @@ namespace Barbatos_GI_115
 
     texture TexColorCopy
     {
-        Width = BUFFER_WIDTH;
-        Height = BUFFER_HEIGHT;
+        Width = GW;
+        Height = GH;
         Format = RGBA8;
         MipLevels = 8;
     };
@@ -399,9 +395,23 @@ namespace Barbatos_GI_115
         MipFilter = LINEAR;
     };
 
+    texture RS_Prev
+    {
+        Width = 1;
+        Height = 1;
+        Format = R16F;
+    };
+    sampler sRS_Prev
+    {
+        Texture = RS_Prev;
+        MagFilter = POINT;
+        MinFilter = POINT;
+    };
+
     //---------------------|
     // :: Vertex Shaders ::|
     //---------------------|
+
     struct VS_OUTPUT
     {
         float4 vpos : SV_Position;
@@ -411,8 +421,7 @@ namespace Barbatos_GI_115
     
     void VS_Barbatos_PTGI(in uint id : SV_VertexID, out VS_OUTPUT outStruct)
     {
-        outStruct.uv.x = (id == 2) ?
-        2.0 : 0.0;
+        outStruct.uv.x = (id == 2) ? 2.0 : 0.0;
         outStruct.uv.y = (id == 1) ? 2.0 : 0.0;
         outStruct.vpos = float4(outStruct.uv * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
         
@@ -423,122 +432,6 @@ namespace Barbatos_GI_115
     //-----------------|
     // :: Functions :: |
     //-----------------|
-
-    static const float3 LUMA_709 = float3(0.2126, 0.7152, 0.0722);
-    static const float3 LUMA_2020 = float3(0.2627, 0.6780, 0.0593);
-
-    int GetHDRMode()
-    {
-        if (HDR_Input_Format != 0)
-            return HDR_Input_Format;
-
-#if BUFFER_COLOR_SPACE == 1
-            return 1;
-#elif BUFFER_COLOR_SPACE == 2
-            return 2;
-#elif BUFFER_COLOR_SPACE == 3
-            return 3;
-#else
-        return 1;
-#endif
-    }
-
-    float3 PQ2Linear(float3 color)
-    {
-        float m1 = 0.1593017578125;
-        float m2 = 78.84375;
-        float c1 = 0.8359375;
-        float c2 = 18.8515625;
-        float c3 = 18.6875;
-
-        float3 val = max(pow(abs(color), 1.0 / m2) - c1, 0.0);
-        float3 den = c2 - c3 * pow(abs(color), 1.0 / m2);
-        float3 linearHdr = pow(abs(val / den), 1.0 / m1);
-
-        return linearHdr * (10000.0 / HDR_Peak_Nits);
-    }
-
-    float3 Linear2PQ(float3 linearColor)
-    {
-        float m1 = 0.1593017578125;
-        float m2 = 78.84375;
-        float c1 = 0.8359375;
-        float c2 = 18.8515625;
-        float c3 = 18.6875;
-
-        float3 Y = max(0.0, linearColor * (HDR_Peak_Nits / 10000.0));
-        float3 num = c1 + c2 * pow(Y, m1);
-        float3 den = 1.0 + c3 * pow(Y, m1);
-        return pow(num / den, m2);
-    }
-
-    float3 sRGB2Linear(float3 x)
-    {
-        return (x < 0.04045) ?
-        (x / 12.92) : pow(abs((x + 0.055) / 1.055), 2.4);
-    }
-
-    float3 Linear2sRGB(float3 x)
-    {
-        return (x < 0.0031308) ?
-        (12.92 * x) : (1.055 * pow(abs(x), 1.0 / 2.4) - 0.055);
-    }
-
-    float3 Input2Linear(float3 color)
-    {
-        int mode = GetHDRMode();
-        if (mode == 4)
-            return color;
-        else if (mode == 2)
-            return color * (80.0 / HDR_Peak_Nits);
-        else if (mode == 3)
-            return PQ2Linear(color);
-        else
-            return sRGB2Linear(color);
-    }
-
-    float3 Linear2Output(float3 color)
-    {
-        int mode = GetHDRMode();
-        if (mode == 4)
-            return color;
-        else if (mode == 2)
-            return color * (HDR_Peak_Nits / 80.0);
-        else if (mode == 3)
-            return Linear2PQ(color);
-        else
-            return Linear2sRGB(color);
-    }
-
-    float GetLuminance(float3 color)
-    {
-        int mode = GetHDRMode();
-        float3 lumaCoeff = (mode == 2 || mode == 3) ? LUMA_2020 : LUMA_709;
-        return dot(color, lumaCoeff);
-    }
-
-    float3 KelvinToRGB(float k)
-    {
-        float3 color;
-        k = clamp(k, 1000.0, 40000.0) / 100.0;
-
-        if (k <= 66.0)
-        {
-            color.r = 255.0;
-            color.g = 99.4708025861 * log(k) - 161.1195681661;
-            if (k <= 19.0)
-                color.b = 0.0;
-            else
-                color.b = 138.5177312231 * log(k - 10.0) - 305.0447927307;
-        }
-        else
-        {
-            color.r = 329.698727446 * pow(k - 60.0, -0.1332047592);
-            color.g = 288.1221695283 * pow(k - 60.0, -0.0755148492);
-            color.b = 255.0;
-        }
-        return saturate(color / 255.0);
-    }
 
     float3 GetFalseColor(float luminance)
     {
@@ -551,6 +444,7 @@ namespace Barbatos_GI_115
             color = lerp(float3(0, 1, 0), float3(1, 1, 0), (luminance - 0.5) * 4.0);
         else
             color = lerp(float3(1, 1, 0), float3(1, 0, 0), (luminance - 0.75) * 4.0);
+        
         return color;
     }
 
@@ -561,6 +455,7 @@ namespace Barbatos_GI_115
         float x = sin(az) * cos(el);
         float y = sin(el);
         float z = cos(az) * cos(el);
+        
         return normalize(float3(x, y, z));
     }
 
@@ -605,21 +500,21 @@ namespace Barbatos_GI_115
     //---------------------------|
     // :: View Space & Normal :: |
     //---------------------------|
+    
     float3 CalculateNormal(float2 uv, float2 pScale)
     {
         float3 center = UVToViewPos(uv, GetDepth(uv), pScale);
         float3 offset_x = UVToViewPos(uv + float2(ReShade::PixelSize.x, 0), GetDepth(uv + float2(ReShade::PixelSize.x, 0)), pScale);
         float3 offset_y = UVToViewPos(uv + float2(0, ReShade::PixelSize.y), GetDepth(uv + float2(0, ReShade::PixelSize.y)), pScale);
+        
         float3 n = cross(center - offset_x, center - offset_y);
         float lenSq = dot(n, n);
-        return (lenSq > 1e-25) ?
-        n * rsqrt(lenSq) : float3(0, 0, -1);
+        return (lenSq > 1e-25) ? n * rsqrt(lenSq) : float3(0, 0, -1);
     }
 
     void genTB(float3 N, out float3 T, out float3 B)
     {
-        float s = N.z < 0.0 ?
-        -1.0 : 1.0;
+        float s = N.z < 0.0 ? -1.0 : 1.0;
         float a = -1.0 / (s + N.z);
         float b = N.x * N.y * a;
         T = float3(1.0 + s * N.x * N.x * a, s * b, -s * N.x);
@@ -653,6 +548,7 @@ namespace Barbatos_GI_115
         float3 up = abs(N.z) < 0.999 ? float3(0, 0, 1) : float3(1, 0, 0);
         float3 tangent = normalize(cross(up, N));
         float3 bitangent = cross(N, tangent);
+        
         return normalize(tangent * H.x + bitangent * H.y + N * H.z);
     }
 
@@ -675,11 +571,11 @@ namespace Barbatos_GI_115
         
             if (any(hitUV < 0.0) || any(hitUV > 1.0))
                 return false;
-
+                
             float zScene = GetDepth(hitUV);
             float zRay = current.z;
             float depthDiff = zRay - zScene;
-
+            
             if (zScene < 0.999 && depthDiff > 0.0 && depthDiff < currentThickness)
             {
                 // BINARY SEARCH
@@ -693,6 +589,7 @@ namespace Barbatos_GI_115
                     float2 midUV = ViewPosToUV(midPos, pScale);
                     if (any(midUV < 0.0) || any(midUV > 1.0))
                         break;
+                        
                     float midDepth = GetDepth(midUV);
                     if (midPos.z > midDepth)
                         endPos = midPos;
@@ -732,44 +629,91 @@ namespace Barbatos_GI_115
         float3 v_unit = v_clip / e_clip;
         float3 a_unit = abs(v_unit);
         float ma_unit = max(a_unit.x, max(a_unit.y, a_unit.z));
+        
         return (ma_unit > 1.0) ? (p_clip + v_clip / ma_unit) : history_sample;
     }
 
-    void ComputeNeighborhoodMinMax(sampler sInput, float2 texcoord, out float4 color_min, out float4 color_max)
+    // Variance Clipping 
+    void ComputeNeighborhoodVariance(sampler sInput, float2 texcoord, float4 current_c, out float4 color_min, out float4 color_max)
     {
         float2 pSize = ReShade::PixelSize;
-        float4 center_color = GetLod(sInput, texcoord);
+        float4 m1 = current_c;
+        float4 m2 = current_c * current_c;
         
-        center_color.rgb = TAA_Compress(center_color.rgb);
-        
-        color_min = center_color;
-        color_max = center_color;
-
         [unroll]
         for (int x = -1; x <= 1; x++)
         {
             [unroll]
             for (int y = -1; y <= 1; y++)
             {
-                if (x == 0 && y == 0)
-                    continue;
-
-                float4 s = GetLod(sInput, texcoord + float2(x,y) * pSize);
-                s.rgb = TAA_Compress(s.rgb);
-
-                color_min = min(color_min, s);
-                color_max = max(color_max, s);
+                if (x == 0 && y == 0) continue;
+                
+                float4 c = GetLod(sInput, texcoord + float2(x, y) * pSize);
+                c.rgb = TAA_Compress(c.rgb);
+                c.rgb = RGBToYCoCg(c.rgb); 
+                
+                m1 += c;
+                m2 += c * c;
             }
         }
+        
+        m1 /= 9.0;
+        m2 /= 9.0;
+        
+        float4 sigma = sqrt(abs(m2 - m1 * m1));
+        float gamma = 1.25;
+        
+        color_min = m1 - gamma * sigma;
+        color_max = m1 + gamma * sigma;
+    }
+
+    float4 SampleHistoryCatmullRom(sampler sInput, float2 uv, float2 texSize)
+    {
+        float2 samplePos = uv * texSize;
+        float2 texPos1 = floor(samplePos - 0.5) + 0.5;
+        float2 f = samplePos - texPos1;
+        
+        float2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
+        float2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
+        float2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));
+        float2 w3 = f * f * (-0.5 + 0.5 * f);
+
+        float2 w12 = w1 + w2;
+        float2 offset12 = w2 / (w1 + w2);
+
+        float2 texPos0 = texPos1 - 1.0;
+        float2 texPos3 = texPos1 + 2.0;
+        float2 texPos12 = texPos1 + offset12;
+
+        texPos0 /= texSize;
+        texPos3 /= texSize;
+        texPos12 /= texSize;
+
+        float4 result = 0.0;
+        
+        result += GetLod(sInput, float2(texPos0.x, texPos0.y)) * w0.x * w0.y;
+        result += GetLod(sInput, float2(texPos12.x, texPos0.y)) * w12.x * w0.y;
+        result += GetLod(sInput, float2(texPos3.x, texPos0.y)) * w3.x * w0.y;
+
+        result += GetLod(sInput, float2(texPos0.x, texPos12.y)) * w0.x * w12.y;
+        result += GetLod(sInput, float2(texPos12.x, texPos12.y)) * w12.x * w12.y;
+        result += GetLod(sInput, float2(texPos3.x, texPos12.y)) * w3.x * w12.y;
+        
+        result += GetLod(sInput, float2(texPos0.x, texPos3.y)) * w0.x * w3.y;
+        result += GetLod(sInput, float2(texPos12.x, texPos3.y)) * w12.x * w3.y;
+        result += GetLod(sInput, float2(texPos3.x, texPos3.y)) * w3.x * w3.y;
+
+        return max(result, 0.0);
     }
 
     float4 ComputeTAA(VS_OUTPUT input, sampler sHistoryParams)
     {
         if (any(input.uv > RenderScale))
             discard;
+            
         float2 viewUV = input.uv / RenderScale;
-
         float depth = GetDepth(viewUV);
+        
         if (depth >= 0.999)
             return float4(0.0, 0.0, 0.0, 1.0);
             
@@ -778,28 +722,38 @@ namespace Barbatos_GI_115
         float2 velocity = MV_GetVelocity(viewUV);
         float2 reprojected_view_uv = viewUV + velocity;
         float2 reprojected_buffer_uv = reprojected_view_uv * RenderScale;
-        float4 history_gi = GetLod(sHistoryParams, reprojected_buffer_uv);
         
+        float4 history_gi = SampleHistoryCatmullRom(sHistoryParams, reprojected_buffer_uv, float2(GW, GH));
         float3 current_compressed = TAA_Compress(current_gi.rgb);
+        float3 current_ycocg = RGBToYCoCg(current_compressed);
+        float4 current_c = float4(current_ycocg, current_gi.a);
+        
         float3 history_compressed = TAA_Compress(history_gi.rgb);
-
+        float3 history_ycocg = RGBToYCoCg(history_compressed);
+        
         float raw_confidence = saturate(MV_GetConfidence(viewUV));
-
         float4 color_min, color_max;
-        ComputeNeighborhoodMinMax(sAccum, input.uv, color_min, color_max);
+        ComputeNeighborhoodVariance(sAccum, input.uv, current_c, color_min, color_max);
 
         float relax_amount = 0.15 * raw_confidence;
         color_min -= relax_amount;
         color_max += relax_amount;
-
-        float3 clipped_history_rgb = ClipToAABB(color_min.rgb, color_max.rgb, history_compressed);
+        float3 clipped_history_ycocg = ClipToAABB(color_min.rgb, color_max.rgb, history_ycocg);
         float clipped_history_a = clamp(history_gi.a, color_min.a, color_max.a);
-
+        
+        float clamp_distance = length(clipped_history_ycocg - history_ycocg);
+        float blend_adapt = saturate(1.0 - clamp_distance * 2.0); 
+        
         float max_feedback = 0.98;
-        float min_feedback = 0.85; 
-        float final_feedback = lerp(min_feedback, max_feedback, raw_confidence);
-
-        float3 result_compressed = lerp(current_compressed, clipped_history_rgb, final_feedback);
+        float min_feedback = 0.85;
+        float final_feedback = lerp(min_feedback, max_feedback, raw_confidence) * lerp(0.8, 1.0, blend_adapt);
+        
+        float prevRenderScale = tex2Dlod(sRS_Prev, float4(0, 0, 0, 0)).x;
+        if (abs(RenderScale - prevRenderScale) > 0.001)
+            final_feedback = 0.0;
+            
+        float3 result_ycocg = lerp(current_ycocg, clipped_history_ycocg, final_feedback);
+        float3 result_compressed = YCoCgToRGB(result_ycocg);
         float result_alpha = lerp(current_gi.a, clipped_history_a, final_feedback);
         
         return float4(TAA_Resolve(result_compressed), result_alpha);
@@ -808,6 +762,7 @@ namespace Barbatos_GI_115
     //--------------------|
     // :: Pixel Shaders ::|
     //--------------------|
+    
     void PS_CopyColor(VS_OUTPUT input, out float4 outColor : SV_Target)
     {
         outColor = GetColor(input.uv);
@@ -817,7 +772,7 @@ namespace Barbatos_GI_115
     {
         if (any(input.uv > RenderScale))
             discard;
-
+            
         float2 viewUV = input.uv / RenderScale;
 
         float d = GetDepth(viewUV);
@@ -834,12 +789,12 @@ namespace Barbatos_GI_115
     {
         if (any(input.uv > RenderScale))
             discard;
-
+            
         float2 viewUV = input.uv / RenderScale;
 
         float4 gbuffer = GetLod(sNormal, input.uv);
         float depth = gbuffer.a;
-
+        
         if (depth >= 0.999 || depth > GI_RenderDistance)
         {
             outGI = float4(0.0, 0.0, 0.0, 1.0);
@@ -855,29 +810,29 @@ namespace Barbatos_GI_115
         float currentMaxRayDistance = MaxRayDistance * distanceScale;
         float currentAORadius = AO_Radius * distanceScale;
         float currentThickness = Thickness * distanceScale;
-
+        
         float3 totalRadiance = 0.0;
         float totalVisibility = 0.0;
 
-        uint pixelIndex = uint((input.vpos.y / RenderScale) * BUFFER_WIDTH + (input.vpos.x / RenderScale));
+        uint pixelIndex = uint((input.vpos.y / RenderScale) * GW + (input.vpos.x / RenderScale));
         uint perFrameSeedBase = uint(FRAME_COUNT) * RayCount;
 
         float3 blueNoiseSeed = float3(
-        frac(pixelIndex * 0.1031),
-        frac(pixelIndex * 0.11369),
-        frac(pixelIndex * 0.13787)
-    );
-
+            frac(pixelIndex * 0.1031),
+            frac(pixelIndex * 0.11369),
+            frac(pixelIndex * 0.13787)
+        );
+        
         float bias = (depth * 0.002) + 0.0005;
         float3 rayOrigin = viewPos + normal * bias;
         float3 sunDir = float3(0, 1, 0);
         
         // View Vector for Reflection Calculation
         float3 V = normalize(-viewPos);
-
+        
         if (Manual_Sun_Enabled || SSS_Enabled)
             sunDir = GetSunVector();
-
+            
         [loop]
         for (int s = 0; s < RayCount; s++)
         {
@@ -912,20 +867,27 @@ namespace Barbatos_GI_115
 
             if (TraceRay(rayOrigin, rayDir, input.pScale, RaySteps, rand.z, currentMaxRayDistance, currentThickness, hitUV, hitPos, hitDist))
             {
-                float3 hitNormal = tex2Dlod(sNormal, float4(hitUV, 0, 0)).rgb;
+                float3 hitNormal = tex2Dlod(sNormal, float4(hitUV * RenderScale, 0, 0)).rgb;
                 bool validHit = Manual_Sun_Enabled ? true : (dot(rayDir, hitNormal) < 0.1);
-
-                if (validHit)
+                
+               if (validHit)
                 {
-                  float3 rawAlbedo = tex2Dlod(sTexColorCopy, float4(hitUV, 0, 3.0)).rgb;
-                  float3 linearAlbedo = Input2Linear(rawAlbedo);
-                    
-                    // Boost bounce energy 
+                    float3 rawAlbedo = tex2Dlod(sTexColorCopy, float4(hitUV, 0, 3.0)).rgb;
+                    float3 linearAlbedo = Input2Linear(rawAlbedo);
                     float albedoLuma = GetLuminance(linearAlbedo);
                     float3 chroma = linearAlbedo - albedoLuma;
-                    linearAlbedo = saturate(albedoLuma + chroma * 1.5); 
-                    linearAlbedo *= 1.5;
-
+                    linearAlbedo = saturate(albedoLuma + chroma * GI_Bounce_Saturation); 
+                    linearAlbedo *= GI_Bounce_Energy;
+                    
+                    // Infinite Bounces
+                    if (MultiBounce_Weight > 0.0)
+                    {
+                        float3 prevGI = (FRAME_COUNT % 2 == 0) ? 
+                            GetLod(sHistory1, hitUV * RenderScale).rgb : 
+                            GetLod(sHistory0, hitUV * RenderScale).rgb;
+                        linearAlbedo *= (1.0 + prevGI * MultiBounce_Weight);
+                    }
+                    
                     if (!Manual_Sun_Enabled)
                         totalRadiance += linearAlbedo;
                     else
@@ -934,8 +896,7 @@ namespace Barbatos_GI_115
         
                 float distFactor = saturate(hitDist / max(0.001, currentAORadius));
                 float weight_falloff = saturate(1.0 - distFactor * distFactor); // Quadratic
-                float weight = Manual_Sun_Enabled ?
-                Sun_Shadow_Fill : weight_falloff;
+                float weight = Manual_Sun_Enabled ? Sun_Shadow_Fill : weight_falloff;
 
                 totalVisibility += weight;
             }
@@ -960,26 +921,23 @@ namespace Barbatos_GI_115
         else
         {
             finalVisibility = 1.0 - saturate(totalVisibility * invRays * AO_Intensity);
-
+            
             if (SSS_Enabled)
             {
                 float3 rand = toroidalJitter(sequence3D(perFrameSeedBase), blueNoiseSeed);
                 float3 jitter = (rand - 0.5) * Shadow_Softness;
                 float3 shadowRayDir = normalize(sunDir + jitter);
-
+                
                 if (dot(normal, shadowRayDir) > 0.0)
                 {
                     float2 sUV;
                     float3 sPos;
                     float sDist;
 
-                    bool hit = TraceRay(rayOrigin, shadowRayDir, input.pScale, RaySteps, rand.z, currentMaxRayDistance, currentThickness, sUV, sPos, sDist);
-
-                    if (hit)
+                    if (TraceRay(rayOrigin, shadowRayDir, input.pScale, RaySteps, rand.z, currentMaxRayDistance, currentThickness, sUV, sPos, sDist))
                     {
                         float2 edgeFade = smoothstep(0.0, 0.05, sUV) * (1.0 - smoothstep(0.95, 1.0, sUV));
                         float screenFade = edgeFade.x * edgeFade.y;
-                    
                         finalVisibility *= lerp(1.0, (1.0 - SSS_Intensity), screenFade);
                     }
                 }
@@ -993,7 +951,7 @@ namespace Barbatos_GI_115
     {
         if (any(input.uv > RenderScale))
             discard;
-
+            
         float4 c_data = GetLod(sInputTex, input.uv);
         float3 c_val = c_data.rgb;
         float c_ao = c_data.a;
@@ -1008,22 +966,21 @@ namespace Barbatos_GI_115
         
         float2 px = ReShade::PixelSize * stepWidth;
         float depth_weight_factor = 1.0 / (0.1 * c_depth + 1e-6);
-
+        
         [unroll]
         for (int x = -2; x <= 2; x++)
         {
             [unroll]
             for (int y = -2; y <= 2; y++)
             {
-                if (x == 0 && y == 0)
-                    continue;
-
+                if (x == 0 && y == 0) continue;
+                   
                 float2 uv_offset = input.uv + float2(x, y) * px;
                 float4 s_data = GetLod(sInputTex, uv_offset);
                 float4 s_gbuffer = GetLod(sNormal, uv_offset);
                 float3 s_norm = s_gbuffer.rgb;
                 float s_depth = s_gbuffer.a;
-
+                
                 float w_z = exp(-abs(c_depth - s_depth) * depth_weight_factor);
                 float dotN = max(0.0, dot(c_norm, s_norm));
                 dotN = pow(dotN, 4.0);
@@ -1082,7 +1039,7 @@ namespace Barbatos_GI_115
         int font[10] =
         {
             31599, // 0
-            9362, // 1
+            9362,  // 1
             29671, // 2
             29391, // 3
             23497, // 4
@@ -1090,11 +1047,13 @@ namespace Barbatos_GI_115
             31215, // 6
             29257, // 7
             31727, // 8
-            31695 // 9
+            31695  // 9
         };
+        
         int2 ip = int2(floor(uv * float2(3.0, 5.0)));
         if (ip.x < 0 || ip.x > 2 || ip.y < 0 || ip.y > 4)
             return 0.0;
+            
         int bit = (4 - ip.y) * 3 + (2 - ip.x);
         return GetBit(font[d], bit);
     }
@@ -1104,27 +1063,32 @@ namespace Barbatos_GI_115
         float2 localUV = (uv - pos) / size;
         if (localUV.y < 0.0 || localUV.y > 1.0)
             return 0.0;
+            
         float res = 0.0;
         int d1 = (number / 100) % 10;
         int d2 = (number / 10) % 10;
         int d3 = number % 10;
        
         float spacing = 0.4;
+        
         // Digit 1
         float2 digitUV = localUV;
         digitUV.x = (localUV.x) * 2.0;
         if (number >= 100)
             if (digitUV.x >= 0.0 && digitUV.x <= 1.0)
                 res += GetDigit(digitUV, d1);
+                
         // Digit 2
         digitUV.x = (localUV.x - 0.6) * 2.0;
         if (number >= 10)
             if (digitUV.x >= 0.0 && digitUV.x <= 1.0)
                 res += GetDigit(digitUV, d2);
+                
         // Digit 3
         digitUV.x = (localUV.x - 1.2) * 2.0;
         if (digitUV.x >= 0.0 && digitUV.x <= 1.0)
             res += GetDigit(digitUV, d3);
+            
         return res;
     }
 
@@ -1137,10 +1101,10 @@ namespace Barbatos_GI_115
         float distCenter = length(uv);
         if (distCenter > 2.0)
             return sceneColorLinear;
-
+            
         float3 ro = float3(0, 0, -3.5);
         float3 rd = normalize(float3(uv, 2.0));
-
+        
         // Tilt camera to see the floor
         float thV = radians(30.0);
         float cV = cos(thV);
@@ -1157,18 +1121,18 @@ namespace Barbatos_GI_115
         
         float radAz = radians(-Sun_Azimuth);
         float radEl = radians(Sun_Elevation);
-
+        
         // Calculate Sun Position 
         float3 sunPos = float3(
             sin(radAz) * cos(radEl),
             sin(radEl),
             cos(radAz) * cos(radEl)
         ) * 1.2;
-
+        
         for (int i = 0; i < 60; i++)
         {
             p = ro + rd * t;
-
+            
             // Center Cross 
             float dCross = min(length(p.xy), min(length(p.xz), length(p.yz))) - 0.01;
             float dAnchor = max(length(p) - 0.2, dCross);
@@ -1189,7 +1153,7 @@ namespace Barbatos_GI_115
             float dScene = min(dAnchor, min(dCompass, min(dElvRing, dSun)));
             
             glowAcc += 1.0 / (1.0 + dSun * dSun * 100.0);
-
+            
             if (dScene < 0.002)
             {
                 hit = true;
@@ -1219,24 +1183,15 @@ namespace Barbatos_GI_115
             float NdotL = max(0.2, dot(N, L));
             
             float3 objColor = float3(0, 0, 0);
-
             if (objID == 1) // Sun
-            {
                 objColor = float3(1.0, 0.9, 0.5) * 4.0; // Emission
-            }
             else if (objID == 2) // Compass Ring 
-            {
                 objColor = float3(1.0, 0.5, 0.0);
-            }
             else if (objID == 3) // Vertical Ring 
-            {
                 objColor = float3(0.0, 0.8, 1.0);
-            }
             else if (objID == 4) // Center 
-            {
                 objColor = float3(0.5, 0.5, 0.5);
-            }
-            
+                
             finalColor = objColor;
         }
 
@@ -1254,20 +1209,63 @@ namespace Barbatos_GI_115
         return lerp(sceneColorLinear, float4(finalColor, 1.0), edgeFade);
     }
 
+    float4 JointBilateralUpsample(float2 uv, float highDepth, float2 pScale)
+    {
+        float2 lowResUV = uv * RenderScale;
+        float3 highNormal = CalculateNormal(uv, pScale);
+
+        float4 sumGI = 0.0;
+        float sumWeight = 0.0;
+
+        float2 texelSize = ReShade::PixelSize;
+        float2 baseUV = (floor(lowResUV / texelSize) + 0.5) * texelSize;
+
+        float depth_weight_factor = 1.0 / (0.1 * highDepth + 1e-6);
+        
+        [unroll]
+        for (int x = -1; x <= 1; x++)
+        {
+            [unroll]
+            for (int y = -1; y <= 1; y++)
+            {
+                float2 sampleUV = baseUV + float2(x, y) * texelSize;
+                float4 gi = GetLod(sDNB, sampleUV);
+                float4 gbuffer = GetLod(sNormal, sampleUV);
+
+                float3 lowNormal = gbuffer.rgb;
+                float lowDepth = gbuffer.a;
+                
+                float wDepth = exp(-abs(highDepth - lowDepth) * depth_weight_factor);
+                float dotN = max(0.0, dot(highNormal, lowNormal));
+                float wNormal = pow(dotN, 16.0);
+                float wSpatial = exp(-0.5 * float(x * x + y * y));
+
+                float weight = wDepth * wNormal * wSpatial;
+                
+                sumGI += gi * weight;
+                sumWeight += weight;
+            }
+        }
+
+        if (sumWeight < 1e-6)
+            return GetLod(sDNB, lowResUV);
+            
+        return sumGI / sumWeight;
+    }
+
     void PS_Output(VS_OUTPUT input, out float4 outColor : SV_Target)
     {
         float depth = GetDepth(input.uv);
         float3 rawScene = GetColor(input.uv).rgb;
         float3 scene = Input2Linear(rawScene);
         float3 finalColor = scene;
-
+        
         if (depth < 0.99)
         {
-            float4 giData = tex2Dlod(sDNB, float4(input.uv * RenderScale, 0, 0));
-
+            float4 giData = JointBilateralUpsample(input.uv, depth, input.pScale);
+            
             // Tint
-            float3 tint = Use_Color_Temperature ?
-            KelvinToRGB(Color_Temperature) : GI_Color;
+            float3 tint = Use_Color_Temperature ? KelvinToRGB(Color_Temperature) : GI_Color;
             float3 processedGI = giData.rgb * tint;
             
             //HDR Contrast
@@ -1275,64 +1273,16 @@ namespace Barbatos_GI_115
             float mid_gray = paper_white_norm * 0.18;
             processedGI = (processedGI - mid_gray) * GI_Contrast + mid_gray;
             processedGI = max(0.0, processedGI);
-
+            
             // Vibrance
             float lum = GetLuminance(processedGI);
             float3 chroma = processedGI - lum;
             processedGI = lum + chroma * (1.0 + GI_Vibrance);
-
+            
             float fadeStart = GI_RenderDistance * 0.9;
             float fade = 1.0 - smoothstep(fadeStart, GI_RenderDistance, depth);
             float depthWeight = lerp(Near_Intensity, 1.0, saturate(depth * 10.0));
 
-            //  Debug
-            if (ViewMode != 0)
-            {
-                if (ViewMode == 6) // White World
-                {
-                    scene = float3(0.8, 0.8, 0.8);
-                }
-                else
-                {
-                    if (ViewMode == 1)
-                        outColor = float4(Linear2Output(processedGI), 1.0);
-                    else if (ViewMode == 2)
-                        outColor = float4(giData.aaa, 1.0);
-                    else if (ViewMode == 3)
-                    {
-                        float3 debugNormals = GetLod(sNormal, input.uv * RenderScale).rgb;
-                        float depth = GetDepth(input.uv);
-
-                        if (depth < 0.999)
-                        {
-                            debugNormals.x = -debugNormals.x;
-                            debugNormals.z = -debugNormals.z;
-                        }
-                        outColor = float4(debugNormals * 0.5 + 0.5, 1.0);
-                    }
-                    else if (ViewMode == 4)
-                    {
-                        float2 mv = SampleMotionVectors(input.uv);
-                        outColor = float4(saturate(float3(mv.x, mv.y, 0.0) * 50.0 + 0.5), 1.0);
-                    }
-                    else if (ViewMode == 5)
-                        outColor = float4((FRAME_COUNT % 2 == 0 ? GetLod(sHistory0, input.uv * RenderScale).rgb : GetLod(sHistory1, input.uv * RenderScale).rgb), 1.0);
-                    else if (ViewMode == 7)
-                    {
-                        float lum = GetLuminance(processedGI);
-                        outColor = float4(GetFalseColor(saturate(lum)), 1.0);
-                    }
-
-                    if (Manual_Sun_Enabled && Show_Sun_Widget)
-                    {
-                        float3 debugLinear = Input2Linear(outColor.rgb);
-                        float4 widgetRes = DrawSunWidget(input.uv, GetSunVector(), float4(debugLinear, 1.0));
-                        outColor = float4(Linear2Output(widgetRes.rgb), 1.0);
-                    }
-                    return;
-                }
-            }
-        
             float rawAO = saturate(giData.a);
             float finalAO = 1.0;
         
@@ -1349,26 +1299,89 @@ namespace Barbatos_GI_115
 
             finalAO = lerp(1.0, finalAO, depthWeight);
             finalAO = lerp(1.0, finalAO, fade);
+            
             float3 occludedScene = scene * finalAO;
-
             float3 bouncedLight = processedGI * Intensity * depthWeight * fade;
+            
+            // Debug Views
+            if (ViewMode != 0)
+            {
+                switch (ViewMode)
+                {
+                    case 1: // GI Only
+                        outColor = float4(Linear2Output(processedGI), 1.0);
+                        break;
+                        
+                    case 2: // AO Only
+                        outColor = float4(finalAO, finalAO, finalAO, 1.0);
+                        break;
+                        
+                    case 3: // Surface Normals
+                    {
+                        float3 debugNormals = GetLod(sNormal, input.uv * RenderScale).rgb;
+                        if (depth < 0.999)
+                        {
+                            debugNormals.x = -debugNormals.x;
+                            debugNormals.z = -debugNormals.z;
+                        }
+                        outColor = float4(debugNormals * 0.5 + 0.5, 1.0);
+                        break;
+                    }
+                    
+                    case 4: // Motion Vectors
+                    {
+                        float2 mv = SampleMotionVectors(input.uv);
+                        outColor = float4(saturate(float3(mv.x, mv.y, 0.0) * 50.0 + 0.5), 1.0);
+                        break;
+                    }
+                    
+                    case 5: // Raw LowRes GI
+                        outColor = float4((FRAME_COUNT % 2 == 0 ? GetLod(sHistory0, input.uv * RenderScale).rgb : GetLod(sHistory1, input.uv * RenderScale).rgb), 1.0);
+                        break;
+                        
+                    case 6: // White World
+                    {
+                        float3 clayColor = float3(0.5, 0.5, 0.5);
+                        float3 clayComposite = (clayColor * finalAO) + bouncedLight;
+                        outColor = float4(Linear2Output(clayComposite), 1.0);
+                        break;
+                    }
+                        
+                    case 7: // Luminance
+                    {
+                        float debugLum = GetLuminance(processedGI);
+                        outColor = float4(GetFalseColor(saturate(debugLum)), 1.0);
+                        break;
+                    }
+                }
+
+                if (Manual_Sun_Enabled && Show_Sun_Widget)
+                {
+                    float3 debugLinear = Input2Linear(outColor.rgb);
+                    float4 widgetRes = DrawSunWidget(input.uv, GetSunVector(), float4(debugLinear, 1.0));
+                    outColor = float4(Linear2Output(widgetRes.rgb), 1.0);
+                }
+                
+                return;
+            }
 
             // Split Toning
-        float sceneLuma = GetLuminance(scene);
-        float luma_normalized = saturate(sceneLuma / (paper_white_norm * 3.0));
+            float sceneLuma = GetLuminance(scene);
+            float luma_normalized = saturate(sceneLuma / (paper_white_norm * 3.0));
 
-        float shadowCurve = 1.0 - smoothstep(GI_Split_Balance - 0.2, GI_Split_Balance + 0.2, luma_normalized);
-        float highlightCurve = smoothstep(GI_Split_Balance - 0.2, GI_Split_Balance + 0.2, luma_normalized);
-        float3 surfaceIntegration = lerp(float3(1.0, 1.0, 1.0), max(scene, 0.05), GI_Color_Bleed);
-
-        float3 shadowLight = bouncedLight * surfaceIntegration * shadowCurve * GI_Shadow_Tint;
-        float3 litLight = bouncedLight * surfaceIntegration * highlightCurve * GI_Highlight_Tint;
-
-        finalColor = occludedScene + shadowLight + litLight;
+            float shadowCurve = 1.0 - smoothstep(GI_Split_Balance - 0.2, GI_Split_Balance + 0.2, luma_normalized);
+            float highlightCurve = smoothstep(GI_Split_Balance - 0.2, GI_Split_Balance + 0.2, luma_normalized);
+            
+            float3 surfaceIntegration = lerp(float3(1.0, 1.0, 1.0), max(scene, 0.05), GI_Color_Bleed);
+            
+            float3 shadowLight = bouncedLight * surfaceIntegration * shadowCurve * GI_Shadow_Tint;
+            float3 litLight = bouncedLight * surfaceIntegration * highlightCurve * GI_Highlight_Tint;
+            
+            finalColor = occludedScene + shadowLight + litLight;
         }
 
-        // Widget Overlay
-        if (Manual_Sun_Enabled && Show_Sun_Widget)
+        // Widget Overlay 
+        if (Manual_Sun_Enabled && Show_Sun_Widget && ViewMode == 0)
         {
             float4 widgetRes = DrawSunWidget(input.uv, GetSunVector(), float4(finalColor, 1.0));
             finalColor = widgetRes.rgb;
@@ -1377,6 +1390,11 @@ namespace Barbatos_GI_115
         outColor = float4(Linear2Output(finalColor), 1.0);
     }
     
+    void PS_SaveScale(VS_OUTPUT input, out float4 outScale : SV_Target)
+    {
+        outScale = float4(RenderScale, 0.0, 0.0, 1.0);
+    }
+
     technique BaBa_GI
     <
     ui_label = "BaBa: GI";
@@ -1429,6 +1447,12 @@ namespace Barbatos_GI_115
         {
             VertexShader = VS_Barbatos_PTGI;
             PixelShader = PS_Output;
+        }
+        pass SaveScale
+        {
+            VertexShader = VS_Barbatos_PTGI;
+            PixelShader = PS_SaveScale;
+            RenderTarget = RS_Prev;
         }
     }
 }

@@ -1,7 +1,7 @@
 /*----------------------------------------------|
 | :: Barbatos SSR (Screen-Space Reflections) :: |
 |-----------------------------------------------|
-| Version: 1.4.1                                |
+| Version: 1.5.0                                |
 | Author: Barbatos                              |
 | License: MIT                                  |
 |----------------------------------------------*/
@@ -298,23 +298,6 @@ uniform int ViewMode <
     ui_items = "Off\0Reflections Only\0Surface Normals\0Depth View\0Motion Vectors\0Motion Confidence\0";
 > = 0;
 
-uniform float DebugGeometryOverlay <
-    ui_category = "Advanced";
-    ui_label = "Debug Geometry Overlay";
-    ui_tooltip = "Draws geometry outlines over the debug views to provide spatial context.";
-    ui_type = "drag";
-    ui_min = 0.0;
-    ui_max = 1.0; ui_step = 0.01;
-> = 0.8;
-
-uniform float DebugGeometrySensitivity <
-    ui_category = "Advanced";
-    ui_label = "Debug Geometry Sensitivity";
-    ui_tooltip = "Controls the sensitivity of the geometry edge detection (Depth and Normals).";
-    ui_type = "drag";
-    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
-> = 0.5;
-
 #ifndef BUFFER_COLOR_SPACE
 #define BUFFER_COLOR_SPACE 0
 #endif
@@ -348,7 +331,7 @@ uniform int FRAME_COUNT < source = "framecount"; >;
 // :: Textures :: |
 //----------------|
 
-namespace Barbatos_SSR140
+namespace Barbatos_SSR150
 {
     texture Normal
     {
@@ -444,6 +427,19 @@ namespace Barbatos_SSR140
         MinFilter = POINT;
         MipFilter = POINT;
     };
+
+    texture RS_Prev
+    {
+        Width = 1;
+        Height = 1;
+        Format = R16F;
+    };
+    sampler sRS_Prev
+    {
+        Texture = RS_Prev;
+        MagFilter = POINT;
+        MinFilter = POINT;
+    };
 	
     //-------------|
     // :: Utility::|
@@ -470,7 +466,8 @@ namespace Barbatos_SSR140
     
     void VS_Barbatos_SSR(in uint id : SV_VertexID, out VS_OUTPUT outStruct)
     {
-        outStruct.uv.x = (id == 2) ? 2.0 : 0.0;
+        outStruct.uv.x = (id == 2) ?
+            2.0 : 0.0;
         outStruct.uv.y = (id == 1) ? 2.0 : 0.0;
         outStruct.vpos = float4(outStruct.uv * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
 
@@ -815,12 +812,12 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
     float3 V_stretch = normalize(float3(alpha * V_local.x, alpha * V_local.y, V_local.z));
     
     float3 T1 = (V_stretch.z < 0.9999) ?
-    normalize(cross(V_stretch, float3(0.0, 0.0, 1.0))) : float3(1.0, 0.0, 0.0);
+        normalize(cross(V_stretch, float3(0.0, 0.0, 1.0))) : float3(1.0, 0.0, 0.0);
     float3 T2 = cross(T1, V_stretch);
     float a = 1.0 / (1.0 + V_stretch.z);
     float r = sqrt(Xi.x);
     float phi = (Xi.y < a) ?
-    (Xi.y / a) * 3.14159265359 : 3.14159265359 + (Xi.y - a) / (1.0 - a) * 3.14159265359;
+        (Xi.y / a) * 3.14159265359 : 3.14159265359 + (Xi.y - a) / (1.0 - a) * 3.14159265359;
     float P1 = r * cos(phi);
     float P2 = r * sin(phi) * ((Xi.y < a) ? 1.0 : V_stretch.z);
     float3 N_local = P1 * T1 + P2 * T2 + sqrt(max(0.0, 1.0 - P1 * P1 - P2 * P2)) * V_stretch;
@@ -834,10 +831,10 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         float netRoughness = saturate(SurfaceGlossiness + (local_roughness * RoughnessDetection));
         if (netRoughness <= 0.001)
             return tex2Dlod(sTexColorCopy, float4(sample_uv, 0, 0)).rgb;
-        #if ENABLE_VNDF
+#if ENABLE_VNDF
         float mipLevel = netRoughness * 4.0; 
         return tex2Dlod(sTexColorCopy, float4(sample_uv, 0, mipLevel)).rgb;
-        #else
+#else
         float specularPower = pow(2.0, 10.0 * (1.0 - netRoughness) + 1.0);
         float coneTheta = specularPowerToConeAngle(specularPower) * 0.5;
     
@@ -909,12 +906,13 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         }
 
         return tex2Dlod(sTexColorCopy, float4(sample_uv + offset * blurRadiusUV, 0, mipLevel)).rgb;
-        #endif
+#endif
     }
     
     //------------|
     // :: TAA  :: |
     //------------|
+
     float4 TAA_Compress(float4 color)
     {
         return float4(color.rgb / (10.0 + color.rgb), color.a);
@@ -928,76 +926,199 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
     float4 GetActiveHistory(float2 uv)
     {
         return (fmod((float) FRAME_COUNT, 2.0) < 0.5) ?
-        GetLod(sHistory0, uv) : GetLod(sHistory1, uv);
+            GetLod(sHistory0, uv) : GetLod(sHistory1, uv);
     }
-    float4 ClipToAABB(float4 aabb_min, float4 aabb_max, float4 history_sample)
+
+   float4 JointBilateralUpsample(float2 uv, float highDepth, float2 pScale)
     {
-        float4 p_clip = 0.5 * (aabb_max + aabb_min);
-        float4 e_clip = 0.5 * (aabb_max - aabb_min) + 1e-6;
-        float4 v_clip = history_sample - p_clip;
-        float4 v_unit = v_clip / e_clip;
-        float4 a_unit = abs(v_unit);
-        float ma_unit = max(a_unit.x, max(a_unit.y, max(a_unit.z, a_unit.w)));
+        float2 lowResUV = uv * RenderResolution;
+        float3 highNormal = CalculateNormal(uv, pScale);
+
+        float4 sumRefl = 0.0;
+        float sumWeight = 0.0;
+
+        float2 texelSize = ReShade::PixelSize;
+        float2 baseUV = (floor(lowResUV / texelSize) + 0.5) * texelSize;
+
+        float depth_weight_factor = 1.0 / (0.1 * highDepth + 1e-6);
+
+        [unroll]
+        for (int x = -1; x <= 1; x++)
+        {
+            [unroll]
+            for (int y = -1; y <= 1; y++)
+            {
+                float2 sampleUV = baseUV + float2(x, y) * texelSize;
+                float4 refl = GetActiveHistory(sampleUV);
+                
+                float2 fullScreenUV = sampleUV / RenderResolution;
+                float4 gbuffer = SampleGBuffer(fullScreenUV);
+
+                float3 lowNormal = gbuffer.rgb;
+                float lowDepth = gbuffer.a;
+
+                float wDepth = exp(-abs(highDepth - lowDepth) * depth_weight_factor);
+                float dotN = max(0.0, dot(highNormal, lowNormal));
+                float wNormal = pow(dotN, 16.0);
+                float wSpatial = exp(-0.5 * float(x * x + y * y));
+
+                float weight = wDepth * wNormal * wSpatial;
+
+                sumRefl += refl * weight;
+                sumWeight += weight;
+            }
+        }
+
+        if (sumWeight < 1e-6)
+            return GetActiveHistory(lowResUV);
+        
+        return sumRefl / sumWeight;
+    }
+
+    float3 ClipToAABB(float3 aabb_min, float3 aabb_max, float3 history_sample)
+    {
+        float3 p_clip = 0.5 * (aabb_max + aabb_min);
+        float3 e_clip = 0.5 * (aabb_max - aabb_min) + 1e-6;
+        float3 v_clip = history_sample - p_clip;
+        float3 v_unit = v_clip / e_clip;
+        float3 a_unit = abs(v_unit);
+        float ma_unit = max(a_unit.x, max(a_unit.y, a_unit.z));
         return (ma_unit > 1.0) ? (p_clip + v_clip / ma_unit) : history_sample;
     }
 
-    float4 ComputeDenoise(VS_OUTPUT input, sampler sHistoryParams)
-{
-    float2 viewUV = input.uv;
-    float depth = GetDepth(viewUV);
-    if (depth >= 0.999)
-        return 0.0;
-
-    float2 lowres_uv = viewUV * RenderResolution;
-    float4 current_reflection = GetLod(sReflection, lowres_uv);
-
-    if (!EnableSmoothing)
-        return current_reflection;
-
-    float2 velocity = MV_GetVelocity(viewUV);
-    float2 reprojected_view_uv = viewUV + velocity;
-
-    if (any(saturate(reprojected_view_uv) != reprojected_view_uv) || FRAME_COUNT <= 1)
-        return current_reflection;
-
-    float4 history_reflection = GetLod(sHistoryParams, reprojected_view_uv);
-    float4 current_compressed = TAA_Compress(current_reflection);
-    float4 history_compressed = TAA_Compress(history_reflection);
-
-    if (EnableAntiSmear)
+    void ComputeNeighborhoodVariance(sampler sInput, float2 texcoord, float4 current_c, float2 pSize, out float4 color_min, out float4 color_max)
     {
-        float motion_factor = saturate(length(velocity) * 100.0);
-        [branch]
-        if (motion_factor > 0.01)
-        		{
-            	float2 lowres_px = ReShade::PixelSize / max(RenderResolution, 0.3);
-            	float4 aabb_min = current_compressed;
-            	float4 aabb_max = current_compressed;
+        float4 m1 = current_c;
+        float4 m2 = current_c * current_c;
+        [unroll]
+        for (int x = -1; x <= 1; x++)
+        {
+            [unroll]
+            for (int y = -1; y <= 1; y++)
+            {
+                if (x == 0 && y == 0) continue;
+                float4 c = GetLod(sInput, texcoord + float2(x, y) * pSize);
+                c.rgb = TAA_Compress(c).rgb;
+                c.rgb = RGBToYCoCg(c.rgb); 
+                
+                m1 += c;
+                m2 += c * c;
+            }
+        }
+        
+        m1 /= 9.0;
+        m2 /= 9.0;
+        
+        float4 sigma = sqrt(abs(m2 - m1 * m1));
+        float gamma = 1.25;
+        color_min = m1 - gamma * sigma;
+        color_max = m1 + gamma * sigma;
+    }
 
-            	[unroll]
-            	for (int y = -1; y <= 1; y++)
-            	[unroll]
-            	for (int x = -1; x <= 1; x++)
-            	{
-                	float4 n = TAA_Compress(GetLod(sReflection, lowres_uv + float2(x, y) * lowres_px));
-                	aabb_min = min(aabb_min, n);
-                	aabb_max = max(aabb_max, n);
-            	}
+    float4 SampleHistoryCatmullRom(sampler sInput, float2 uv, float2 texSize)
+    {
+        float2 samplePos = uv * texSize;
+        float2 texPos1 = floor(samplePos - 0.5) + 0.5;
+        float2 f = samplePos - texPos1;
+        float2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
+        float2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
+        float2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));
+        float2 w3 = f * f * (-0.5 + 0.5 * f);
 
-            	float4 clipped = ClipToAABB(aabb_min, aabb_max, history_compressed);
-            	history_compressed = lerp(history_compressed, clipped, motion_factor);
-        	}
-    	}
+        float2 w12 = w1 + w2;
+        float2 offset12 = w2 / (w1 + w2);
 
-    	float raw_confidence = saturate(MV_GetConfidence(viewUV));
-    	float confidence = saturate(raw_confidence + log2(2.0 - raw_confidence) * 0.35);
+        float2 texPos0 = texPos1 - 1.0;
+        float2 texPos3 = texPos1 + 2.0;
+        float2 texPos12 = texPos1 + offset12;
 
-    	float frames = max(1.0, (float)MaxFrames);
-    	float blendVal = confidence * (frames / (frames + 1.0));
+        texPos0 /= texSize;
+        texPos3 /= texSize;
+        texPos12 /= texSize;
 
-    	float4 result_compressed = lerp(current_compressed, history_compressed, blendVal);
-    	return TAA_Resolve(result_compressed);
-	}
+        float4 result = 0.0;
+        result += GetLod(sInput, float2(texPos0.x, texPos0.y)) * w0.x * w0.y;
+        result += GetLod(sInput, float2(texPos12.x, texPos0.y)) * w12.x * w0.y;
+        result += GetLod(sInput, float2(texPos3.x, texPos0.y)) * w3.x * w0.y;
+
+        result += GetLod(sInput, float2(texPos0.x, texPos12.y)) * w0.x * w12.y;
+        result += GetLod(sInput, float2(texPos12.x, texPos12.y)) * w12.x * w12.y;
+        result += GetLod(sInput, float2(texPos3.x, texPos12.y)) * w3.x * w12.y;
+
+        result += GetLod(sInput, float2(texPos0.x, texPos3.y)) * w0.x * w3.y;
+        result += GetLod(sInput, float2(texPos12.x, texPos3.y)) * w12.x * w3.y;
+        result += GetLod(sInput, float2(texPos3.x, texPos3.y)) * w3.x * w3.y;
+
+        return max(result, 0.0);
+    }
+
+    float4 ComputeTAA(VS_OUTPUT input, sampler sHistoryParams)
+    {
+        if (any(input.uv > RenderResolution))
+            discard;
+
+        float2 viewUV = input.uv / RenderResolution;
+        float depth = GetDepth(viewUV);
+        if (depth >= 0.999)
+            return 0.0;
+
+        float4 current_reflection = GetLod(sReflection, input.uv);
+
+        if (!EnableSmoothing)
+            return current_reflection;
+
+        float2 velocity = MV_GetVelocity(viewUV);
+        float2 reprojected_view_uv = viewUV + velocity;
+
+        if (any(saturate(reprojected_view_uv) != reprojected_view_uv) || FRAME_COUNT <= 1)
+            return current_reflection;
+
+        float2 reprojected_buffer_uv = reprojected_view_uv * RenderResolution;
+        
+        float4 history_reflection = SampleHistoryCatmullRom(sHistoryParams, reprojected_buffer_uv, float2(BUFFER_WIDTH, BUFFER_HEIGHT));
+        
+        float3 current_compressed = TAA_Compress(current_reflection).rgb;
+        float3 current_ycocg = RGBToYCoCg(current_compressed);
+        float4 current_c = float4(current_ycocg, current_reflection.a);
+        
+        float3 history_compressed = TAA_Compress(history_reflection).rgb;
+        float3 history_ycocg = RGBToYCoCg(history_compressed);
+        
+        float2 lowres_px = ReShade::PixelSize;
+        float4 color_min, color_max;
+        ComputeNeighborhoodVariance(sReflection, input.uv, current_c, lowres_px, color_min, color_max);
+
+        float raw_confidence = saturate(MV_GetConfidence(viewUV));
+        float relax_amount = 0.15 * raw_confidence;
+        color_min.rgb -= relax_amount;
+        color_max.rgb += relax_amount;
+
+        float3 clipped_history_ycocg = ClipToAABB(color_min.rgb, color_max.rgb, history_ycocg);
+        
+        float clamp_distance = length(clipped_history_ycocg - history_ycocg);
+        float blend_adapt = saturate(1.0 - clamp_distance * 2.0); 
+        
+        float frames = max(1.0, (float)MaxFrames);
+        float blendVal = raw_confidence * (frames / (frames + 1.0));
+        float final_feedback = blendVal * lerp(0.8, 1.0, blend_adapt);
+
+        if (EnableAntiSmear)
+        {
+            float motion_factor = saturate(length(velocity) * 100.0);
+            final_feedback = lerp(final_feedback, 0.0, motion_factor * 0.5);
+        }
+
+        float prevRenderResolution = tex2Dlod(sRS_Prev, float4(0, 0, 0, 0)).x;
+        if (abs(RenderResolution - prevRenderResolution) > 0.001)
+            final_feedback = 0.0;
+
+        float3 result_ycocg = lerp(current_ycocg, clipped_history_ycocg, final_feedback);
+        float3 result_compressed = YCoCgToRGB(result_ycocg);
+        
+        float result_alpha = lerp(current_reflection.a, history_reflection.a, blendVal);
+
+        return float4(TAA_Resolve(float4(result_compressed, 0.0)).rgb, result_alpha);
+    }
     
     //--------------------|
     // :: Pixel Shaders ::|
@@ -1005,7 +1126,7 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
     void PS_CopyColor(VS_OUTPUT input, out float4 outColor : SV_Target)
     {
         float localRoughness = (RoughnessDetection > 0.0) ?
-        GetLocalRoughness(input.uv) : 0.0;
+            GetLocalRoughness(input.uv) : 0.0;
         outColor = float4(GetColor(input.uv).rgb, localRoughness);
     }
     
@@ -1086,8 +1207,6 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
             {
                 float2(0.125, -0.375), float2(-0.125, 0.375),
                 float2(-0.375, -0.125), float2(0.375, 0.125),
-               
-
                 float2(0.375, -0.375), float2(-0.375, 0.375),
                 float2(0.125, 0.125), float2(-0.125, -0.125)
             };
@@ -1138,7 +1257,6 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         float2 bn_uv = input.vpos.xy / (RenderResolution * 1024.0);
         float frame = fmod((float)FRAME_COUNT, 64.0);
         float4 bn = tex2Dlod(sTexBlueNoise, float4(bn_uv, 0, 0));
-        
         // Ray Jitter 
         float ray_jitter = 0.0;
         if (EnableRayJitter)
@@ -1148,7 +1266,6 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
 
         Ray r;
         r.origin = viewPos;
-
 #if ENABLE_VNDF
         float netRoughness = saturate(SurfaceGlossiness + (estimatedRoughness * RoughnessDetection)) * 0.5;
         float2 screen_size = float2(BUFFER_WIDTH, BUFFER_HEIGHT);
@@ -1165,7 +1282,7 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         r.direction = normalize(reflectDir);
 #else
         r.direction = normalize(reflect(-viewDir, normal));
-        #endif
+#endif
 
         float bias = 0.0005 + (depth * 0.02);
         r.origin += r.direction * bias;
@@ -1240,14 +1357,14 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
     {
         if (fmod((float) FRAME_COUNT, 2.0) > 0.5)
             discard;
-        outBlended = ComputeDenoise(input, sHistory1);
+        outBlended = ComputeTAA(input, sHistory1);
     }
 
     void PS_Accumulate1(VS_OUTPUT input, out float4 outBlended : SV_Target)
     {
         if (fmod((float) FRAME_COUNT, 2.0) < 0.5)
             discard;
-        outBlended = ComputeDenoise(input, sHistory0);
+        outBlended = ComputeTAA(input, sHistory0);
     }
 
     void PS_Output(VS_OUTPUT input, out float4 outColor : SV_Target)
@@ -1258,7 +1375,7 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
             float3 debugColor = 0.0;
             if (ViewMode == 1)
             {
-                debugColor = Linear2Output(GetActiveHistory(input.uv).rgb);
+                debugColor = Linear2Output(GetActiveHistory(input.uv * RenderResolution).rgb);
             }
             else if (ViewMode == 2)
             {
@@ -1288,30 +1405,6 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
                 debugColor = conf.xxx;
             }
 
-            // Geometry Overlay Mask 
-            if (DebugGeometryOverlay > 0.0)
-            {
-                float2 px = ReShade::PixelSize;
-                float dC = GetDepth(input.uv);
-                float dR = GetDepth(input.uv + float2(px.x, 0.0));
-                float dD = GetDepth(input.uv + float2(0.0, px.y));
-                float3 nC = CalculateNormal(input.uv, input.pScale);
-                float3 nR = CalculateNormal(input.uv + float2(px.x, 0.0), input.pScale);
-                float3 nD = CalculateNormal(input.uv + float2(0.0, px.y), input.pScale);
-
-                float depth_diff = (abs(dC - dR) + abs(dC - dD)) / max(dC, 0.0001);
-                float norm_diff = length(nC - nR) + length(nC - nD);
-
-                float depth_threshold = lerp(0.05, 0.001, DebugGeometrySensitivity);
-                float norm_threshold = lerp(0.8, 0.05, DebugGeometrySensitivity);
-
-                float depth_edge = smoothstep(0.0, depth_threshold, depth_diff);
-                float norm_edge = smoothstep(0.0, norm_threshold, norm_diff);
-                float final_edge = max(depth_edge, norm_edge);
-                if (dC >= 0.999) final_edge = 0.0;
-                debugColor = lerp(debugColor, float3(0.0, 0.0, 0.0), final_edge * DebugGeometryOverlay);
-            }
-
             outColor = float4(debugColor, 1.0);
             return;
         }
@@ -1328,7 +1421,7 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         float4 gbuffer = SampleGBuffer(input.uv);
         float3 normal = gbuffer.rgb;
         
-        float4 reflectionSample = GetActiveHistory(input.uv);
+        float4 reflectionSample = JointBilateralUpsample(input.uv, depth, input.pScale);
         float3 reflectionColor = reflectionSample.rgb;
         float reflectionMask = reflectionSample.a;
         float estimatedRoughness_out = GetLod(sTexColorCopy, input.uv).a;
@@ -1363,27 +1456,33 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         // PBR & Blending
         float3 viewDir = -normalize(UVToViewPos(input.uv, depth, input.pScale));
         float VdotN = saturate(dot(viewDir, normal));
-        float3 f0 = lerp(DIELECTRIC_REFLECTANCE.xxx, scene, Metallic);
-        float3 F = F_Schlick(VdotN, f0);
+        float3 f0 = lerp(DIELECTRIC_REFLECTANCE.xxx, saturate(scene), Metallic);
+        float3 F = saturate(F_Schlick(VdotN, f0));
 
         float3 finalColor;
         if (BlendMode == 0) // Default PBR 
-        {
-            float validReflection = reflectionMask * saturate(Intensity);
-            float3 kD = 1.0 - (F * validReflection);
-            kD *= lerp(1.0, 1.0 - Metallic, validReflection);
-            float3 specularLight = reflectionColor * F * Intensity * reflectionMask;
-            finalColor = (scene * kD) + specularLight;
-        }
-        else // Legacy Blending modes
-        {
-            float blendAmount = dot(F, float3(0.333, 0.333, 0.334)) * reflectionMask;
-            finalColor = ComHeaders::Blending::Blend(BlendMode, scene, reflectionColor, blendAmount * Intensity);
-        }
+    {
+    float validReflection = reflectionMask * saturate(Intensity);
+    float3 kD = saturate(1.0 - (F * validReflection));
+    kD *= lerp(1.0, 1.0 - Metallic, validReflection);
+    
+    float3 specularLight = reflectionColor * F * Intensity * reflectionMask;
+    finalColor = (scene * kD) + specularLight;
+    }
+    else // Legacy Blending modes
+    {
+        float blendAmount = dot(F, float3(0.333, 0.333, 0.334)) * reflectionMask;
+        finalColor = ComHeaders::Blending::Blend(BlendMode, scene, reflectionColor, blendAmount * Intensity);
+    }
     
         outColor = float4(Linear2Output(finalColor), 1.0);
     }
     
+    void PS_SaveResolution(VS_OUTPUT input, out float4 outRes : SV_Target)
+    {
+        outRes = float4(RenderResolution, 0.0, 0.0, 1.0);
+    }
+
     technique BaBa_SSR
     <
     ui_label = "BaBa: SSR";
@@ -1435,6 +1534,12 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         {
             VertexShader = VS_Barbatos_SSR;
             PixelShader = PS_Output;
+        }
+        pass SaveResolution
+        {
+            VertexShader = VS_Barbatos_SSR;
+            PixelShader = PS_SaveResolution;
+            RenderTarget = RS_Prev;
         }
     }
 }
