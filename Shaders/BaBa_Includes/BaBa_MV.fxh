@@ -110,22 +110,24 @@ float MV_GetConfidence(float2 texcoord)
 {
     float2 velocity = MV_GetVelocity(texcoord);
     float2 prev_uv  = texcoord + velocity;
+    
     // Out-of-bounds reprojection → zero confidence.
     if (any(saturate(prev_uv) != prev_uv))
         return 0.0;
+        
     float2 resolution = float2(BUFFER_WIDTH, BUFFER_HEIGHT);
     float flow_magnitude = length(velocity * resolution);
 
-    // Sub-pixel motion → always trusted.
-    if (flow_magnitude <= 0.5)
-        return 1.0;
-
+    float consistency_conf = 1.0;
     // Bidirectional consistency check.
-    float2 dest_velocity = SampleMotionVectors(prev_uv);
-    float error = length(velocity - dest_velocity);
-    float normalized_error = (error * MV_CONFIDENCE_SENSITIVITY * 1.25) / (length(velocity) + 1e-6);
-    float consistency_conf = rcp(normalized_error + 1.0);
-
+    if (flow_magnitude > 0.5)
+    {
+        float2 dest_velocity = SampleMotionVectors(prev_uv);
+        float error = length(velocity - dest_velocity);
+        float normalized_error = (error * MV_CONFIDENCE_SENSITIVITY * 1.25) / (length(velocity) + 1e-6);
+        consistency_conf = rcp(normalized_error + 1.0);
+    }
+    
     // Motion length penalty.
     float length_conf = rcp(flow_magnitude * 0.02 + 1.0);
 
@@ -141,22 +143,27 @@ float MV_GetConfidence(float2 texcoord)
 float MV_GetConfidenceAO(float2 uv, float2 velocity, float flow_magnitude, float curr_luma, sampler sLumaPrev)
 {
     float2 prev_uv = uv + velocity;
-
+    
     if (any(saturate(prev_uv) != prev_uv))
         return 0.0;
 
-    if (flow_magnitude <= 0.5)
-        return 1.0;
-
-    float2 dest_velocity = SampleMotionVectors(prev_uv);
-    float error = length(velocity - dest_velocity);
-    float normalized_error = (error * MV_CONFIDENCE_SENSITIVITY) / (length(velocity) + 1e-6);
-    float consistency_conf = rcp(normalized_error + 1.0);
+    float consistency_conf = 1.0;
+    if (flow_magnitude > 0.5)
+    {
+        float2 dest_velocity = SampleMotionVectors(prev_uv);
+        float error = length(velocity - dest_velocity);
+        float normalized_error = (error * MV_CONFIDENCE_SENSITIVITY) / (length(velocity) + 1e-6);
+        consistency_conf = rcp(normalized_error + 1.0);
+    }
 
     float length_conf = rcp(flow_magnitude * 0.02 + 1.0);
 
-    float prev_luma = tex2D(sLumaPrev, prev_uv).r;
+    float prev_luma = tex2Dlod(sLumaPrev, float4(prev_uv, 0, 0)).r;
     float photometric_conf = exp(-abs(curr_luma - prev_luma) * 1.5);
+    
+    float curr_depth = ReShade::GetLinearizedDepth(uv);
+    float dest_depth = ReShade::GetLinearizedDepth(prev_uv);
+    float depth_conf = exp(-abs(curr_depth - dest_depth) * 100.0);
 
-    return consistency_conf * length_conf * photometric_conf;
+    return saturate(consistency_conf * length_conf * photometric_conf * depth_conf);
 }
