@@ -10,13 +10,12 @@
 //----------|
 // :: UI :: |
 //----------|
-
 uniform int HDR_Input_Format <
     ui_category_closed = true;
     ui_category = "HDR";
     ui_label = "Input Format";
     ui_tooltip = "Select the color space of the game.\n"
-                 "Auto = Detect automatically (Recommended)\n"
+                 "Auto = Automatically recognizes HDR10 environment.\n"
                  "SDR/HDR formats = Force specific color space\n"
                  "Raw = No conversion applied";
     ui_type = "combo";
@@ -66,23 +65,17 @@ int GetHDRMode()
     if (HDR_Input_Format != 0)
         return HDR_Input_Format;
 
-#if BUFFER_COLOR_SPACE == 1
-    return 1;
-#elif BUFFER_COLOR_SPACE == 2
-    return 2;
-#elif BUFFER_COLOR_SPACE == 3
+#if BUFFER_COLOR_SPACE == 3
     return 3;
 #else
-    return 1;
+    return 4;
 #endif
 }
-
 float3 PQ2Linear(float3 color)
 {
     float3 val = max(pow(abs(color), 1.0 / PQ_M2) - PQ_C1, 0.0);
     float3 den = PQ_C2 - PQ_C3 * pow(abs(color), 1.0 / PQ_M2);
     float3 linearHdr = pow(abs(val / den), 1.0 / PQ_M1);
-
     return linearHdr * (10000.0 / HDR_Peak_Nits);
 }
 
@@ -91,13 +84,13 @@ float3 Linear2PQ(float3 linearColor)
     float3 Y = max(0.0, linearColor * (HDR_Peak_Nits / 10000.0));
     float3 num = PQ_C1 + PQ_C2 * pow(Y, PQ_M1);
     float3 den = 1.0 + PQ_C3 * pow(Y, PQ_M1);
-    
     return pow(num / den, PQ_M2);
 }
 
 float3 sRGB2Linear(float3 x)
 {
-    float3 linear_srgb = (x < 0.04045) ? (x / 12.92) : pow(abs((x + 0.055) / 1.055), 2.4);
+    float3 linear_srgb = (x < 0.04045) ?
+    (x / 12.92) : pow(abs((x + 0.055) / 1.055), 2.4);
 
     if (!SDR_Enable_ITM)
         return linear_srgb;
@@ -109,7 +102,6 @@ float3 sRGB2Linear(float3 x)
         float luma = dot(linear_srgb, LUMA_709);
         float safe_luma = min(luma, 0.99); 
         float expanded_luma = safe_luma / max(1.0 - safe_luma, 0.001);
-        
         expanded_rgb = linear_srgb * (expanded_luma / max(luma, 1e-5));
     }
     else
@@ -143,13 +135,13 @@ float3 Linear2sRGB(float3 x)
         }
     }
     
-    return (x < 0.0031308) ? (12.92 * x) : (1.055 * pow(abs(x), 1.0 / 2.4) - 0.055);
+    return (x < 0.0031308) ?
+    (12.92 * x) : (1.055 * pow(abs(x), 1.0 / 2.4) - 0.055);
 }
 
 float3 Input2Linear(float3 color)
 {
     int mode = GetHDRMode();
-
     if (mode == 4)
         return color;
     else if (mode == 2)
@@ -163,7 +155,6 @@ float3 Input2Linear(float3 color)
 float3 Linear2Output(float3 color)
 {
     int mode = GetHDRMode();
-
     if (mode == 4)
         return color;
     else if (mode == 2)
