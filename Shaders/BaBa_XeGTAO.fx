@@ -1,3 +1,4 @@
+
 /*
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Copyright (C) 2016-2021, Intel Corporation
@@ -16,7 +17,7 @@
 /*----------------------------------------------|
 | ::           Barbatos XeGTAO               :: |
 |-----------------------------------------------|
-| Version: 1.5                                  |
+| Version: 1.5.1                                |
 | Author: Barbatos                              |
 '----------------------------------------------*/
 
@@ -647,7 +648,7 @@ namespace Barbatos_XeGTAO150
         float2 baseUV = (floor(lowResUV / texelSize) + 0.5) * texelSize;
         
         float depth_weight_factor = 1.0 / (0.1 * highDepth + 1e-6);
-        
+
         [unroll]
         for (int x = -1; x <= 1; x++)
         {
@@ -656,14 +657,7 @@ namespace Barbatos_XeGTAO150
             {
                 float2 sampleUV = baseUV + float2(x, y) * texelSize;
                 
-                float sampleAO;
-                #if __RENDERER__ >= 0xa000 
-                if ((FRAME_COUNT & 1) == 0) sampleAO = GetLod(sHistory0, sampleUV).r;
-                else sampleAO = GetLod(sHistory1, sampleUV).r;
-                #else 
-                if ((FRAME_COUNT % 2) == 0) sampleAO = GetLod(sHistory0, sampleUV).r;
-                else sampleAO = GetLod(sHistory1, sampleUV).r;
-                #endif
+                float sampleAO = GetLod(sAO, sampleUV).r;
                 
                 float3 lowNormal = DecodeNormal(GetLod(sNormalEdges, sampleUV).xy);
                 float lowDepth = getDepth(sampleUV / RenderScale);
@@ -672,20 +666,16 @@ namespace Barbatos_XeGTAO150
                 float dotN = max(0.0, dot(highNormal, lowNormal));
                 float wNormal = pow(dotN, 16.0);
                 float wSpatial = exp(-0.5 * float(x * x + y * y));
-                
+
                 float weight = wDepth * wNormal * wSpatial;
                 sumAO += sampleAO * weight;
                 sumWeight += weight;
             }
         }
+        
         if (sumWeight < 1e-6)
-        {
-            #if __RENDERER__ >= 0xa000 
-            return ((FRAME_COUNT & 1) == 0) ? GetLod(sHistory0, lowResUV).r : GetLod(sHistory1, lowResUV).r;
-            #else 
-            return ((FRAME_COUNT % 2) == 0) ? GetLod(sHistory0, lowResUV).r : GetLod(sHistory1, lowResUV).r;
-            #endif
-        }
+            return GetLod(sAO, lowResUV).r;
+
         return sumAO / sumWeight;
     }
 
@@ -882,8 +872,8 @@ namespace Barbatos_XeGTAO150
 
     float4 SpatioTemporalDenoise(VS_OUTPUT input, sampler sHistoryParams)
     {
-        if (any(input.uv > RenderScale)) discard;
-        float2 viewUV = input.uv / RenderScale;
+        float2 viewUV = input.uv; 
+        float2 bufferUV = input.uv * RenderScale; 
         
         float rawDepth = getDepth(viewUV);
         if (rawDepth >= DepthThreshold)
@@ -893,22 +883,29 @@ namespace Barbatos_XeGTAO150
         if (center_depth / (DepthMultiplier * 10.0) >= DepthThreshold)
             return float4(1, 1, 1, 1);
 
-        float3 normal = DecodeNormal(tex2Dlod(sNormalLinear, float4(input.uv, 0.0, 0.0)).xy);
         float current_signal;
         
-        if (bEnableDenoise)
-            current_signal = atrous_scalar(sAO, input.uv, viewUV, 1, center_depth, normal, input.NDCToView);
+        if (RenderScale < 0.999)
+        {
+            current_signal = JointBilateralUpsample(viewUV, rawDepth);
+        }
         else
-            current_signal = tex2Dlod(sAO, float4(input.uv, 0.0, 0.0)).r;
+        {
+            float3 normal = DecodeNormal(tex2Dlod(sNormalLinear, float4(viewUV, 0.0, 0.0)).xy);
+            if (bEnableDenoise)
+                current_signal = atrous_scalar(sAO, bufferUV, viewUV, 1, center_depth, normal, input.NDCToView);
+            else
+                current_signal = tex2Dlod(sAO, float4(bufferUV, 0.0, 0.0)).r;
+        }
 
         float prevRenderScale = tex2Dlod(sRS_Prev, float4(0, 0, 0, 0)).x;
         if (abs(RenderScale - prevRenderScale) > 0.001 || !EnableTemporal)
             return float4(current_signal.xxxx);
 
-        // Temporal
         float2 velocity = MV_GetVelocity(viewUV);
         float2 reprojected_view_uv = viewUV + velocity;
-        float2 reprojected_buffer_uv = reprojected_view_uv * RenderScale;
+
+        float2 reprojected_buffer_uv = reprojected_view_uv; 
         
         float history_signal = GetLod(sHistoryParams, float4(reprojected_buffer_uv, 0, 0)).r;
         
@@ -921,12 +918,14 @@ namespace Barbatos_XeGTAO150
 
         float2 velocity_pixels = velocity * BUFFER_SCREEN_SIZE;
         float flow_magnitude = length(velocity_pixels);
-        float curr_luma_ao = GetLuminance(Input2Linear(GetColor(viewUV).rgb));
+        
+        float linear_luma = GetLuminance(Input2Linear(GetColor(viewUV).rgb));
+        float curr_luma_ao = linear_luma / (1.0 + linear_luma);
         
         float confidence = MV_GetConfidenceAO(viewUV, velocity, flow_magnitude, curr_luma_ao, sB_PrevLuma);
         
         float val_min, val_max;
-        ComputeNeighborhoodMinMax_Scalar(sAO, input.uv, current_signal, val_min, val_max);
+        ComputeNeighborhoodMinMax_Scalar(sAO, bufferUV, current_signal, val_min, val_max);
 
         float box_size = val_max - val_min;
         val_min -= box_size * 0.5;
@@ -1039,25 +1038,22 @@ namespace Barbatos_XeGTAO150
         outHistory = SpatioTemporalDenoise(input, sHistory0);
     }
     
-    void PS_UpdateLuma(VS_OUTPUT input, out float4 outLuma : SV_Target)
-    {
-        float luma = GetLuminance(Input2Linear(GetColor(input.uv).rgb));
-        outLuma = float4(luma.xxx, 1.0);
-    }
+	void PS_UpdateLuma(VS_OUTPUT input, out float4 outLuma : SV_Target)
+	{
+    	float linear_luma = GetLuminance(Input2Linear(GetColor(input.uv).rgb));
+    	float luma = linear_luma / (1.0 + linear_luma); 
+    	outLuma = float4(luma.xxx, 1.0);
+	}
     
-    float4 PS_Output(VS_OUTPUT input) : SV_Target
+  float4 PS_Output(VS_OUTPUT input) : SV_Target
     {
         float4 originalColor = GetColor(input.uv);
         float depth = getDepth(input.uv);
-        float visibility;
 
         if (depth >= DepthThreshold || depth < 0.0001)
             return originalColor;
 
-        if (RenderScale >= 0.999)
-            visibility = GetActiveHistory(input.uv);
-        else
-            visibility = JointBilateralUpsample(input.uv, depth);
+        float visibility = GetActiveHistory(input.uv);
 
         float3 linearColor = Input2Linear(originalColor.rgb);
         float occlusion = saturate((1.0 - visibility) * Intensity);
@@ -1091,7 +1087,10 @@ namespace Barbatos_XeGTAO150
         {
             float2 velocity = MV_GetVelocity(input.uv);
             float  flow_mag = length(velocity * BUFFER_SCREEN_SIZE);
-            float  curr_luma_ao = GetLuminance(Input2Linear(GetColor(input.uv).rgb));
+            
+            float linear_luma = GetLuminance(Input2Linear(GetColor(input.uv).rgb));
+            float curr_luma_ao = linear_luma / (1.0 + linear_luma);
+            
             float  conf = MV_GetConfidenceAO(input.uv, velocity, flow_mag, curr_luma_ao, sB_PrevLuma);
             return float4(conf.xxx, 1.0);
         }

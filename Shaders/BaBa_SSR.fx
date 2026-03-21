@@ -1,7 +1,7 @@
 /*----------------------------------------------|
 | :: Barbatos SSR (Screen-Space Reflections) :: |
 |-----------------------------------------------|
-| Version: 1.5.0                                |
+| Version: 1.5.1                                |
 | Author: Barbatos                              |
 | License: MIT                                  |
 |----------------------------------------------*/
@@ -915,12 +915,14 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
 
     float4 TAA_Compress(float4 color)
     {
-        return float4(color.rgb / (10.0 + color.rgb), color.a);
+        float luma = max(color.r, max(color.g, color.b));
+        return float4(color.rgb / (1.0 + luma), color.a);
     }
 
     float4 TAA_Resolve(float4 color)
     {
-        return float4((color.rgb * 10.0) / max(1e-6, 1.0 - color.rgb), color.a);
+        float luma = max(color.r, max(color.g, color.b));
+        return float4(color.rgb / max(1e-6, 1.0 - luma), color.a);
     }
 
     float4 GetActiveHistory(float2 uv)
@@ -929,52 +931,51 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
             GetLod(sHistory0, uv) : GetLod(sHistory1, uv);
     }
 
-   float4 JointBilateralUpsample(float2 uv, float highDepth, float2 pScale)
+    float4 JointBilateralUpsample(float2 uv, float highDepth, float2 pScale)
     {
-        float2 lowResUV = uv * RenderResolution;
-        float3 highNormal = CalculateNormal(uv, pScale);
+    float2 lowResUV = uv * RenderResolution;
+    float3 highNormal = CalculateNormal(uv, pScale);
 
-        float4 sumRefl = 0.0;
-        float sumWeight = 0.0;
+    float4 sumRefl = 0.0;
+    float sumWeight = 0.0;
 
-        float2 texelSize = ReShade::PixelSize;
-        float2 baseUV = (floor(lowResUV / texelSize) + 0.5) * texelSize;
+    float2 texelSize = ReShade::PixelSize;
+    float2 baseUV = (floor(lowResUV / texelSize) + 0.5) * texelSize;
 
-        float depth_weight_factor = 1.0 / (0.1 * highDepth + 1e-6);
+    float depth_weight_factor = 1.0 / (max(0.1 * highDepth, 1e-6));
+    float filterRadius = max(1.0, 1.0 / RenderResolution) * 0.75;
 
+    [unroll]
+    for (int x = -1; x <= 1; x++)
+    {
         [unroll]
-        for (int x = -1; x <= 1; x++)
+        for (int y = -1; y <= 1; y++)
         {
-            [unroll]
-            for (int y = -1; y <= 1; y++)
-            {
-                float2 sampleUV = baseUV + float2(x, y) * texelSize;
-                float4 refl = GetActiveHistory(sampleUV);
-                
-                float2 fullScreenUV = sampleUV / RenderResolution;
-                float4 gbuffer = SampleGBuffer(fullScreenUV);
+            float2 sampleUV = baseUV + float2(x, y) * texelSize * filterRadius;
+            float4 refl = GetActiveHistory(sampleUV);
+            float2 fullScreenUV = sampleUV / RenderResolution;
+            float4 gbuffer = SampleGBuffer(fullScreenUV);
+            float3 lowNormal = gbuffer.rgb;
+            float lowDepth = gbuffer.a;
 
-                float3 lowNormal = gbuffer.rgb;
-                float lowDepth = gbuffer.a;
+            float wDepth = exp(-abs(highDepth - lowDepth) * depth_weight_factor);
+            float dotN = max(0.0, dot(highNormal, lowNormal));
+            float wNormal = pow(dotN, 16.0);
+            float wSpatial = exp(-0.5 * float(x * x + y * y));
 
-                float wDepth = exp(-abs(highDepth - lowDepth) * depth_weight_factor);
-                float dotN = max(0.0, dot(highNormal, lowNormal));
-                float wNormal = pow(dotN, 16.0);
-                float wSpatial = exp(-0.5 * float(x * x + y * y));
+            float luma = max(refl.r, max(refl.g, refl.b));
+            float wHDR = 1.0 / (1.0 + luma * 0.1);
 
-                float weight = wDepth * wNormal * wSpatial;
-
-                sumRefl += refl * weight;
-                sumWeight += weight;
-            }
+            float weight = wDepth * wNormal * wSpatial * wHDR;
+            sumRefl += refl * weight;
+            sumWeight += weight;
         }
-
-        if (sumWeight < 1e-6)
-            return GetActiveHistory(lowResUV);
-        
-        return sumRefl / sumWeight;
     }
 
+    if (sumWeight < 1e-6)
+        return GetActiveHistory(lowResUV);
+    return sumRefl / sumWeight;
+}
     float3 ClipToAABB(float3 aabb_min, float3 aabb_max, float3 history_sample)
     {
         float3 p_clip = 0.5 * (aabb_max + aabb_min);
@@ -986,10 +987,19 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         return (ma_unit > 1.0) ? (p_clip + v_clip / ma_unit) : history_sample;
     }
 
-    void ComputeNeighborhoodVariance(sampler sInput, float2 texcoord, float4 current_c, float2 pSize, out float4 color_min, out float4 color_max)
+    void ComputeNeighborhoodVariance(sampler sInput, float2 texcoord, float4 current_raw, float2 pSize, out float4 color_min, out float4 color_max)
     {
-        float4 m1 = current_c;
-        float4 m2 = current_c * current_c;
+        float current_luma = max(current_raw.r, max(current_raw.g, current_raw.b));
+        float current_w = 1.0 / (1.0 + current_luma);
+        
+        float4 current_c;
+        current_c.rgb = RGBToYCoCg(TAA_Compress(current_raw).rgb);
+        current_c.a = current_raw.a;
+
+        float4 m1 = current_c * current_w;
+        float4 m2 = (current_c * current_c) * current_w;
+        float weightSum = current_w;
+
         [unroll]
         for (int x = -1; x <= 1; x++)
         {
@@ -997,20 +1007,29 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
             for (int y = -1; y <= 1; y++)
             {
                 if (x == 0 && y == 0) continue;
-                float4 c = GetLod(sInput, texcoord + float2(x, y) * pSize);
-                c.rgb = TAA_Compress(c).rgb;
-                c.rgb = RGBToYCoCg(c.rgb); 
                 
-                m1 += c;
-                m2 += c * c;
+                float4 c_raw = GetLod(sInput, texcoord + float2(x, y) * pSize);
+                
+                // Karis Average
+                float luma = max(c_raw.r, max(c_raw.g, c_raw.b));
+                float w = 1.0 / (1.0 + luma);
+                
+                float4 c;
+                c.rgb = RGBToYCoCg(TAA_Compress(c_raw).rgb);
+                c.a = c_raw.a;
+                
+                m1 += c * w;
+                m2 += c * c * w;
+                weightSum += w;
             }
         }
         
-        m1 /= 9.0;
-        m2 /= 9.0;
+        m1 /= weightSum;
+        m2 /= weightSum;
         
         float4 sigma = sqrt(abs(m2 - m1 * m1));
-        float gamma = 1.25;
+        float gamma = lerp(2.5, 1.25, RenderResolution);
+        
         color_min = m1 - gamma * sigma;
         color_max = m1 + gamma * sigma;
     }
@@ -1086,7 +1105,7 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         
         float2 lowres_px = ReShade::PixelSize;
         float4 color_min, color_max;
-        ComputeNeighborhoodVariance(sReflection, input.uv, current_c, lowres_px, color_min, color_max);
+        ComputeNeighborhoodVariance(sReflection, input.uv, current_reflection, lowres_px, color_min, color_max);
 
         float raw_confidence = saturate(MV_GetConfidence(viewUV));
         float relax_amount = 0.15 * raw_confidence;
