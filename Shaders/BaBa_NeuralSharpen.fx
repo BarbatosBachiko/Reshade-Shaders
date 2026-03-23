@@ -8,8 +8,8 @@
 |----------------------------------------------*/
 
 #include "ReShade.fxh"
-#include "BaBa_Model_A.fxh" 
-#include "BaBa_Model_B.fxh" 
+#include ".\BaBa_Includes\BaBa_Model_A.fxh" 
+#include ".\BaBa_Includes\BaBa_Model_B.fxh" 
 
 //----------|
 // :: UI :: |

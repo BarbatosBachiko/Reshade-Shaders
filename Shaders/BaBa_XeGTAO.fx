@@ -22,8 +22,8 @@
 '----------------------------------------------*/
 
 #include "ReShade.fxh"
-#include "BaBa_MV.fxh"
-#include "BaBa_ColorSpace.fxh"
+#include ".\BaBa_Includes\BaBa_MV.fxh"
+#include ".\BaBa_Includes\BaBa_ColorSpace.fxh"
 
 #ifndef USE_HILBERT_LUT
     #define USE_HILBERT_LUT 1 

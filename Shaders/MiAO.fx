@@ -28,8 +28,8 @@ THE SOFTWARE.
 
 #include "ReShade.fxh"
 #include "ReShadeUI.fxh"
-#include "BaBa_MV.fxh"
-#include "BaBa_ColorSpace.fxh"
+#include ".\BaBa_Includes\BaBa_MV.fxh"
+#include ".\BaBa_Includes\BaBa_ColorSpace.fxh"
 
 //--------------------|
 // :: Preprocessor :: |

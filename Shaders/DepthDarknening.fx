@@ -9,7 +9,7 @@
 
 #include "ReShade.fxh"
 #include "ReShadeUI.fxh"
-#include "BaBa_MV.fxh"
+#include ".\BaBa_Includes\BaBa_MV.fxh"
 
 static const float2 LOD_MASK = float2(0.0, 1.0);
 static const float2 ZERO_LOD = float2(0.0, 0.0);
