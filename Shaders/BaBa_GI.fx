@@ -164,7 +164,7 @@ uniform float3 GI_Shadow_Tint <
     ui_label = "Shadow Color";
     ui_tooltip = "Color of GI in dark areas. Set to Black to disable GI in shadows.";
     ui_type = "color";
-> = float3(0.5, 0.5, 0.5);
+> = float3(0.0, 0.0, 0.0);
 
 uniform float3 GI_Highlight_Tint <
     ui_category = "Color Grading";
