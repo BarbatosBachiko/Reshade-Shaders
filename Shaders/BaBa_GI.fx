@@ -266,6 +266,18 @@ uniform float Roughness <
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
 > = 1.0;
 
+uniform bool EnableDepthMultiplier <
+    ui_category = "System / Debug";
+    ui_label = "Enable Depth Multiplier";
+> = false;
+
+uniform float DepthMultiplier <
+    ui_category = "System / Debug";
+    ui_label = "Depth Multiplier";
+    ui_type = "drag";
+    ui_min = 0.1; ui_max = 10.0; ui_step = 0.1;
+> = 1.0;
+
 uniform float VERTICAL_FOV <
     ui_category = "System / Debug";
     ui_label = "FOV";
@@ -461,7 +473,13 @@ namespace Barbatos_RTGI_150
 
     float GetDepth(float2 xy)
     {
-        return ReShade::GetLinearizedDepth(xy);
+        float depth = ReShade::GetLinearizedDepth(xy);
+        if (EnableDepthMultiplier)
+        {
+            depth = saturate(depth * DepthMultiplier);
+        }
+
+        return depth;
     }
 
     float3 UVToViewPos(float2 uv, float view_z, float2 pScale)

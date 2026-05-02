@@ -274,6 +274,18 @@ uniform float Smooth_Threshold <
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
 > = 0.5;
 
+uniform bool EnableDepthMultiplier <
+    ui_category = "Advanced";
+    ui_label = "Enable Depth Multiplier";
+> = false;
+
+uniform float DepthMultiplier <
+    ui_category = "Advanced";
+    ui_label = "Depth Multiplier";
+    ui_type = "drag";
+    ui_min = 0.1; ui_max = 10.0; ui_step = 0.1;
+> = 1.0;
+
 uniform float Vegetation_Protection <
     ui_category = "Advanced";
     ui_label = "Vegetation Masking";
@@ -495,7 +507,13 @@ namespace Barbatos_SSR150
     
     float GetDepth(float2 xy)
     {
-        return ReShade::GetLinearizedDepth(xy);
+        float depth = ReShade::GetLinearizedDepth(xy);
+        if (EnableDepthMultiplier)
+        {
+            depth = saturate(depth * DepthMultiplier);
+        }
+
+        return depth;
     }
 
     float3 F_Schlick(float VdotH, float3 f0)
