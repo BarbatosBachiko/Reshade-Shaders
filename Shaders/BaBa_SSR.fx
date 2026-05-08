@@ -1,7 +1,7 @@
 /*----------------------------------------------|
 | :: Barbatos SSR (Screen-Space Reflections) :: |
 |-----------------------------------------------|
-| Version: 1.5.1                                |
+| Version: 1.5.2                                |
 | Author: Barbatos                              |
 | License: MIT                                  |
 |----------------------------------------------*/
@@ -119,7 +119,7 @@ uniform float Metallic <
     ui_tooltip = "Determines how much the reflection absorbs the base color of the scene underneath it (0 = Dielectric/Plastic, 1 = Pure Metal).";
     ui_type = "drag";
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
-> = 0.2;
+> = 0.0;
 
 uniform float DIELECTRIC_REFLECTANCE <
     ui_category = "Material";
@@ -127,7 +127,7 @@ uniform float DIELECTRIC_REFLECTANCE <
     ui_tooltip = "Base front-facing reflectivity for non-metallic surfaces (Fresnel 0). 0.04 is the physically accurate standard for most non-metals.";
     ui_type = "drag";
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
-> = 0.04;
+> = 0.5;
 
 uniform float RoughnessDetection <
     ui_category = "Material";
@@ -302,6 +302,14 @@ uniform float EDGE_MASK_THRESHOLD <
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
 > = 1.0;
 
+uniform float GeoCorrectionIntensity <
+    ui_category = "Advanced";
+    ui_label = "Geometric Correction Intensity";
+    ui_tooltip = "Applies a normal bump correction based on gathered texture edges.";
+    ui_type = "drag";
+    ui_min = 0.0; ui_max = 5.0; ui_step = 0.01;
+> = 0.0;
+
 uniform int ViewMode <
     ui_category = "Advanced";
     ui_label = "Debug View";
@@ -343,7 +351,7 @@ uniform int FRAME_COUNT < source = "framecount"; >;
 // :: Textures :: |
 //----------------|
 
-namespace Barbatos_SSR150
+namespace Barbatos_SSR152
 {
     texture Normal
     {
@@ -370,6 +378,22 @@ namespace Barbatos_SSR150
         Texture = Normal1;
     };
     
+    texture RayData
+    {
+        Width = BUFFER_WIDTH;
+        Height = BUFFER_HEIGHT;
+        Format = RGBA16F;
+    };
+    sampler sRayData
+    {
+        Texture = RayData;
+        AddressU = Clamp;
+        AddressV = Clamp;
+        MipFilter = POINT;
+        MagFilter = POINT;
+        MinFilter = POINT;
+    };
+
     texture Reflection
     {
         Width = BUFFER_WIDTH;
@@ -508,6 +532,10 @@ namespace Barbatos_SSR150
     float GetDepth(float2 xy)
     {
         float depth = ReShade::GetLinearizedDepth(xy);
+    
+        if (depth >= 0.999)
+            return depth;
+
         if (EnableDepthMultiplier)
         {
             depth = saturate(depth * DepthMultiplier);
@@ -619,54 +647,6 @@ namespace Barbatos_SSR150
         return n1 * dot(n1, n2) / n1.z - n2;
     }
 
-    float3 ApplySurfaceDetails(float2 texcoord, float3 normal, float depth)
-    {
-        if (SurfaceDetails <= 0.0)
-        {
-            normal.x = -normal.x;
-            return normal;
-        }
-
-        float viewDistance = max(depth * FAR_PLANE, 1.0);
-        float radius = clamp(SurfaceDetailsRadius / viewDistance, 0.0, 8192.0);
-        
-        float2 p = ReShade::PixelSize * radius;
-        float2 kernelWeight[9] =
-        {
-            float2(-1.0, -1.0), float2(0.0, -2.0), float2(1.0, -1.0),
-            float2(-2.0, 0.0), float2(0.0, 0.0), float2(2.0, 0.0),
-            float2(-1.0, 1.0), float2(0.0, 2.0), float2(1.0, 1.0)
-        };
-        float2 sampleOffset[9] =
-        {
-            float2(-1.0, -1.0), float2(0.0, -1.0), float2(1.0, -1.0),
-            float2(-1.0, 0.0), float2(0.0, 0.0), float2(1.0, 0.0),
-            float2(-1.0, 1.0), float2(0.0, 1.0), float2(1.0, 1.0)
-        };
-        float2 sobel = 0.0;
-        
-        for (int idx = 0; idx < 9; idx++)
-        {
-            float3 col = tex2Dlod(ReShade::BackBuffer, float4(sampleOffset[idx] * p + texcoord, 0, 0)).rgb;
-            float luma = dot(col, float3(0.299, 0.587, 0.114));
-            sobel += float2(luma, luma) * kernelWeight[idx];
-        }
-
-        float3 finalNormal = normal;
-        if (SurfaceDetails > 0.0 && dot(sobel, sobel) >= (SobelEdgeThreshold * SobelEdgeThreshold))
-        {
-            float height = SurfaceDetails * 2.0;
-            float3 bump = float3(sobel.x * height, sobel.y * height, 1.0);
-            bump = normalize(bump);
-
-            finalNormal = normalize(BlendBump(normal, bump));
-        }
-
-        finalNormal.x = -finalNormal.x;
-
-        return finalNormal;
-    }
-    
     float4 ComputeSmoothedNormal(float2 uv, float2 direction, sampler sInput)
     {
         float4 color = GetLod(sInput, uv);
@@ -781,20 +761,6 @@ namespace Barbatos_SSR150
     //---------------|
     // :: Glossy  :: |
     //---------------|
-    float GetLocalRoughness(float2 uv)
-    {
-        float3 center = GetColor(uv).rgb;
-        float lumaC = GetLuminance(center);
-        float2 p = ReShade::PixelSize;
-        
-        float lumaN = GetLuminance(GetColor(uv + float2(p.x, 0)).rgb);
-        float lumaS = GetLuminance(GetColor(uv - float2(p.x, 0)).rgb);
-        float lumaE = GetLuminance(GetColor(uv + float2(0, p.y)).rgb);
-        float lumaW = GetLuminance(GetColor(uv - float2(0, p.y)).rgb);
-        
-        return saturate((abs(lumaN - lumaC) + abs(lumaS - lumaC) + abs(lumaE - lumaC) + abs(lumaW - lumaC)) * 10.0);
-    }
-    
     float specularPowerToConeAngle(float specularPower)
     {
         if (specularPower >= 4096.0)
@@ -1160,13 +1126,6 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
     //--------------------|
     // :: Pixel Shaders ::|
     //--------------------|
-    void PS_CopyColor(VS_OUTPUT input, out float4 outColor : SV_Target)
-    {
-        float localRoughness = (RoughnessDetection > 0.0) ?
-            GetLocalRoughness(input.uv) : 0.0;
-        outColor = float4(GetColor(input.uv).rgb, localRoughness);
-    }
-    
     void PS_GenNormals(VS_OUTPUT input, out float4 outNormal : SV_Target)
     {
         float depth = GetDepth(input.uv);
@@ -1207,187 +1166,216 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         outNormal = ComputeSmoothedNormal(input.uv, float2(1, 0), sNormal);
     }
 
-    void PS_SmoothNormals_V(VS_OUTPUT input, out float4 outNormal : SV_Target)
+    void PS_MaterialResolve(VS_OUTPUT input, out float4 outNormal : SV_Target0, out float4 outColor : SV_Target1)
     {
+        float3 baseColor = GetColor(input.uv).rgb;
         float4 centerNormal = GetLod(sNormal1, input.uv);
-        if (centerNormal.a >= 0.999)
-        {
-            outNormal = centerNormal;
-            return;
-        }
-    
-        float4 smoothed;
-        if (SmartSurfaceMode == 0)
-        {
-            smoothed = centerNormal;
-        }
-        else
+        float4 smoothed = centerNormal;
+        
+        if (SmartSurfaceMode != 0 && centerNormal.a < 0.999)
         {
             smoothed = ComputeSmoothedNormal(input.uv, float2(0, 1), sNormal1);
         }
         
         float depth = smoothed.a;
-        float3 finalNormal = ApplySurfaceDetails(input.uv, smoothed.rgb, depth);
-        outNormal = float4(finalNormal, depth);
+        float3 normal = smoothed.rgb;
+        float roughness = 0.0;
+
+        // Scharr Filter
+        if (SurfaceDetails > 0.0 || GeoCorrectionIntensity > 0.0 || RoughnessDetection > 0.0)
+        {
+            float4 pTL = tex2Dgather(ReShade::BackBuffer, input.uv - ReShade::PixelSize * 0.5, 1);
+            float4 pTR = tex2Dgather(ReShade::BackBuffer, input.uv + float2(ReShade::PixelSize.x, -ReShade::PixelSize.y) * 0.5, 1);
+            float4 pBL = tex2Dgather(ReShade::BackBuffer, input.uv + float2(-ReShade::PixelSize.x, ReShade::PixelSize.y) * 0.5, 1);
+            float4 pBR = tex2Dgather(ReShade::BackBuffer, input.uv + ReShade::PixelSize * 0.5, 1);
+
+            float Gx = (3.0 * pTR.z + 10.0 * pBR.z + 3.0 * pBR.y) - (3.0 * pTL.w + 10.0 * pTL.x + 3.0 * pBL.x);
+            float Gy = (3.0 * pBL.x + 10.0 * pBL.y + 3.0 * pBR.y) - (3.0 * pTL.w + 10.0 * pTL.z + 3.0 * pTR.z);
+            
+            Gx *= 0.25; 
+            Gy *= 0.25;
+
+            if (RoughnessDetection > 0.0)
+            {
+                float gradientMagnitude = sqrt(Gx * Gx + Gy * Gy);
+                roughness = saturate(gradientMagnitude * max(SurfaceDetails, 0.5) * 5.0);
+            }
+
+            // Apply Bump Mapping
+            if (SurfaceDetails > 0.0 && (Gx * Gx + Gy * Gy) >= (SobelEdgeThreshold * SobelEdgeThreshold))
+            {
+                float2 slope = float2(Gx, Gy) * SurfaceDetails;
+                float3 up = abs(normal.y) < 0.99 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0);
+                float3 T = normalize(cross(up, normal));
+                float3 B = cross(normal, T);
+                normal = normalize(normal + T * slope.x - B * slope.y);
+            }
+
+            // Apply Geometric Correction
+            if (GeoCorrectionIntensity != 0.0)
+            {
+                float3 bumpNormal = normalize(float3(Gx, Gy, 1.0));
+                normal = normalize(normal + bumpNormal * GeoCorrectionIntensity);
+            }
+        }
+
+        normal.x = -normal.x;
+        outNormal = float4(normal, depth);
+        outColor  = float4(baseColor, roughness);
     }
 
-   void PS_TraceReflections(VS_OUTPUT input, out float4 outReflection : SV_Target)
+    void PS_TraceRays(VS_OUTPUT input, out float4 outRayData : SV_Target)
     {
-        // Virtual Resolution
         float2 scaled_uv = input.uv / RenderResolution;
         float depth = GetDepth(scaled_uv);
 
-        // TAA Upscaling Jitter
         if (EnableTAAUpscaling)
         {
-            const float2 jitterOffsets[8] =
-            {
-                float2(0.125, -0.375), float2(-0.125, 0.375),
-                float2(-0.375, -0.125), float2(0.375, 0.125),
-                float2(0.375, -0.375), float2(-0.375, 0.375),
-                float2(0.125, 0.125), float2(-0.125, -0.125)
+            const float2 jitterOffsets[8] = {
+                float2(0.125, -0.375), float2(-0.125, 0.375), float2(-0.375, -0.125), float2(0.375, 0.125),
+                float2(0.375, -0.375), float2(-0.375, 0.375), float2(0.125, 0.125), float2(-0.125, -0.125)
             };
             uint jitter_idx = uint(fmod((float)FRAME_COUNT, 8.0));
-            float2 jitter = jitterOffsets[jitter_idx] * (ReShade::PixelSize / RenderResolution);
-            scaled_uv += jitter;
+            scaled_uv += jitterOffsets[jitter_idx] * (ReShade::PixelSize / RenderResolution);
         }
 
-        if (any(scaled_uv < 0.001) || any(scaled_uv > 0.999))
+        if (any(scaled_uv < 0.001) || any(scaled_uv > 0.999) || depth >= 1.0)
         {
-            outReflection = 0.0;
+            outRayData = 0.0;
             return;
         }
 
-        if (depth >= 1.0)
-        {
-            outReflection = 0.0;
-            return;
-        }
-        
         float4 gbuffer = SampleGBuffer(scaled_uv);
         float2 pScale = input.pScale;
         float3 normal = normalize(gbuffer.rgb);
         float3 viewPos = UVToViewPos(scaled_uv, depth, pScale);
-        // Sub-Pixel TAAU Jitter: Perturb the view position infinitesimally
-        float3 jittered_viewPos = viewPos;
         float3 viewDir = -normalize(viewPos);
         float estimatedRoughness = GetLod(sTexColorCopy, scaled_uv).a;
 
-        // Surface Orientation
         bool showFloor = (ReflectionMode == 0 || ReflectionMode == 3 || ReflectionMode == 4);
         bool showWall = (ReflectionMode == 1 || ReflectionMode == 4);
         bool showCeil = (ReflectionMode == 2 || ReflectionMode == 3 || ReflectionMode == 4);
 
         float orientationIntensity = 0.0;
-        if (normal.y > OrientationThreshold && showFloor)
-            orientationIntensity = 1.0;
-        else if (normal.y < -OrientationThreshold && showCeil)
-            orientationIntensity = 1.0;
-        else if (abs(normal.y) <= OrientationThreshold && showWall)
-            orientationIntensity = 1.0;
+        if (normal.y > OrientationThreshold && showFloor) orientationIntensity = 1.0;
+        else if (normal.y < -OrientationThreshold && showCeil) orientationIntensity = 1.0;
+        else if (abs(normal.y) <= OrientationThreshold && showWall) orientationIntensity = 1.0;
+
         if (orientationIntensity <= 0.0)
         {
-            outReflection = 0.0;
+            outRayData = 0.0;
             return;
         }
 
         float2 bn_uv = input.vpos.xy / (RenderResolution * 1024.0);
         float frame = fmod((float)FRAME_COUNT, 64.0);
         float4 bn = tex2Dlod(sTexBlueNoise, float4(bn_uv, 0, 0));
-        // Ray Jitter 
-        float ray_jitter = 0.0;
-        if (EnableRayJitter)
-        {
-            ray_jitter = frac(bn.b + 0.51248584407 * frame);
-        }
+        float ray_jitter = EnableRayJitter ? frac(bn.b + 0.51248584407 * frame) : 0.0;
 
         Ray r;
         r.origin = viewPos;
+
 #if ENABLE_VNDF
         float netRoughness = saturate(SurfaceGlossiness + (estimatedRoughness * RoughnessDetection)) * 0.5;
-        float2 screen_size = float2(BUFFER_WIDTH, BUFFER_HEIGHT);
-        
-        float frame_anim = fmod((float)FRAME_COUNT, 64.0);
-        float2 golden_offset = float2(0.61803398875, 0.73205080757) * frame_anim;
+        float2 golden_offset = float2(0.61803398875, 0.73205080757) * frame;
         float3 stbn_noise = tex2Dlod(sTexBlueNoise, float4(bn_uv + golden_offset, 0, 0)).rgb;
-        
         float2 Xi = frac(stbn_noise.gb + frac(sin(dot(scaled_uv ,float2(12.9898,78.233))) * 43758.5453));
         float3 H = ImportanceSampleGGX_VNDF(Xi, normal, viewDir, netRoughness);
         float3 reflectDir = reflect(-viewDir, H);
-        if (dot(reflectDir, normal) < 0.0) 
-            reflectDir = reflectDir - 2.0 * dot(reflectDir, normal) * normal;
+        if (dot(reflectDir, normal) < 0.0) reflectDir = reflectDir - 2.0 * dot(reflectDir, normal) * normal;
         r.direction = normalize(reflectDir);
 #else
         r.direction = normalize(reflect(-viewDir, normal));
 #endif
 
-        float bias = 0.0005 + (depth * 0.02);
-        r.origin += r.direction * bias;
+        r.origin += r.direction * (0.0005 + (depth * 0.02));
 
-        float VdotN = dot(viewDir, normal);
-        if (VdotN > 0.9 || r.direction.z < 0.0)
+        if (dot(viewDir, normal) > 0.9 || r.direction.z < 0.0)
         {
-            outReflection = 0.0;
+            outRayData = 0.0;
             return;
         }
 
-        // Quality 
-        int ray_steps = 12;
-        float max_dist = 4.0;
-        
-        if (RayTraceQuality == 1)
-        {
-            ray_steps = 32;
-            max_dist = 12.0;
-        }
-        else if (RayTraceQuality == 2)
-        {
-            ray_steps = 128;
-            max_dist = 100.0;
-        }
+        int ray_steps = (RayTraceQuality == 2) ? 128 : ((RayTraceQuality == 1) ? 32 : 12);
+        float max_dist = (RayTraceQuality == 2) ? 100.0 : ((RayTraceQuality == 1) ? 12.0 : 4.0);
 
-        // Ray Tracing
         float geoThickness = GetThickness(scaled_uv, normal, normalize(viewPos), depth);
         HitResult hit = TraceRay2D(r, ray_steps, max_dist, pScale, ray_jitter, geoThickness);
 
-        float3 reflectionColor = 0.0;
         float reflectionAlpha = 0.0;
+        float2 finalUV = 0.0;
+
         if (hit.found)
         {
-            reflectionColor = GetGlossySample(hit.uv, scaled_uv, estimatedRoughness, normal, pScale);
-            // Calculate Fading
+            finalUV = hit.uv;
             float distFactor = saturate(1.0 - length(hit.viewPos - viewPos) / 10.0);
-            float fadeRange = max(FadeDistance, 0.001);
-            float depthFade = saturate((FadeDistance - depth) / fadeRange);
+            float depthFade = saturate((FadeDistance - depth) / max(FadeDistance, 0.001));
             depthFade *= depthFade;
             float2 edgeDist = min(hit.uv, 1.0 - hit.uv);
             float screenFade = smoothstep(0.0, 0.001, min(edgeDist.x, edgeDist.y));
             reflectionAlpha = distFactor * depthFade * screenFade;
 
-            // Masking
             float3 nR = SampleGBuffer(scaled_uv + float2(ReShade::PixelSize.x, 0)).rgb;
             float3 nD = SampleGBuffer(scaled_uv + float2(0, ReShade::PixelSize.y)).rgb;
-            float edgeDelta = length(normal - nR) + length(normal - nD);
-            float geoMask = 1.0 - smoothstep(0.05, EDGE_MASK_THRESHOLD, edgeDelta);
-            
+            float geoMask = 1.0 - smoothstep(0.05, EDGE_MASK_THRESHOLD, length(normal - nR) + length(normal - nD));
             reflectionAlpha *= geoMask;
         }
 #if ENABLE_RAY_FALLBACK
         else
         {
-            // Fallback 
             float adaptiveDist = min(depth * 1.2 + 0.012, 10.0);
-            float3 fbViewPos = viewPos + r.direction * adaptiveDist;
-            float2 uvFb = saturate(ViewPosToUV(fbViewPos, pScale).xy);
-
-            reflectionColor = GetGlossySample(uvFb, scaled_uv, estimatedRoughness, normal, pScale);
-            float baseAlpha = smoothstep(0.0, 0.2, 1.0 - scaled_uv.y);
-            reflectionAlpha = baseAlpha ;
+            finalUV = saturate(ViewPosToUV(viewPos + r.direction * adaptiveDist, pScale).xy);
+            reflectionAlpha = smoothstep(0.0, 0.2, 1.0 - scaled_uv.y);
         }
 #endif
-        
+
         float fresnelFade = pow(saturate(dot(-viewDir, r.direction)), 2.0);
-        outReflection = float4(Input2Linear(reflectionColor), reflectionAlpha * fresnelFade * orientationIntensity);
+        float finalMask = reflectionAlpha * fresnelFade * orientationIntensity;
+
+        // Output Geometry Hit Data (R, G) and Hit Mask (A)
+        outRayData = float4(finalUV, 0.0, finalMask);
+    }
+
+    void PS_ResolveColor(VS_OUTPUT input, out float4 outReflection : SV_Target)
+    {
+        if (any(input.uv > RenderResolution))
+        {
+            outReflection = 0.0;
+            return;
+        }
+
+        float2 scaled_uv = input.uv / RenderResolution;
+        float4 rayData = GetLod(sRayData, input.uv);
+        
+        float mask = rayData.w;
+        if (mask <= 0.001)
+        {
+            outReflection = 0.0;
+            return;
+        }
+
+        float estimatedRoughness = GetLod(sTexColorCopy, scaled_uv).a;
+        float netRoughness = saturate(SurfaceGlossiness + (estimatedRoughness * RoughnessDetection));
+        
+        float2 hitUV = rayData.xy;
+
+        // Deferred Ray Spatial Filter
+        if (netRoughness > 0.1 && EnableRayJitter)
+        {
+            float2 px = ReShade::PixelSize * max(netRoughness * 2.0, 1.0);
+            
+            float4 rT = GetLod(sRayData, input.uv + float2(0, -px.y));
+            float4 rB = GetLod(sRayData, input.uv + float2(0, px.y));
+            float4 rL = GetLod(sRayData, input.uv + float2(-px.x, 0));
+            float4 rR = GetLod(sRayData, input.uv + float2(px.x, 0));
+            
+            float weightSum = 1.0 + rT.w + rB.w + rL.w + rR.w;
+            hitUV = (hitUV + rT.xy*rT.w + rB.xy*rB.w + rL.xy*rL.w + rR.xy*rR.w) / max(weightSum, 0.001);
+        }
+
+        float3 normal = normalize(SampleGBuffer(scaled_uv).rgb);
+        float3 reflectionColor = GetGlossySample(hitUV, scaled_uv, estimatedRoughness, normal, input.pScale);
+        outReflection = float4(Input2Linear(reflectionColor), mask);
     }
     
     void PS_Accumulate0(VS_OUTPUT input, out float4 outBlended : SV_Target)
@@ -1463,13 +1451,14 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         float reflectionMask = reflectionSample.a;
         float estimatedRoughness_out = GetLod(sTexColorCopy, input.uv).a;
         float netRoughness_out = saturate(SurfaceGlossiness + (estimatedRoughness_out * RoughnessDetection));
+        
         // Color Grading
         float3 tint = Use_Color_Temperature ?
             KelvinToRGB(Color_Temperature) : SSR_Tint;
         reflectionColor *= tint;
-        
         float paper_white_norm = 80.0 / HDR_Peak_Nits;
         float mid_gray = paper_white_norm * 0.18;
+
         // Contrast
         reflectionColor = (reflectionColor - mid_gray) * SSR_Contrast + mid_gray;
         reflectionColor = max(0.0, reflectionColor);
@@ -1481,36 +1470,41 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
         float luma_normalized = saturate(reflLum / (paper_white_norm * 3.0));
         float shadowCurve = 1.0 - smoothstep(SSR_Split_Balance - 0.2, SSR_Split_Balance + 0.2, luma_normalized);
         float highlightCurve = smoothstep(SSR_Split_Balance - 0.2, SSR_Split_Balance + 0.2, luma_normalized);
+
         // Split Tint
         float3 splitTint = shadowCurve * SSR_Shadow_Tint + highlightCurve * SSR_Highlight_Tint;
         reflectionColor = reflectionColor * splitTint;
         float splitTintAlpha = max(splitTint.r, max(splitTint.g, splitTint.b));
         reflectionMask *= saturate(splitTintAlpha);
-        //Scene Highlight Preservation
-        float sceneLuma = GetLuminance(scene);
+
+        //Albedo
+        float sceneLuma = max(GetLuminance(scene), 1e-6);
+        float3 sceneTint = saturate(scene / sceneLuma);
         float highlightProtectionMask = smoothstep(paper_white_norm, paper_white_norm * 4.0, sceneLuma);
         reflectionMask *= saturate(1.0 - (highlightProtectionMask * Preserve_Scene_Highlights));
+
         // PBR & Blending
         float3 viewDir = -normalize(UVToViewPos(input.uv, depth, input.pScale));
         float VdotN = saturate(dot(viewDir, normal));
-        float3 f0 = lerp(DIELECTRIC_REFLECTANCE.xxx, saturate(scene), Metallic);
+        
+        // Metallic
+        float3 metalF0 = sceneTint * max(sceneLuma, DIELECTRIC_REFLECTANCE);
+        float3 f0 = lerp(DIELECTRIC_REFLECTANCE.xxx, metalF0, Metallic);
         float3 F = saturate(F_Schlick(VdotN, f0));
 
         float3 finalColor;
         if (BlendMode == 0) // Default PBR 
-    {
-    float validReflection = reflectionMask * saturate(Intensity);
-    float3 kD = saturate(1.0 - (F * validReflection));
-    kD *= lerp(1.0, 1.0 - Metallic, validReflection);
-    
-    float3 specularLight = reflectionColor * F * Intensity * reflectionMask;
-    finalColor = (scene * kD) + specularLight;
-    }
-    else // Legacy Blending modes
-    {
-        float blendAmount = dot(F, float3(0.333, 0.333, 0.334)) * reflectionMask;
-        finalColor = ComHeaders::Blending::Blend(BlendMode, scene, reflectionColor, blendAmount * Intensity);
-    }
+        {
+            float validReflection = reflectionMask * saturate(Intensity);
+            float3 kD = saturate(1.0 - (F * validReflection));
+            float3 specularLight = reflectionColor * F * Intensity * reflectionMask;
+            finalColor = (scene * kD) + specularLight;
+        }
+        else // Legacy Blending modes
+        {
+            float blendAmount = saturate(dot(F, float3(0.333, 0.333, 0.334)) * reflectionMask * Intensity);
+            finalColor = ComHeaders::Blending::Blend(BlendMode, scene, reflectionColor, blendAmount);
+        }
     
         outColor = float4(Linear2Output(finalColor), 1.0);
     }
@@ -1537,22 +1531,23 @@ float3 ImportanceSampleGGX_VNDF(float2 Xi, float3 N, float3 V, float roughness)
             PixelShader = PS_SmoothNormals_H;
             RenderTarget = Normal1;
         }
-        pass SmoothNormals_V
+        pass MaterialResolve
         {
             VertexShader = VS_Barbatos_SSR;
-            PixelShader = PS_SmoothNormals_V;
-            RenderTarget = Normal;
+            PixelShader = PS_MaterialResolve;
+            RenderTarget0 = Normal;
+            RenderTarget1 = TexColorCopy;
         }
-        pass CopyColorGenMips
+        pass TraceRays
         {
             VertexShader = VS_Barbatos_SSR;
-            PixelShader = PS_CopyColor;
-            RenderTarget = TexColorCopy;
+            PixelShader = PS_TraceRays;
+            RenderTarget = RayData;
         }
-        pass TraceReflections
+        pass ResolveColor
         {
             VertexShader = VS_Barbatos_SSR;
-            PixelShader = PS_TraceReflections;
+            PixelShader = PS_ResolveColor;
             RenderTarget = Reflection;
         }
         pass Accumulate0
