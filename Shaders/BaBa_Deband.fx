@@ -6,7 +6,9 @@
 | License: MIT                                  |
 '----------------------------------------------*/
 
-#include "ReShade.fxh"
+#include ".\bb_include\bb_reshade.fxh"
+#include ".\bb_include\bb_common.fxh"
+#include ".\bb_include\bb_colorspace.fxh"
 
 //----------|
 // :: UI :: |
@@ -43,8 +45,6 @@ uniform int Iterations <
     ui_max = 3;
 > = 1;
 
-static const float TWO_PI = 6.28318530718;
-static const float3 LumaWeights = float3(0.299, 0.587, 0.114);
 static const float ANGLE_OFFSETS[3] = { 0.0, 2.09439510239, 4.18879020478 };
 
 /*------------------.
@@ -70,25 +70,25 @@ float GetDither(float2 pos)
 
 float4 MainPS(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
 {
-    const float3 color = tex2D(ReShade::BackBuffer, uv).rgb;
+    const float3 color = tex2D(bb::BackBuffer, uv).rgb;
     float3 result = color;
     
-    float base_angle = frac(dot(pos.xy, float2(0.754877666, 0.569840296))) * TWO_PI;
+    float base_angle = frac(dot(pos.xy, float2(0.754877666, 0.569840296))) * (2.0 * PI);
 
     [loop]
     for (int i = 0; i < Iterations; i++)
     {
         float2 dir = GetDirection(base_angle, i);
         float radius_scale = 1.0 + (float(i) * 0.618034);
-        float2 offset = dir * (Radius * radius_scale * ReShade::PixelSize);
+        float2 offset = dir * (Radius * radius_scale * bb::PixelSize);
 
-        float3 s1 = tex2Dlod(ReShade::BackBuffer, float4(uv + offset, 0.0, 0.0)).rgb;
-        float3 s2 = tex2Dlod(ReShade::BackBuffer, float4(uv - offset, 0.0, 0.0)).rgb;
+        float3 s1 = tex2Dlod(bb::BackBuffer, float4(uv + offset, 0.0, 0.0)).rgb;
+        float3 s2 = tex2Dlod(bb::BackBuffer, float4(uv - offset, 0.0, 0.0)).rgb;
 
         float3 avg = (s1 + s2) * 0.5;
         float3 delta = result - avg;
         
-        float luma_diff = dot(abs(delta), LumaWeights);
+        float luma_diff = GetLuminance(abs(delta));
         float chroma_diff = length(delta.gb) * 0.5;
         float total_diff = luma_diff + chroma_diff;
 

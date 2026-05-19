@@ -7,13 +7,10 @@
 | About: Enhances perceptual depth by applying unsharp masking to the depth buffer.               |
 '------------------------------------------------------------------------------------------------*/
 
-#include "ReShade.fxh"
-#include "ReShadeUI.fxh"
-#include ".\BaBa_Includes\BaBa_MV.fxh"
-
-static const float2 LOD_MASK = float2(0.0, 1.0);
-static const float2 ZERO_LOD = float2(0.0, 0.0);
-#define GetLod(s,c) tex2Dlod(s, ((c).xyyy * LOD_MASK.yyxx + ZERO_LOD.xxxy))
+#include ".\bb_include\bb_reshade.fxh"
+#include ".\bb_include\bb_ui.fxh"
+#include ".\bb_include\bb_mv.fxh"
+#include ".\bb_include\bb_common.fxh"
 
 /*---------.
 | :: UI::  |
@@ -181,9 +178,9 @@ float GetGaussianWeight(float x, float sigma)
 float GetInput(float2 uv)
 {
     if (ColorOnly)
-        return dot(tex2D(ReShade::BackBuffer, uv).rgb, float3(0.2126, 0.7152, 0.0722));
+        return dot(tex2Dlod(bb::BackBuffer, float4(uv, 0, 0)).rgb, float3(0.2126, 0.7152, 0.0722));
     else
-        return ReShade::GetLinearizedDepth(uv);
+        return bb::GetLinearizedDepth(uv);
 }
 
 float Confidence(float2 uv, float2 velocity)
@@ -231,6 +228,7 @@ void PS_BlurH(float4 pos : SV_Position, float2 uv : TEXCOORD, out float outDepth
     float sigma = max(0.1, Radius);
     int radius = clamp(int(ceil(sigma * 3.0)), 1, 20);
 
+    [loop]
     for (int x = -radius; x <= radius; x++)
     {
         float weight = GetGaussianWeight(float(x), sigma);
@@ -252,10 +250,11 @@ void PS_CalcDeltaD(float4 pos : SV_Position, float2 uv : TEXCOORD, out float out
         float sigma = max(0.1, Radius);
         int radius = clamp(int(ceil(sigma * 3.0)), 1, 20);
 
+        [loop]
         for (int y = -radius; y <= radius; y++)
         {
             float weight = GetGaussianWeight(float(y), sigma);
-            result += tex2D(SamplerBlurH, uv + float2(0.0, float(y) * pixelSize.y)).r * weight;
+            result += tex2Dlod(SamplerBlurH, float4(uv + float2(0.0, float(y) * pixelSize.y), 0, 0)).r * weight;
             totalWeight += weight;
         }
         depth = result / totalWeight; // This is G * D
@@ -303,7 +302,7 @@ void PS_SaveInput(float4 pos : SV_Position, float2 uv : TEXCOORD, out float outI
 
 void PS_Composite(float4 pos : SV_Position, float2 uv : TEXCOORD, out float3 outColor : SV_Target)
 {
-    float3 color = tex2D(ReShade::BackBuffer, uv).rgb;
+    float3 color = tex2D(bb::BackBuffer, uv).rgb;
     float deltaD = tex2D(SamplerFilteredDeltaD, uv).r;
     
     if (DebugView == 1) // View Spatial 

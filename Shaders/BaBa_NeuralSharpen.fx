@@ -1,354 +1,360 @@
 /*----------------------------------------------|
 | ::        Barbatos Neural Sharpening       :: |
 |-----------------------------------------------|
-| Version: 1.3                                  |
+| Version: 2.0                                  |
 | Author: Barbatos                              |
 | License: MIT                                  |
-| 12-Channel Neural Network                     |
+| 12-Channel Neural Network Ver 2.8             |
 |----------------------------------------------*/
 
-#include "ReShade.fxh"
-#include ".\BaBa_Includes\BaBa_Model_A.fxh" 
-#include ".\BaBa_Includes\BaBa_Model_B.fxh" 
+#include "bb_reshade.fxh"
 
-//----------|
-// :: UI :: |
-//----------|
-uniform int ModelType <
+namespace Barbatos_ModelAB
+{
+
+#include "ModelAB_weights.fxh"
+
+uniform int ModelSelector <
     ui_type = "combo";
-    ui_items = "Model A2\0Model B2\0";
-    ui_label = "Model Type";
-    ui_tooltip = "Model A: Model trained to deliver controlled sharpness. \nModel B: Model trained to deliver raw sharpness.";
+    ui_items = "Model A\0Model B\0";
+    ui_label = "Neural Model";
+    ui_tooltip = "Model A: Standard sharpening. Model B: Edge-enhanced.";
 > = 0;
 
 uniform float Intensity <
     ui_type = "drag";
-    ui_min = 0.0; 
+    ui_min = 0.0;
     ui_max = 2.0;
     ui_step = 0.05;
     ui_label = "Intensity";
 > = 1.0;
 
-uniform float AntiHalo <
-    ui_type = "drag";
-    ui_min = 0.0; 
-    ui_max = 1.0;
-    ui_step = 0.05;
-    ui_label = "Anti-Halo";
-    ui_tooltip = "Reduces ringing artifacts.";
-> = 0.0;
-
-/* // Debug Mode 
 uniform int ViewMode <
     ui_type = "combo";
-    ui_items = "Normal\0Map Only\0";
+    ui_items = "Normal\0Map Only\0Residual Map\0";
     ui_label = "Debug";
 > = 0;
-*/
 
-//----------------|
-// :: Textures :: |
-//----------------|
-namespace Barbatos_NS120
+uniform float EdgeResponse <
+    ui_type = "drag";
+    ui_min = -1.0;
+    ui_max = 1.0;
+    ui_step = 0.05;
+    ui_label = "Edge Response";
+    ui_tooltip = "Controls how sharpening adapts to detected edges. Negative = smooth edges, Positive = enhance edges, 0 = uniform";
+> = 0.0;
+
+texture TexLuma { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = R16F; };
+sampler sTexLuma { Texture = TexLuma; };
+
+float GetLuma(float3 rgb) { return dot(rgb, float3(0.299, 0.587, 0.114)); }
+
+float3 RGBToYCbCr(float3 rgb)
 {
-    texture TexLuma
-    {
-        Width = BUFFER_WIDTH;
-        Height = BUFFER_HEIGHT;
-        Format = R16F;
-    };
-    
-    sampler sTexLuma
-    {
-        Texture = TexLuma;
-    };
+    float y  = dot(rgb, float3(0.299, 0.587, 0.114));
+    float cb = (rgb.b - y) * 0.564 + 0.5;
+    float cr = (rgb.r - y) * 0.713 + 0.5;
+    return float3(y, cb, cr);
+}
 
-    //-----------------|
-    // :: Functions :: |
-    //-----------------|
-    
-    float GetLuma(float3 rgb)
-    {
-        return dot(rgb, float3(0.299, 0.587, 0.114));
-    }
+float3 YCbCrToRGB(float3 ycbcr)
+{
+    float y  = ycbcr.x;
+    float cb = ycbcr.y - 0.5;
+    float cr = ycbcr.z - 0.5;
+    float r  = y + 1.403 * cr;
+    float g  = y - 0.344 * cb - 0.714 * cr;
+    float b  = y + 1.770 * cb;
+    return float3(r, g, b);
+}
 
-    float3 RGBToYCbCr(float3 rgb)
-    {
-        float y = dot(rgb, float3(0.299, 0.587, 0.114));
-        float cb = (rgb.b - y) * 0.564 + 0.5;
-        float cr = (rgb.r - y) * 0.713 + 0.5;
-        return float3(y, cb, cr);
-    }
+min16float RunNet_A(float2 uv)
+{
+    const float2 pixel = bb::PixelSize;
 
-    float3 YCbCrToRGB(float3 ycbcr)
-    {
-        float y = ycbcr.x;
-        float cb = ycbcr.y - 0.5;
-        float cr = ycbcr.z - 0.5;
-        float r = y + 1.403 * cr;
-        float g = y - 0.344 * cb - 0.714 * cr;
-        float b = y + 1.770 * cb;
-        return float3(r, g, b);
-    }
-    
-    float RunNet_A(float2 uv)
-    {
-        const float2 pixel = ReShade::PixelSize;
-        // LAYER 1: 3x3 Conv
-        float4 L1_0 = ModelA::Local_B[0];
-        float4 L1_1 = ModelA::Local_B[1];
-        float4 L1_2 = ModelA::Local_B[2];
+    // LAYER 1: 3x3 Conv
+    min16float4 L1_0 = (min16float4)ModelA::Local_B[0];
+    min16float4 L1_1 = (min16float4)ModelA::Local_B[1];
+    min16float4 L1_2 = (min16float4)ModelA::Local_B[2];
 
-        int w_idx = 0;
+    int w_idx = 0;
+    [unroll]
+    for (int y = -1; y <= 1; y++)
+    {
         [unroll]
-        for (int y = -1; y <= 1; y++)
+        for (int x = -1; x <= 1; x++)
         {
-            [unroll]
-            for (int x = -1; x <= 1; x++)
-            {
-                const float val = tex2D(sTexLuma, uv + float2(x, y) * pixel).r;
-                L1_0 += val * ModelA::Local_W[w_idx];
-                L1_1 += val * ModelA::Local_W[w_idx + 1];
-                L1_2 += val * ModelA::Local_W[w_idx + 2];
-                w_idx += 3;
-            }
+            const min16float val = (min16float)tex2D(sTexLuma, uv + float2(x, y) * pixel).r;
+            L1_0 += val * (min16float4)ModelA::Local_W[w_idx + 0];
+            L1_1 += val * (min16float4)ModelA::Local_W[w_idx + 1];
+            L1_2 += val * (min16float4)ModelA::Local_W[w_idx + 2];
+            w_idx += 3;
         }
-        
-        // PReLU 1
-        L1_0 = max(0, L1_0) + min(0, L1_0) * ModelA::Local_A[0];
-        L1_1 = max(0, L1_1) + min(0, L1_1) * ModelA::Local_A[1];
-        L1_2 = max(0, L1_2) + min(0, L1_2) * ModelA::Local_A[2];
-
-        // LAYER 2: 1x1 Dense
-        float4 L2_0 = ModelA::Mix_B[0];
-        float4 L2_1 = ModelA::Mix_B[1];
-        float4 L2_2 = ModelA::Mix_B[2];
-        
-        int m_idx = 0;
-        // Group 0
-        L2_0.x += dot(L1_0, ModelA::Mix_W[m_idx++]);
-        L2_0.y += dot(L1_0, ModelA::Mix_W[m_idx++]);
-        L2_0.z += dot(L1_0, ModelA::Mix_W[m_idx++]);
-        L2_0.w += dot(L1_0, ModelA::Mix_W[m_idx++]);
-        L2_0.x += dot(L1_1, ModelA::Mix_W[m_idx++]);
-        L2_0.y += dot(L1_1, ModelA::Mix_W[m_idx++]);
-        L2_0.z += dot(L1_1, ModelA::Mix_W[m_idx++]);
-        L2_0.w += dot(L1_1, ModelA::Mix_W[m_idx++]);
-        L2_0.x += dot(L1_2, ModelA::Mix_W[m_idx++]);
-        L2_0.y += dot(L1_2, ModelA::Mix_W[m_idx++]);
-        L2_0.z += dot(L1_2, ModelA::Mix_W[m_idx++]);
-        L2_0.w += dot(L1_2, ModelA::Mix_W[m_idx++]);
-        
-        // Group 1
-        L2_1.x += dot(L1_0, ModelA::Mix_W[m_idx++]);
-        L2_1.y += dot(L1_0, ModelA::Mix_W[m_idx++]);
-        L2_1.z += dot(L1_0, ModelA::Mix_W[m_idx++]);
-        L2_1.w += dot(L1_0, ModelA::Mix_W[m_idx++]);
-        L2_1.x += dot(L1_1, ModelA::Mix_W[m_idx++]);
-        L2_1.y += dot(L1_1, ModelA::Mix_W[m_idx++]);
-        L2_1.z += dot(L1_1, ModelA::Mix_W[m_idx++]);
-        L2_1.w += dot(L1_1, ModelA::Mix_W[m_idx++]);
-        L2_1.x += dot(L1_2, ModelA::Mix_W[m_idx++]);
-        L2_1.y += dot(L1_2, ModelA::Mix_W[m_idx++]);
-        L2_1.z += dot(L1_2, ModelA::Mix_W[m_idx++]);
-        L2_1.w += dot(L1_2, ModelA::Mix_W[m_idx++]);
-
-        // Group 2
-        L2_2.x += dot(L1_0, ModelA::Mix_W[m_idx++]);
-        L2_2.y += dot(L1_0, ModelA::Mix_W[m_idx++]);
-        L2_2.z += dot(L1_0, ModelA::Mix_W[m_idx++]);
-        L2_2.w += dot(L1_0, ModelA::Mix_W[m_idx++]);
-        L2_2.x += dot(L1_1, ModelA::Mix_W[m_idx++]);
-        L2_2.y += dot(L1_1, ModelA::Mix_W[m_idx++]);
-        L2_2.z += dot(L1_1, ModelA::Mix_W[m_idx++]);
-        L2_2.w += dot(L1_1, ModelA::Mix_W[m_idx++]);
-        L2_2.x += dot(L1_2, ModelA::Mix_W[m_idx++]);
-        L2_2.y += dot(L1_2, ModelA::Mix_W[m_idx++]);
-        L2_2.z += dot(L1_2, ModelA::Mix_W[m_idx++]);
-        L2_2.w += dot(L1_2, ModelA::Mix_W[m_idx++]);
-
-        // PReLU 2
-        L2_0 = max(0, L2_0) + min(0, L2_0) * ModelA::Mix_A[0];
-        L2_1 = max(0, L2_1) + min(0, L2_1) * ModelA::Mix_A[1];
-        L2_2 = max(0, L2_2) + min(0, L2_2) * ModelA::Mix_A[2];
-
-        // LAYER 3: Output
-        float res = ModelA::Out_Bias;
-        res += dot(L2_0, ModelA::Out_W[0]);
-        res += dot(L2_1, ModelA::Out_W[1]);
-        res += dot(L2_2, ModelA::Out_W[2]);
-
-        return tanh(res);
     }
 
-    float RunNet_B(float2 uv)
-    {
-        const float2 pixel = ReShade::PixelSize;
-        // LAYER 1
-        float4 L1_0 = ModelB::Local_B[0];
-        float4 L1_1 = ModelB::Local_B[1];
-        float4 L1_2 = ModelB::Local_B[2];
+    // PReLU 1
+    L1_0 = max(0.0, L1_0) + min(0.0, L1_0) * (min16float4)ModelA::Local_A[0];
+    L1_1 = max(0.0, L1_1) + min(0.0, L1_1) * (min16float4)ModelA::Local_A[1];
+    L1_2 = max(0.0, L1_2) + min(0.0, L1_2) * (min16float4)ModelA::Local_A[2];
 
-        int w_idx = 0;
+    // LAYER 2: 1x1 Dense
+    min16float4 L2_0 = (min16float4)ModelA::Mix_B[0];
+    min16float4 L2_1 = (min16float4)ModelA::Mix_B[1];
+    min16float4 L2_2 = (min16float4)ModelA::Mix_B[2];
+
+    int m_idx = 0;
+    // Group 0
+    L2_0.x += dot(L1_0, (min16float4)ModelA::Mix_W[m_idx++]);
+    L2_0.y += dot(L1_0, (min16float4)ModelA::Mix_W[m_idx++]);
+    L2_0.z += dot(L1_0, (min16float4)ModelA::Mix_W[m_idx++]);
+    L2_0.w += dot(L1_0, (min16float4)ModelA::Mix_W[m_idx++]);
+    L2_0.x += dot(L1_1, (min16float4)ModelA::Mix_W[m_idx++]);
+    L2_0.y += dot(L1_1, (min16float4)ModelA::Mix_W[m_idx++]);
+    L2_0.z += dot(L1_1, (min16float4)ModelA::Mix_W[m_idx++]);
+    L2_0.w += dot(L1_1, (min16float4)ModelA::Mix_W[m_idx++]);
+    L2_0.x += dot(L1_2, (min16float4)ModelA::Mix_W[m_idx++]);
+    L2_0.y += dot(L1_2, (min16float4)ModelA::Mix_W[m_idx++]);
+    L2_0.z += dot(L1_2, (min16float4)ModelA::Mix_W[m_idx++]);
+    L2_0.w += dot(L1_2, (min16float4)ModelA::Mix_W[m_idx++]);
+    // Group 1
+    L2_1.x += dot(L1_0, (min16float4)ModelA::Mix_W[m_idx++]);
+    L2_1.y += dot(L1_0, (min16float4)ModelA::Mix_W[m_idx++]);
+    L2_1.z += dot(L1_0, (min16float4)ModelA::Mix_W[m_idx++]);
+    L2_1.w += dot(L1_0, (min16float4)ModelA::Mix_W[m_idx++]);
+    L2_1.x += dot(L1_1, (min16float4)ModelA::Mix_W[m_idx++]);
+    L2_1.y += dot(L1_1, (min16float4)ModelA::Mix_W[m_idx++]);
+    L2_1.z += dot(L1_1, (min16float4)ModelA::Mix_W[m_idx++]);
+    L2_1.w += dot(L1_1, (min16float4)ModelA::Mix_W[m_idx++]);
+    L2_1.x += dot(L1_2, (min16float4)ModelA::Mix_W[m_idx++]);
+    L2_1.y += dot(L1_2, (min16float4)ModelA::Mix_W[m_idx++]);
+    L2_1.z += dot(L1_2, (min16float4)ModelA::Mix_W[m_idx++]);
+    L2_1.w += dot(L1_2, (min16float4)ModelA::Mix_W[m_idx++]);
+    // Group 2
+    L2_2.x += dot(L1_0, (min16float4)ModelA::Mix_W[m_idx++]);
+    L2_2.y += dot(L1_0, (min16float4)ModelA::Mix_W[m_idx++]);
+    L2_2.z += dot(L1_0, (min16float4)ModelA::Mix_W[m_idx++]);
+    L2_2.w += dot(L1_0, (min16float4)ModelA::Mix_W[m_idx++]);
+    L2_2.x += dot(L1_1, (min16float4)ModelA::Mix_W[m_idx++]);
+    L2_2.y += dot(L1_1, (min16float4)ModelA::Mix_W[m_idx++]);
+    L2_2.z += dot(L1_1, (min16float4)ModelA::Mix_W[m_idx++]);
+    L2_2.w += dot(L1_1, (min16float4)ModelA::Mix_W[m_idx++]);
+    L2_2.x += dot(L1_2, (min16float4)ModelA::Mix_W[m_idx++]);
+    L2_2.y += dot(L1_2, (min16float4)ModelA::Mix_W[m_idx++]);
+    L2_2.z += dot(L1_2, (min16float4)ModelA::Mix_W[m_idx++]);
+    L2_2.w += dot(L1_2, (min16float4)ModelA::Mix_W[m_idx++]);
+
+    // PReLU 2
+    L2_0 = max(0.0, L2_0) + min(0.0, L2_0) * (min16float4)ModelA::Mix_A[0];
+    L2_1 = max(0.0, L2_1) + min(0.0, L2_1) * (min16float4)ModelA::Mix_A[1];
+    L2_2 = max(0.0, L2_2) + min(0.0, L2_2) * (min16float4)ModelA::Mix_A[2];
+
+    // LAYER 3: Output
+    min16float res = (min16float)ModelA::Out_Bias;
+    res += dot(L2_0, (min16float4)ModelA::Out_W[0]);
+    res += dot(L2_1, (min16float4)ModelA::Out_W[1]);
+    res += dot(L2_2, (min16float4)ModelA::Out_W[2]);
+
+    return res;
+}
+
+min16float RunNet_B(float2 uv)
+{
+    const float2 pixel = bb::PixelSize;
+
+    // LAYER 1: 3x3 Conv
+    min16float4 L1_0 = (min16float4)ModelB::Local_B[0];
+    min16float4 L1_1 = (min16float4)ModelB::Local_B[1];
+    min16float4 L1_2 = (min16float4)ModelB::Local_B[2];
+
+    int w_idx = 0;
+    [unroll]
+    for (int y = -1; y <= 1; y++)
+    {
         [unroll]
-        for (int y = -1; y <= 1; y++)
+        for (int x = -1; x <= 1; x++)
         {
-            [unroll]
-            for (int x = -1; x <= 1; x++)
-            {
-                const float val = tex2D(sTexLuma, uv + float2(x, y) * pixel).r;
-                L1_0 += val * ModelB::Local_W[w_idx];
-                L1_1 += val * ModelB::Local_W[w_idx + 1];
-                L1_2 += val * ModelB::Local_W[w_idx + 2];
-                w_idx += 3;
-            }
+            const min16float val = (min16float)tex2D(sTexLuma, uv + float2(x, y) * pixel).r;
+            L1_0 += val * (min16float4)ModelB::Local_W[w_idx + 0];
+            L1_1 += val * (min16float4)ModelB::Local_W[w_idx + 1];
+            L1_2 += val * (min16float4)ModelB::Local_W[w_idx + 2];
+            w_idx += 3;
         }
-        
-        // PReLU 1
-        L1_0 = max(0, L1_0) + min(0, L1_0) * ModelB::Local_A[0];
-        L1_1 = max(0, L1_1) + min(0, L1_1) * ModelB::Local_A[1];
-        L1_2 = max(0, L1_2) + min(0, L1_2) * ModelB::Local_A[2];
-
-        // LAYER 2
-        float4 L2_0 = ModelB::Mix_B[0];
-        float4 L2_1 = ModelB::Mix_B[1];
-        float4 L2_2 = ModelB::Mix_B[2];
-        
-        int m_idx = 0;
-        // Group 0
-        L2_0.x += dot(L1_0, ModelB::Mix_W[m_idx++]);
-        L2_0.y += dot(L1_0, ModelB::Mix_W[m_idx++]);
-        L2_0.z += dot(L1_0, ModelB::Mix_W[m_idx++]);
-        L2_0.w += dot(L1_0, ModelB::Mix_W[m_idx++]);
-        L2_0.x += dot(L1_1, ModelB::Mix_W[m_idx++]);
-        L2_0.y += dot(L1_1, ModelB::Mix_W[m_idx++]);
-        L2_0.z += dot(L1_1, ModelB::Mix_W[m_idx++]);
-        L2_0.w += dot(L1_1, ModelB::Mix_W[m_idx++]);
-        L2_0.x += dot(L1_2, ModelB::Mix_W[m_idx++]);
-        L2_0.y += dot(L1_2, ModelB::Mix_W[m_idx++]);
-        L2_0.z += dot(L1_2, ModelB::Mix_W[m_idx++]);
-        L2_0.w += dot(L1_2, ModelB::Mix_W[m_idx++]);
-        
-        // Group 1
-        L2_1.x += dot(L1_0, ModelB::Mix_W[m_idx++]);
-        L2_1.y += dot(L1_0, ModelB::Mix_W[m_idx++]);
-        L2_1.z += dot(L1_0, ModelB::Mix_W[m_idx++]);
-        L2_1.w += dot(L1_0, ModelB::Mix_W[m_idx++]);
-        L2_1.x += dot(L1_1, ModelB::Mix_W[m_idx++]);
-        L2_1.y += dot(L1_1, ModelB::Mix_W[m_idx++]);
-        L2_1.z += dot(L1_1, ModelB::Mix_W[m_idx++]);
-        L2_1.w += dot(L1_1, ModelB::Mix_W[m_idx++]);
-        L2_1.x += dot(L1_2, ModelB::Mix_W[m_idx++]);
-        L2_1.y += dot(L1_2, ModelB::Mix_W[m_idx++]);
-        L2_1.z += dot(L1_2, ModelB::Mix_W[m_idx++]);
-        L2_1.w += dot(L1_2, ModelB::Mix_W[m_idx++]);
-
-        // Group 2
-        L2_2.x += dot(L1_0, ModelB::Mix_W[m_idx++]);
-        L2_2.y += dot(L1_0, ModelB::Mix_W[m_idx++]);
-        L2_2.z += dot(L1_0, ModelB::Mix_W[m_idx++]);
-        L2_2.w += dot(L1_0, ModelB::Mix_W[m_idx++]);
-        L2_2.x += dot(L1_1, ModelB::Mix_W[m_idx++]);
-        L2_2.y += dot(L1_1, ModelB::Mix_W[m_idx++]);
-        L2_2.z += dot(L1_1, ModelB::Mix_W[m_idx++]);
-        L2_2.w += dot(L1_1, ModelB::Mix_W[m_idx++]);
-        L2_2.x += dot(L1_2, ModelB::Mix_W[m_idx++]);
-        L2_2.y += dot(L1_2, ModelB::Mix_W[m_idx++]);
-        L2_2.z += dot(L1_2, ModelB::Mix_W[m_idx++]);
-        L2_2.w += dot(L1_2, ModelB::Mix_W[m_idx++]);
-
-        // PReLU 2
-        L2_0 = max(0, L2_0) + min(0, L2_0) * ModelB::Mix_A[0];
-        L2_1 = max(0, L2_1) + min(0, L2_1) * ModelB::Mix_A[1];
-        L2_2 = max(0, L2_2) + min(0, L2_2) * ModelB::Mix_A[2];
-
-        // LAYER 3
-        float res = ModelB::Out_Bias;
-        res += dot(L2_0, ModelB::Out_W[0]);
-        res += dot(L2_1, ModelB::Out_W[1]);
-        res += dot(L2_2, ModelB::Out_W[2]);
-
-        return tanh(res);
     }
 
-    void PS_GetLuma(float4 vpos : SV_Position, float2 uv : TexCoord, out float outLuma : SV_Target)
+    // PReLU 1
+    L1_0 = max(0.0, L1_0) + min(0.0, L1_0) * (min16float4)ModelB::Local_A[0];
+    L1_1 = max(0.0, L1_1) + min(0.0, L1_1) * (min16float4)ModelB::Local_A[1];
+    L1_2 = max(0.0, L1_2) + min(0.0, L1_2) * (min16float4)ModelB::Local_A[2];
+
+    // LAYER 2: 1x1 Dense
+    min16float4 L2_0 = (min16float4)ModelB::Mix_B[0];
+    min16float4 L2_1 = (min16float4)ModelB::Mix_B[1];
+    min16float4 L2_2 = (min16float4)ModelB::Mix_B[2];
+
+    int m_idx = 0;
+    // Group 0
+    L2_0.x += dot(L1_0, (min16float4)ModelB::Mix_W[m_idx++]);
+    L2_0.y += dot(L1_0, (min16float4)ModelB::Mix_W[m_idx++]);
+    L2_0.z += dot(L1_0, (min16float4)ModelB::Mix_W[m_idx++]);
+    L2_0.w += dot(L1_0, (min16float4)ModelB::Mix_W[m_idx++]);
+    L2_0.x += dot(L1_1, (min16float4)ModelB::Mix_W[m_idx++]);
+    L2_0.y += dot(L1_1, (min16float4)ModelB::Mix_W[m_idx++]);
+    L2_0.z += dot(L1_1, (min16float4)ModelB::Mix_W[m_idx++]);
+    L2_0.w += dot(L1_1, (min16float4)ModelB::Mix_W[m_idx++]);
+    L2_0.x += dot(L1_2, (min16float4)ModelB::Mix_W[m_idx++]);
+    L2_0.y += dot(L1_2, (min16float4)ModelB::Mix_W[m_idx++]);
+    L2_0.z += dot(L1_2, (min16float4)ModelB::Mix_W[m_idx++]);
+    L2_0.w += dot(L1_2, (min16float4)ModelB::Mix_W[m_idx++]);
+    // Group 1
+    L2_1.x += dot(L1_0, (min16float4)ModelB::Mix_W[m_idx++]);
+    L2_1.y += dot(L1_0, (min16float4)ModelB::Mix_W[m_idx++]);
+    L2_1.z += dot(L1_0, (min16float4)ModelB::Mix_W[m_idx++]);
+    L2_1.w += dot(L1_0, (min16float4)ModelB::Mix_W[m_idx++]);
+    L2_1.x += dot(L1_1, (min16float4)ModelB::Mix_W[m_idx++]);
+    L2_1.y += dot(L1_1, (min16float4)ModelB::Mix_W[m_idx++]);
+    L2_1.z += dot(L1_1, (min16float4)ModelB::Mix_W[m_idx++]);
+    L2_1.w += dot(L1_1, (min16float4)ModelB::Mix_W[m_idx++]);
+    L2_1.x += dot(L1_2, (min16float4)ModelB::Mix_W[m_idx++]);
+    L2_1.y += dot(L1_2, (min16float4)ModelB::Mix_W[m_idx++]);
+    L2_1.z += dot(L1_2, (min16float4)ModelB::Mix_W[m_idx++]);
+    L2_1.w += dot(L1_2, (min16float4)ModelB::Mix_W[m_idx++]);
+    // Group 2
+    L2_2.x += dot(L1_0, (min16float4)ModelB::Mix_W[m_idx++]);
+    L2_2.y += dot(L1_0, (min16float4)ModelB::Mix_W[m_idx++]);
+    L2_2.z += dot(L1_0, (min16float4)ModelB::Mix_W[m_idx++]);
+    L2_2.w += dot(L1_0, (min16float4)ModelB::Mix_W[m_idx++]);
+    L2_2.x += dot(L1_1, (min16float4)ModelB::Mix_W[m_idx++]);
+    L2_2.y += dot(L1_1, (min16float4)ModelB::Mix_W[m_idx++]);
+    L2_2.z += dot(L1_1, (min16float4)ModelB::Mix_W[m_idx++]);
+    L2_2.w += dot(L1_1, (min16float4)ModelB::Mix_W[m_idx++]);
+    L2_2.x += dot(L1_2, (min16float4)ModelB::Mix_W[m_idx++]);
+    L2_2.y += dot(L1_2, (min16float4)ModelB::Mix_W[m_idx++]);
+    L2_2.z += dot(L1_2, (min16float4)ModelB::Mix_W[m_idx++]);
+    L2_2.w += dot(L1_2, (min16float4)ModelB::Mix_W[m_idx++]);
+
+    // PReLU 2
+    L2_0 = max(0.0, L2_0) + min(0.0, L2_0) * (min16float4)ModelB::Mix_A[0];
+    L2_1 = max(0.0, L2_1) + min(0.0, L2_1) * (min16float4)ModelB::Mix_A[1];
+    L2_2 = max(0.0, L2_2) + min(0.0, L2_2) * (min16float4)ModelB::Mix_A[2];
+
+    // LAYER 3: Output
+    min16float res = (min16float)ModelB::Out_Bias;
+    res += dot(L2_0, (min16float4)ModelB::Out_W[0]);
+    res += dot(L2_1, (min16float4)ModelB::Out_W[1]);
+    res += dot(L2_2, (min16float4)ModelB::Out_W[2]);
+
+    return res;
+}
+
+
+min16float RunNet(float2 uv)
+{
+    if (ModelSelector == 0)
     {
-        outLuma = GetLuma(tex2D(ReShade::BackBuffer, uv).rgb);
+        return RunNet_A(uv);
     }
-
-    void PS_Apply(float4 vpos : SV_Position, float2 uv : TexCoord, out float4 outColor : SV_Target)
+    else
     {
-        const float3 c = tex2D(ReShade::BackBuffer, uv).rgb;
-        float residual = 0.0;
-
-        if (ModelType == 0) // Model A
-        {
-            residual = RunNet_A(uv);
-        }
-        else // Model B
-        {
-            residual = RunNet_B(uv);
-        }
-
-        /* Debug Mode
-        if (ViewMode == 1)
-        {
-            float debugRes = residual * Intensity;
-            outColor = float4(0.5 + debugRes, 0.5 + debugRes, 0.5 + debugRes, 1.0);
-            return;
-        }
-        */
-
-        residual = clamp(residual, -0.15, 0.15);
-
-        float3 ycbcr = RGBToYCbCr(c);
-        float sharpenedLuma = max(0.0, ycbcr.x + (residual * Intensity));
-
-        // Anti-Halo Local Min/Max Clamping
-        if (AntiHalo > 0.0)
-        {
-            const float2 pixel = ReShade::PixelSize;
-            float minLuma = 1.0;
-            float maxLuma = 0.0;
-            
-            [unroll]
-            for (int y = -1; y <= 1; y++)
-            {
-                [unroll]
-                for (int x = -1; x <= 1; x++)
-                {
-    
-                    float lumaTap = tex2D(sTexLuma, uv + float2(x, y) * pixel).r;
-                    minLuma = min(minLuma, lumaTap);
-                    maxLuma = max(maxLuma, lumaTap);
-                }
-            }
-            
-            float clampedLuma = clamp(sharpenedLuma, minLuma, maxLuma);
-            sharpenedLuma = lerp(sharpenedLuma, clampedLuma, AntiHalo);
-        }
-        
-        ycbcr.x = sharpenedLuma;
-        float3 finalColor = max(0.0, YCbCrToRGB(ycbcr));
-
-        outColor = float4(finalColor, 1.0);
+        return RunNet_B(uv);
     }
+}
 
-    technique BaBa_NeuralSharpen
-    <
-        ui_label = "BaBa: Neural Sharpen";
-    >
+void PS_GetLuma(float4 vpos : SV_Position, float2 uv : TexCoord, out min16float outLuma : SV_Target)
+{
+    outLuma = (min16float)GetLuma(tex2D(bb::BackBuffer, uv).rgb);
+}
+
+void PS_Apply(float4 vpos : SV_Position, float2 uv : TexCoord, out float4 outColor : SV_Target)
+{
+    const float3 c = tex2D(bb::BackBuffer, uv).rgb;
+
+    min16float residual = RunNet(uv);
+    min16float rawResidual = residual;
+    float residualMagnitude = abs((float)rawResidual);
+    float normalizedResidual = saturate(residualMagnitude * 2.63); // 2.63 ~ 1/0.38
+
+    // Debug Mode
+    if (ViewMode == 2)
     {
-        pass
-        {
-            VertexShader = PostProcessVS;
-            PixelShader = PS_GetLuma;
-            RenderTarget = TexLuma;
-        }
-        pass
-        {
-            VertexShader = PostProcessVS;
-            PixelShader = PS_Apply;
-        }
+        outColor = float4(normalizedResidual, normalizedResidual, normalizedResidual, 1.0);
+        return;
     }
+
+    residual = clamp(rawResidual, -0.5, 0.5);
+    residual *= 0.22;
+
+    float3 ycbcr = RGBToYCbCr(c);
+    float adaptationMask;
+    if (EdgeResponse < 0.0) {
+        adaptationMask = lerp(1.0, 1.0 - normalizedResidual, abs(EdgeResponse));
+    } else if (EdgeResponse > 0.0) {
+        adaptationMask = lerp(1.0, 1.0 + normalizedResidual, EdgeResponse);
+    } else {
+        adaptationMask = 1.0;
+    }
+
+    if (abs(EdgeResponse) > 0.001)
+    {
+        residual *= (min16float)adaptationMask;
+    }
+
+    // Debug Mode
+    if (ViewMode == 1)
+    {
+        float debugRes = residual * Intensity;
+        outColor = float4(0.5 + debugRes, 0.5 + debugRes, 0.5 + debugRes, 1.0);
+        return;
+    }
+
+    {
+        const float2 pixel = bb::PixelSize;
+        float lumaC = ycbcr.x;
+
+        // Cross-neighborhood sampling
+        float lumaN = tex2D(sTexLuma, uv + float2( 0.0,      -pixel.y)).r;
+        float lumaS = tex2D(sTexLuma, uv + float2( 0.0,       pixel.y)).r;
+        float lumaE = tex2D(sTexLuma, uv + float2( pixel.x,   0.0    )).r;
+        float lumaW = tex2D(sTexLuma, uv + float2(-pixel.x,   0.0    )).r;
+
+        float maxNeighbors = max(max(lumaN, lumaS), max(lumaE, lumaW));
+        float minNeighbors = min(min(lumaN, lumaS), min(lumaE, lumaW));
+
+        float localContrast  = maxNeighbors - minNeighbors;
+        float aliasingSignal = saturate((localContrast - 0.25) * 4.0);
+
+        float brightSpike     = max(0.0, lumaC - maxNeighbors);
+        float darkSpike       = max(0.0, minNeighbors - lumaC);
+        float spikeIntensity  = max(brightSpike, darkSpike);
+        float fireflySignal   = saturate((spikeIntensity - 0.1) * 6.0);
+
+        float artifactSignal  = saturate(aliasingSignal + fireflySignal);
+        float suppressionMask = 1.0 - artifactSignal;
+        residual *= (min16float)suppressionMask;
+    }
+
+    float sharpenedLuma = max(0.0, ycbcr.x + (residual * Intensity));
+    ycbcr.x = sharpenedLuma;
+    float3 finalColor = max(0.0, YCbCrToRGB(ycbcr));
+
+    outColor = float4(finalColor, 1.0);
+}
+
+technique BaBa_NeuralSharpen_28
+<
+    ui_label = "BaBa: Neural Sharpen 2.8 Preview";
+>
+{
+    pass
+    {
+        VertexShader = PostProcessVS;
+        PixelShader  = PS_GetLuma;
+        RenderTarget = TexLuma;
+    }
+    pass
+    {
+        VertexShader = PostProcessVS;
+        PixelShader  = PS_Apply;
+    }
+}
+
 }

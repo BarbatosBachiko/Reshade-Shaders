@@ -26,23 +26,22 @@ THE SOFTWARE.
 | posed content from FidelityFX CACAO              |
 '-------------------------------------------------*/
 
-#include "ReShade.fxh"
-#include "ReShadeUI.fxh"
-#include ".\BaBa_Includes\BaBa_MV.fxh"
-#include ".\BaBa_Includes\BaBa_ColorSpace.fxh"
+#include ".\bb_include\bb_reshade.fxh"
+#include ".\bb_include\bb_ui.fxh"
+#include ".\bb_include\bb_mv.fxh"
+#include ".\bb_include\bb_colorspace.fxh"
+#include ".\bb_include\bb_common.fxh"
+#include ".\bb_include\bb_depth.fxh"
+#include ".\bb_include\bb_normal.fxh"
+#include ".\bb_include\bb_vertex.fxh"
 
 //--------------------|
 // :: Preprocessor :: |
 //--------------------|
-#define GetDepth(coords) (ReShade::GetLinearizedDepth(coords))
-#define GetColor(c) tex2Dlod(ReShade::BackBuffer, float4((c).xy, 0, 0))
-#define GetLod(s,c) tex2Dlod(s, float4((c).xy, 0, 0))
-
 static const float2 BUFFER_DIM = float2(BUFFER_WIDTH, BUFFER_HEIGHT);
 static const float2 BUFFER_RCP = float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT);
 static const float2 R2 = float2(0.75487766624669276005, 0.5698402909980532659114);
-#define PI 3.1415927
-#define fmod(x, y) (frac((x)*rcp(y)) * (y))
+#define TWO_PI 6.2831854
 
 //----------|
 // :: UI :: |
@@ -140,11 +139,7 @@ uniform int DebugView <
     ui_items = "None\0Raw SSAO\0View-space Normals\0";
 > = 0;
 
-uniform int FRAME_COUNT < source = "framecount"; >;
-
 static const int g_TapCounts[5] = { 3, 5, 12, 20, 31 };
-static const float DEG2RAD = 0.017453292; // PI / 180.0
-#define TWO_PI 6.2831854
 
 //----------------|
 // :: Textures :: |
@@ -182,7 +177,7 @@ namespace MiAO155
     {
         Width = BUFFER_WIDTH;
         Height = BUFFER_HEIGHT;
-        Format = RGBA8;
+        Format = RGBA16F;
     };
     sampler sNORMALS
     {
@@ -291,13 +286,6 @@ namespace MiAO155
 //----------------|
 // :: Functions ::|
 //----------------|
-    struct VS_OUTPUT
-    {
-        float4 vpos : SV_Position;
-        float2 uv : TEXCOORD0;
-        float2 pScale : TEXCOORD1;
-    };
-
 #if !USE_HILBERT_LUT
     float hilbert(float2 p, int level)
     {
@@ -500,19 +488,19 @@ namespace MiAO155
         
         float fov_rad = FOV * DEG2RAD;
         float y = tan(fov_rad * 0.5);
-        outStruct.pScale = float2(y * ReShade::AspectRatio, y);
+        outStruct.pScale = float2(y * bb::AspectRatio, y);
     }
 
     void VS_MiAO_Even(in uint id : SV_VertexID, out VS_OUTPUT outStruct)
     {
         VS_MiAO(id, outStruct);
-        if ((FRAME_COUNT % 2) != 0) outStruct.vpos = float4(-10000.0, -10000.0, 0.0, 1.0);
+        if ((uint(FRAME_COUNT) % 2) != 0) outStruct.vpos = float4(-10000.0, -10000.0, 0.0, 1.0);
     }
 
     void VS_MiAO_Odd(in uint id : SV_VertexID, out VS_OUTPUT outStruct)
     {
         VS_MiAO(id, outStruct);
-        if ((FRAME_COUNT % 2) == 0) outStruct.vpos = float4(-10000.0, -10000.0, 0.0, 1.0);
+        if ((uint(FRAME_COUNT) % 2) == 0) outStruct.vpos = float4(-10000.0, -10000.0, 0.0, 1.0);
     }
 
 /*--------------------.
@@ -535,7 +523,7 @@ namespace MiAO155
         float4 edges = CalculateEdges(p_c.z, p_l.z, p_r.z, p_t.z, p_b.z);
         float3 normal = CalculateNormal(edges, p_c, p_l, p_r, p_t, p_b);
     
-        outNormal = float4(normal * 0.5 + 0.5, 1.0);
+        outNormal = float4(NM_EncodeNormal(normal), 0.0, linear_depth);
     }
 
     float PS_GenerateSSAO(VS_OUTPUT input) : SV_Target
@@ -554,7 +542,7 @@ namespace MiAO155
         float pixTZ = GetLod(sDEPTH, scaled_uv - float2(0, p.y)).r;
         float pixBZ = GetLod(sDEPTH, scaled_uv + float2(0, p.y)).r;
         float3 pixCenterPos = DepthBufferUVToViewSpace(scaled_uv, pixZ, input.pScale);
-        float3 pixelNormal = normalize(tex2D(sNORMALS, scaled_uv).rgb * 2.0 - 1.0);
+        float3 pixelNormal = NM_DecodeNormal(tex2D(sNORMALS, scaled_uv).rg);
 
         float activeRadiusDistanceScale = EnableDistantRadius ? 1.0 : 0.0;
         float effectViewspaceRadius = Radius + (pixZ * activeRadiusDistanceScale);
@@ -619,7 +607,7 @@ namespace MiAO155
         // Variance Clipping
         float m1 = 0.0;
         float m2 = 0.0;
-        float2 pSize = ReShade::PixelSize;
+        float2 pSize = bb::PixelSize;
 
         [unroll]
         for (int x = -1; x <= 1; x++)
@@ -660,13 +648,15 @@ namespace MiAO155
     
     void PS_SpatioTemporal0(VS_OUTPUT input, out float outHistory : SV_Target)
     {
-        if ((FRAME_COUNT % 2) != 0) discard;
+        outHistory = 0.0;
+        if ((uint(FRAME_COUNT) % 2) != 0) discard;
         outHistory = ComputeTAA(input, sHistory1);
     }
 
     void PS_SpatioTemporal1(VS_OUTPUT input, out float outHistory : SV_Target)
     {
-        if ((FRAME_COUNT % 2) == 0) discard;
+        outHistory = 0.0;
+        if ((uint(FRAME_COUNT) % 2) == 0) discard;
         outHistory = ComputeTAA(input, sHistory0);
     }
 
@@ -677,14 +667,14 @@ namespace MiAO155
         float2 fullResUV = input.uv / RenderScale;
 
         float c_ao = GetLod(sInputTex, input.uv).r;
-        float3 c_norm = GetLod(sNORMALS, fullResUV).rgb * 2.0 - 1.0;
+        float3 c_norm = NM_DecodeNormal(GetLod(sNORMALS, fullResUV).rg);
         float c_depth = GetLod(sDEPTH, fullResUV).r;
 
         static const float kernel[3] = { 1.0, 2.0 / 3.0, 1.0 / 6.0 };
         float sum = c_ao;
         float cum_w = 1.0;
 
-        float2 px = ReShade::PixelSize * stepWidth; 
+        float2 px = bb::PixelSize * stepWidth; 
         float depth_weight_factor = 1.0 / (0.1 * c_depth + 1e-6);
 
         [unroll]
@@ -699,7 +689,7 @@ namespace MiAO155
                 float2 fullResUV_offset = uv_offset / RenderScale;
 
                 float s_ao = GetLod(sInputTex, uv_offset).r;
-                float3 s_norm = GetLod(sNORMALS, fullResUV_offset).rgb * 2.0 - 1.0;
+                float3 s_norm = NM_DecodeNormal(GetLod(sNORMALS, fullResUV_offset).rg);
                 float s_depth = GetLod(sDEPTH, fullResUV_offset).r;
 
                 float w_z = exp(-abs(c_depth - s_depth) * depth_weight_factor);
@@ -718,7 +708,8 @@ namespace MiAO155
 
     void PS_Atrous1(VS_OUTPUT input, out float outAO : SV_Target)
     {
-        if (FRAME_COUNT % 2 == 0)
+        outAO = 0.0;
+        if (uint(FRAME_COUNT) % 2 == 0)
             outAO = AtrousFilter(input, sHistory0, 1.0);
         else
             outAO = AtrousFilter(input, sHistory1, 1.0);
@@ -726,25 +717,27 @@ namespace MiAO155
 
     void PS_AtrousFinal(VS_OUTPUT input, out float outAO : SV_Target)
     {
+        outAO = 0.0;
         outAO = AtrousFilter(input, sAtrousA, 3.0);
     }
 
     float JointBilateralUpsample(float2 uv, float highDepth)
     {
         float2 lowResUV = uv * RenderScale;
-        float3 highNormal = GetLod(sNORMALS, uv).rgb * 2.0 - 1.0;
+        float3 highNormal = NM_DecodeNormal(GetLod(sNORMALS, uv).rg);
 
+        float result = GetLod(sAtrousB, lowResUV).r;
         float sumAO = 0.0;
         float sumWeight = 0.0;
-        float2 texelSize = ReShade::PixelSize;
+        float2 texelSize = bb::PixelSize;
         float2 baseUV = (floor(lowResUV / texelSize) + 0.5) * texelSize;
 
         float depth_weight_factor = 1.0 / (0.1 * highDepth + 1e-6);
 
-        [unroll]
+        [loop]
         for (int x = -1; x <= 1; x++)
         {
-            [unroll]
+            [loop]
             for (int y = -1; y <= 1; y++)
             {
                 float2 sampleUV = baseUV + float2(x, y) * texelSize;
@@ -752,7 +745,7 @@ namespace MiAO155
 
                 float2 fullResSampleUV = sampleUV / RenderScale;
                 float lowDepth = GetLod(sDEPTH, fullResSampleUV).r;
-                float3 lowNormal = GetLod(sNORMALS, fullResSampleUV).rgb * 2.0 - 1.0;
+                float3 lowNormal = NM_DecodeNormal(GetLod(sNORMALS, fullResSampleUV).rg);
 
                 float wDepth = exp(-abs(highDepth - lowDepth) * depth_weight_factor);
                 float dotN = max(0.0, dot(normalize(highNormal), normalize(lowNormal)));
@@ -766,12 +759,12 @@ namespace MiAO155
             }
         }
 
-        if (sumWeight < 1e-6)
+        if (sumWeight >= 1e-6)
         {
-            return GetLod(sAtrousB, lowResUV).r;
+            result = sumAO / sumWeight;
         }
 
-        return sumAO / sumWeight;
+        return result;
     }
 
     void PS_StorePrevLuma(VS_OUTPUT input, out float outLuma : SV_Target)
@@ -805,8 +798,7 @@ namespace MiAO155
         }
         else if (DebugView == 2) // Normals
         {
-            float3 debugNormals = GetLod(sNORMALS, uv).rgb;
-            debugNormals = debugNormals * 2.0 - 1.0;
+            float3 debugNormals = NM_DecodeNormal(GetLod(sNORMALS, uv).rg);
             debugNormals.x = -debugNormals.x;
             debugNormals.z = -debugNormals.z;
             

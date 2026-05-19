@@ -9,9 +9,9 @@
 | using motion vectors.                            |
 '--------------------------------------------------*/
 
-#include "ReShade.fxh"
-#include "ReShadeUI.fxh"
-#include ".\BaBa_Includes\BaBa_MV.fxh"
+#include ".\bb_include\bb_reshade.fxh"
+#include ".\bb_include\bb_ui.fxh"
+#include ".\bb_include\bb_mv.fxh"
 
 uniform int Mode <
     __UNIFORM_COMBO_INT1
@@ -66,7 +66,7 @@ void PS_FrameBlend(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 ou
         return;
     }
 
-    float3 currColor = tex2Dlod(ReShade::BackBuffer, float4(uv, 0, 0)).rgb;
+    float3 currColor = tex2Dlod(bb::BackBuffer, float4(uv, 0, 0)).rgb;
     float conf = MV_GetConfidence(uv);
 
     if (DebugView == 2)
@@ -81,14 +81,14 @@ void PS_FrameBlend(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 ou
     if (Mode == 0) // Interpolation
         altColor = tex2D(sHistoryTex, offsetUV).rgb;
     else // Extrapolation
-        altColor = tex2Dlod(ReShade::BackBuffer, float4(offsetUV, 0, 0)).rgb;
+        altColor = tex2Dlod(bb::BackBuffer, float4(offsetUV, 0, 0)).rgb;
 
     outColor = float4(lerp(currColor, altColor, BlendAmount * conf), 1.0);
 }
 
 void PS_UpdateHistory(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 outColor : SV_Target)
 {
-    outColor = tex2Dlod(ReShade::BackBuffer, float4(uv, 0, 0));
+    outColor = tex2Dlod(bb::BackBuffer, float4(uv, 0, 0));
 }
 
 technique BaBa_SoftMotion <

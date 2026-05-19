@@ -10,23 +10,21 @@
 |  local gradient detection.                       |
 '-------------------------------------------------*/
 
-#include "ReShade.fxh"
-#include ".\BaBa_Includes\BaBa_MV.fxh"
+#include ".\bb_include\bb_reshade.fxh"
+#include ".\bb_include\bb_mv.fxh"
+#include ".\bb_include\bb_common.fxh"
+#include ".\bb_include\bb_depth.fxh"
+#include ".\bb_include\bb_colorspace.fxh"
 
 #ifndef ENABLE_JITTER_FOR_TAA
 #define ENABLE_JITTER_FOR_TAA 1
 #endif
 
 // Constants
-#define BASE_BLEND_ALPHA 0.12 
+#define BASE_BLEND_ALPHA 0.12
 #define DEPTH_THRESHOLD 0.01
 #define MOTION_REJECTION 0.2
 #define VARIANCE_GAMMA 1.0
-
-// Utility macros 
-#define GetDepth(coords) (ReShade::GetLinearizedDepth(coords))
-#define GetColor(c) tex2Dlod(ReShade::BackBuffer, float4((c).xy, 0.0, 0.0))
-#define GetLod(s, c) tex2Dlod(s, float4((c).xy, 0.0, 0.0))
 
 //----------|
 // :: UI :: |
@@ -68,8 +66,6 @@ uniform int View_Mode <
     ui_items = "Output\0Edge Mask Overlay\0Edge Mask\0Gradient Direction\0";
     ui_label = "View Mode";
 > = 0;
-
-uniform int FRAME_COUNT < source = "framecount"; >;
 
 static const float2 JitterLUT[16] =
 {
@@ -125,46 +121,19 @@ struct Output
     float4 Depth : SV_Target1;
 };
 
-static const float3 CoefLuma = float3(0.299, 0.587, 0.114);
-static const float3 CoefChromaBlue = float3(-0.169, -0.331, 0.500);
-static const float3 CoefChromaRed = float3(0.500, -0.419, -0.081);
-static const float ChromaBias = 0.5019608; 
-
-float3 RGBToYCoCg(float3 rgb)
-{
-    float Y = dot(rgb, CoefLuma);
-    float Cb = dot(rgb, CoefChromaBlue);
-    float Cr = dot(rgb, CoefChromaRed);
-    return float3(Y, Cb + ChromaBias, Cr + ChromaBias);
-}
-
-float3 YCoCgToRGB(float3 ycc)
-{
-    float3 c = ycc - float3(0.0, ChromaBias, ChromaBias);
-    return float3(
-        c.x + 1.400 * c.z,
-        c.x - 0.343 * c.y - 0.711 * c.z,
-        c.x + 1.765 * c.y
-    );
-}
-
-float lum(float3 color)
-{
-    return dot(color, 0.3333333);
-}
 
 float2 computeGradient(float2 t)
 {
-    float l_left = lum(tex2Doffset(ReShade::BackBuffer, t, int2(-1, 0)).rgb);
-    float l_right = lum(tex2Doffset(ReShade::BackBuffer, t, int2(1, 0)).rgb);
-    float l_up = lum(tex2Doffset(ReShade::BackBuffer, t, int2(0, -1)).rgb);
-    float l_down = lum(tex2Doffset(ReShade::BackBuffer, t, int2(0, 1)).rgb);
+    float l_left = GetLuminance(tex2Doffset(bb::BackBuffer, t, int2(-1, 0)).rgb);
+    float l_right = GetLuminance(tex2Doffset(bb::BackBuffer, t, int2(1, 0)).rgb);
+    float l_up = GetLuminance(tex2Doffset(bb::BackBuffer, t, int2(0, -1)).rgb);
+    float l_down = GetLuminance(tex2Doffset(bb::BackBuffer, t, int2(0, 1)).rgb);
     return float2(l_right - l_left, l_down - l_up);
 }
 
 float GetLum(float2 uv)
 {
-    return lum(GetColor(uv).rgb);
+    return GetLuminance(GetColor(uv).rgb);
 }
 
 float4 DAA(float2 base_uv, float2 jitter_uv)
@@ -180,7 +149,7 @@ float4 DAA(float2 base_uv, float2 jitter_uv)
     float2 dir = gradient / gradLen;
     
     // Sample along the gradient direction to check linearity vs curvature.
-    float2 offset = dir * ReShade::PixelSize.xy;
+    float2 offset = dir * bb::PixelSize.xy;
     float l_center = GetLum(base_uv);
     float l_fwd = GetLum(base_uv + offset);
     float l_bwd = GetLum(base_uv - offset);
@@ -198,7 +167,7 @@ float4 DAA(float2 base_uv, float2 jitter_uv)
         // Rotate gradient 90 degrees: (-y, x)
         float2 blurDir = float2(-dir.y, dir.x);
         
-        float2 pixelStep = ReShade::PixelSize.xy * DirectionalStrength;
+        float2 pixelStep = bb::PixelSize.xy * DirectionalStrength;
         float2 offset2 = blurDir * pixelStep;
         float2 offset1 = offset2 * 0.5;
 
@@ -219,7 +188,7 @@ float4 DAA(float2 base_uv, float2 jitter_uv)
 
 float4 PS_Temporal(float4 pos : SV_Position, float2 t : TEXCOORD) : SV_Target
 {
-    float2 jitter = JitterLUT[FRAME_COUNT % 16];
+    float2 jitter = JitterLUT[uint(FRAME_COUNT) % 16];
     
 #if ENABLE_JITTER_FOR_TAA
     float jitterVal = EnableTemporalAA ? 1.0 : 0.0;
@@ -227,7 +196,7 @@ float4 PS_Temporal(float4 pos : SV_Position, float2 t : TEXCOORD) : SV_Target
     float jitterVal = 0.0;
 #endif
     
-    float2 jittered_uv = t + (jitter * ReShade::PixelSize * jitterVal);
+    float2 jittered_uv = t + (jitter * bb::PixelSize * jitterVal);
     
     float4 current = DAA(t, jittered_uv);
 
@@ -263,7 +232,7 @@ float4 PS_Temporal(float4 pos : SV_Position, float2 t : TEXCOORD) : SV_Target
             [unroll]
             for (int x = -1; x <= 1; ++x)
             {
-                float3 s = RGBToYCoCg(tex2Doffset(ReShade::BackBuffer, jittered_uv, int2(x, y)).rgb);
+                float3 s = RGBToYCoCg(tex2Doffset(bb::BackBuffer, jittered_uv, int2(x, y)).rgb);
                 sumColor += s;
                 sumColorSq += s * s;
             }
@@ -280,7 +249,7 @@ float4 PS_Temporal(float4 pos : SV_Position, float2 t : TEXCOORD) : SV_Target
         historyYCoCg = clamp(historyYCoCg, clampMin, clampMax);
         
         float alpha = (FRAME_COUNT < 8) ? (1.0 / float(FRAME_COUNT)) : BASE_BLEND_ALPHA;
-        float motionLength = length(motion * ReShade::ScreenSize);
+        float motionLength = length(motion * bb::ScreenSize);
         
         alpha = saturate(alpha + smoothstep(0.0, MOTION_REJECTION * 100.0, motionLength));
 

@@ -1,13 +1,22 @@
 /*----------------------------------------------|
-| ::              Barbatos GI                :: |
-|-----------------------------------------------|
-| Version: 1.5                                  |
+| | ::             Barbatos GI               :: |
+| |---------------------------------------------|
+| Version: 1.6.0                                |
 | Author: Barbatos                              |
 | License: MIT                                  |
 '----------------------------------------------*/
-#include "ReShade.fxh"
-#include ".\BaBa_Includes\BaBa_ColorSpace.fxh"
-#include ".\BaBa_Includes\BaBa_MV.fxh"
+
+#include ".\bb_include\bb_reshade.fxh"
+#define USE_HALF 1
+#include ".\bb_include\bb_common.fxh"
+#include ".\bb_include\bb_depth.fxh"
+#include ".\bb_include\bb_normal.fxh"
+#include ".\bb_include\bb_noise.fxh"
+#include ".\bb_include\bb_raytracing.fxh"
+#include ".\bb_include\bb_colorspace.fxh"
+#include ".\bb_include\bb_mv.fxh"
+#include ".\bb_include\bb_taa.fxh"
+#include ".\bb_include\bb_vertex.fxh"
 
 //----------|
 // :: UI :: |
@@ -44,19 +53,20 @@ uniform int RaySteps <
     ui_min = 2; ui_max = 16;
 > = 6;
 
-uniform float Thickness <
+uniform float ZThickness <
     ui_category = "Raytracing (Advanced)";
-    ui_label = "Thickness";
+    ui_label = "Z-Thickness Tolerance";
+    ui_tooltip = "Defines the virtual thickness of surfaces to prevent light leaking behind geometry. Lower values are more accurate but may cause light leaking on thin geometry.";
     ui_type = "drag";
-    ui_min = 0.01; ui_max = 0.2; ui_step = 0.01;
-> = 0.02;
+    ui_min = 0.001; ui_max = 0.5; ui_step = 0.001;
+> = 0.004;
 
 uniform float MaxRayDistance <
     ui_category = "Raytracing (Advanced)";
     ui_label = "Max Ray Distance";
     ui_type = "drag";
-    ui_min = 0.01; ui_max = 0.5; ui_step = 0.001;
-> = 0.100;
+    ui_min = 0.001; ui_max = 0.5; ui_step = 0.001;
+> = 0.020;
 
 uniform float Near_Intensity <
     ui_category = "Raytracing (Advanced)";
@@ -70,7 +80,8 @@ uniform float GI_Bounce_Saturation <
     ui_label = "Bounce Color Saturation";
     ui_tooltip = "Increases or decreases the color intensity of the bounced light.";
     ui_type = "drag";
-    ui_min = 0.0; ui_max = 5.0; ui_step = 0.01;
+    ui_min = 0.0;
+    ui_max = 5.0; ui_step = 0.01;
 > = 1.5;
 
 uniform float GI_Bounce_Energy <
@@ -78,7 +89,8 @@ uniform float GI_Bounce_Energy <
     ui_label = "Bounce Energy Multiplier";
     ui_tooltip = "Multiplier for the raw bounce light intensity.";
     ui_type = "drag";
-    ui_min = 0.0; ui_max = 5.0; ui_step = 0.01;
+    ui_min = 0.0;
+    ui_max = 5.0; ui_step = 0.01;
 > = 1.5;
 
 uniform float MultiBounce_Weight <
@@ -86,7 +98,7 @@ uniform float MultiBounce_Weight <
     ui_label = "Infinite Bounces Weight";
     ui_tooltip = "Simulates multiple light bounces by accumulating previous frame GI. \nHigh values may cause glowing feedback loops.";
     ui_type = "drag";
-    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+    ui_min = 0.0; ui_max = 10.0; ui_step = 1.0;
 > = 0.0;
 
 // Ambient Occlusion
@@ -104,12 +116,6 @@ uniform float AO_Radius <
     ui_type = "drag";
     ui_min = 0.01; ui_max = 5.0;
 > = 0.1;
-
-uniform bool EnableDistantRadius <
-    ui_category = "Ambient Occlusion";
-    ui_label = "Enable Distant Radius";
-    ui_tooltip = "Scales the radius with distance to maintain visual presence on far objects.";
-> = false;
 
 uniform int AO_BlendMode <
     ui_category = "Ambient Occlusion";
@@ -156,7 +162,8 @@ uniform float GI_Contrast <
     ui_category = "Color Grading";
     ui_label = "Contrast";
     ui_type = "drag";
-    ui_min = 0.0; ui_max = 2.0;
+    ui_min = 0.0;
+    ui_max = 2.0;
 > = 1.0;
 
 uniform float3 GI_Shadow_Tint <
@@ -164,7 +171,7 @@ uniform float3 GI_Shadow_Tint <
     ui_label = "Shadow Color";
     ui_tooltip = "Color of GI in dark areas. Set to Black to disable GI in shadows.";
     ui_type = "color";
-> = float3(0.0, 0.0, 0.0);
+> = float3(0.5, 0.5, 0.5);
 
 uniform float3 GI_Highlight_Tint <
     ui_category = "Color Grading";
@@ -178,7 +185,8 @@ uniform float GI_Split_Balance <
     ui_label = "Split Balance";
     ui_tooltip = "Determines the separation point between Shadows and Highlights.";
     ui_type = "drag";
-    ui_min = 0.0; ui_max = 1.0;
+    ui_min = 0.0;
+    ui_max = 1.0;
 > = 0.5;
 
 // Manual Light
@@ -255,7 +263,8 @@ uniform float RenderScale <
     ui_label = "Resolution Scale";
     ui_tooltip = "Scales the rendering resolution of GI.";
     ui_type = "drag";
-    ui_min = 0.1; ui_max = 1.0; ui_step = 0.001;
+    ui_min = 0.1;
+    ui_max = 1.0; ui_step = 0.001;
 > = 0.333;
 
 uniform float Roughness <
@@ -292,26 +301,12 @@ uniform int ViewMode <
     ui_items = "Off\0GI Only\0AO Only\0Surface Normals\0Motion Vectors\0Raw LowRes GI\0White World\0Luminance\0";
 > = 0;
 
-// Defines
-#define PI 3.1415927
-#define GetLod(s,c) tex2Dlod(s, float4((c).xy, 0, 0))
-#define GetColor(c) GetLod(ReShade::BackBuffer, c)
-#define fmod(x, y) (frac((x)*rcp(y)) * (y))
-
-#define GW BUFFER_WIDTH
-#define GH BUFFER_HEIGHT
-
-static const float DEG2RAD = 0.017453292;
-
-uniform int FRAME_COUNT < source = "framecount"; >;
-uniform float TIMER < source = "timer"; >;
-
 namespace Barbatos_RTGI_150
 {
     texture Normal
     {
-        Width = GW;
-        Height = GH;
+        Width = BUFFER_WIDTH;
+        Height = BUFFER_HEIGHT;
         Format = RGBA16F;
     };
     sampler sNormal
@@ -323,8 +318,8 @@ namespace Barbatos_RTGI_150
 
     texture Accum
     {
-        Width = GW;
-        Height = GH;
+        Width = BUFFER_WIDTH;
+        Height = BUFFER_HEIGHT;
         Format = RGBA16F;
     };
     sampler sAccum
@@ -336,8 +331,8 @@ namespace Barbatos_RTGI_150
 
     texture History0
     {
-        Width = GW;
-        Height = GH;
+        Width = BUFFER_WIDTH;
+        Height = BUFFER_HEIGHT;
         Format = RGBA16F;
     };
     sampler sHistory0
@@ -349,8 +344,8 @@ namespace Barbatos_RTGI_150
 
     texture History1
     {
-        Width = GW;
-        Height = GH;
+        Width = BUFFER_WIDTH;
+        Height = BUFFER_HEIGHT;
         Format = RGBA16F;
     };
     sampler sHistory1
@@ -362,8 +357,8 @@ namespace Barbatos_RTGI_150
 
     texture DNA
     {
-        Width = GW;
-        Height = GH;
+        Width = BUFFER_WIDTH;
+        Height = BUFFER_HEIGHT;
         Format = RGBA16F;
     };
     sampler sDNA
@@ -377,8 +372,8 @@ namespace Barbatos_RTGI_150
 
     texture DNB
     {
-        Width = GW;
-        Height = GH;
+        Width = BUFFER_WIDTH;
+        Height = BUFFER_HEIGHT;
         Format = RGBA16F;
     };
     sampler sDNB
@@ -392,8 +387,8 @@ namespace Barbatos_RTGI_150
 
     texture TexColorCopy
     {
-        Width = GW;
-        Height = GH;
+        Width = BUFFER_WIDTH;
+        Height = BUFFER_HEIGHT;
         Format = RGBA8;
         MipLevels = 8;
     };
@@ -405,6 +400,22 @@ namespace Barbatos_RTGI_150
         MagFilter = LINEAR;
         MinFilter = LINEAR;
         MipFilter = LINEAR;
+    };
+
+    texture TexBlueNoise < source = "SS_BN3.png"; >
+    {
+        Width = 1024;
+        Height = 1024;
+        Format = RGBA8;
+    };
+    sampler sTexBlueNoise
+    {
+        Texture = TexBlueNoise;
+        AddressU = Repeat;
+        AddressV = Repeat;
+        MagFilter = POINT;
+        MinFilter = POINT;
+        MipFilter = POINT;
     };
 
     texture RS_Prev
@@ -424,21 +435,9 @@ namespace Barbatos_RTGI_150
     // :: Vertex Shaders ::|
     //---------------------|
 
-    struct VS_OUTPUT
-    {
-        float4 vpos : SV_Position;
-        float2 uv : TEXCOORD0;
-        float2 pScale : TEXCOORD1;
-    };
-    
     void VS_Barbatos_PTGI(in uint id : SV_VertexID, out VS_OUTPUT outStruct)
     {
-        outStruct.uv.x = (id == 2) ? 2.0 : 0.0;
-        outStruct.uv.y = (id == 1) ? 2.0 : 0.0;
-        outStruct.vpos = float4(outStruct.uv * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
-        
-        float y = tan(max(0.01, VERTICAL_FOV) * DEG2RAD * 0.5);
-        outStruct.pScale = float2(y * ReShade::AspectRatio, y);
+        VS_Barbatos_FullScreen(id, outStruct, VERTICAL_FOV);
     }
     
     //-----------------|
@@ -456,7 +455,6 @@ namespace Barbatos_RTGI_150
             color = lerp(float3(0, 1, 0), float3(1, 1, 0), (luminance - 0.5) * 4.0);
         else
             color = lerp(float3(1, 1, 0), float3(1, 0, 0), (luminance - 0.75) * 4.0);
-        
         return color;
     }
 
@@ -467,52 +465,18 @@ namespace Barbatos_RTGI_150
         float x = sin(az) * cos(el);
         float y = sin(el);
         float z = cos(az) * cos(el);
-        
         return normalize(float3(x, y, z));
     }
 
     float GetDepth(float2 xy)
     {
-        float depth = ReShade::GetLinearizedDepth(xy);
+        float depth = bb::GetLinearizedDepth(xy);
         if (EnableDepthMultiplier)
         {
             depth = saturate(depth * DepthMultiplier);
         }
 
         return depth;
-    }
-
-    float3 UVToViewPos(float2 uv, float view_z, float2 pScale)
-    {
-        float2 ndc = uv * 2.0 - 1.0;
-        return float3(ndc.x * pScale.x * view_z, -ndc.y * pScale.y * view_z, view_z);
-    }
-
-    float2 ViewPosToUV(float3 view_pos, float2 pScale)
-    {
-        float z_safe = max(1e-6, view_pos.z);
-        float2 ndc = view_pos.xy / (z_safe * pScale);
-        return float2(ndc.x, -ndc.y) * 0.5 + 0.5;
-    }
-    
-    //------------|
-    // :: Noise ::|
-    //------------|
-    float goldenSequence(uint i)
-    {
-        return float(2654435769u * i) / 4294967296.0;
-    }
-    float2 plasticSequence(uint i)
-    {
-        return float2(3242174889u * i, 2447445414u * i) / 4294967296.0;
-    }
-    float3 sequence3D(uint i)
-    {
-        return float3(plasticSequence(i), goldenSequence(i));
-    }
-    float3 toroidalJitter(float3 x, float3 jitter)
-    {
-        return 2.0 * abs(frac(x + jitter) - 0.5);
     }
 
     //---------------------------|
@@ -522,265 +486,18 @@ namespace Barbatos_RTGI_150
     float3 CalculateNormal(float2 uv, float2 pScale)
     {
         float3 center = UVToViewPos(uv, GetDepth(uv), pScale);
-        float3 offset_x = UVToViewPos(uv + float2(ReShade::PixelSize.x, 0), GetDepth(uv + float2(ReShade::PixelSize.x, 0)), pScale);
-        float3 offset_y = UVToViewPos(uv + float2(0, ReShade::PixelSize.y), GetDepth(uv + float2(0, ReShade::PixelSize.y)), pScale);
-        
+        float3 offset_x = UVToViewPos(uv + float2(bb::PixelSize.x, 0), GetDepth(uv + float2(bb::PixelSize.x, 0)), pScale);
+        float3 offset_y = UVToViewPos(uv + float2(0, bb::PixelSize.y), GetDepth(uv + float2(0, bb::PixelSize.y)), pScale);
         float3 n = cross(center - offset_x, center - offset_y);
         float lenSq = dot(n, n);
-        return (lenSq > 1e-25) ? n * rsqrt(lenSq) : float3(0, 0, -1);
+        return (lenSq > 1e-25) ?
+            n * rsqrt(lenSq) : float3(0, 0, -1);
     }
 
-    void genTB(float3 N, out float3 T, out float3 B)
-    {
-        float s = N.z < 0.0 ? -1.0 : 1.0;
-        float a = -1.0 / (s + N.z);
-        float b = N.x * N.y * a;
-        T = float3(1.0 + s * N.x * N.x * a, s * b, -s * N.x);
-        B = float3(b, s + N.y * N.y * a, -N.y);
-    }
-
-    float3 cosineSample(float3 N, float2 r)
-    {
-        float3 T, B;
-        genTB(N, T, B);
-        r.x *= 2.0 * PI;
-        float s = sqrt(max(0.0, 1.0 - r.y));
-        float2 sincos_rx;
-        sincos(r.x, sincos_rx.x, sincos_rx.y);
-        return T * (sincos_rx.y * s) + B * (sincos_rx.x * s) + N * sqrt(r.y);
-    }
-
-    // GGX Importance Sampling 
-    float3 ImportanceSampleGGX(float2 Xi, float3 N, float roughness)
-    {
-        float a = roughness * roughness;
-        float phi = 2.0 * PI * Xi.x;
-        float cosTheta = sqrt((1.0 - Xi.y) / (1.0 + (a * a - 1.0) * Xi.y));
-        float sinTheta = sqrt(1.0 - cosTheta * cosTheta);
-        
-        float3 H;
-        H.x = cos(phi) * sinTheta;
-        H.y = sin(phi) * sinTheta;
-        H.z = cosTheta;
-        
-        float3 up = abs(N.z) < 0.999 ? float3(0, 0, 1) : float3(1, 0, 0);
-        float3 tangent = normalize(cross(up, N));
-        float3 bitangent = cross(N, tangent);
-        
-        return normalize(tangent * H.x + bitangent * H.y + N * H.z);
-    }
-
-    //-------------------|
-    // :: Ray Tracing  ::|
-    //-------------------|
-    bool TraceRay(float3 origin, float3 dir, float2 pScale, int steps, float jitter, float maxRayDist, float currentThickness, out float2 hitUV, out float3 hitPos, out float hitDist)
-    {
-        float3 lastPos = origin;
-        float3 current = origin;
-
-        [loop]
-        for (int i = 1; i <= steps; i++)
-        {
-            float t = (float(i) - 1.0 + jitter) / float(steps);
-            t = t * t;
-            float distScale = maxRayDist * t;
-            current = origin + dir * distScale;
-            hitUV = ViewPosToUV(current, pScale);
-        
-            if (any(hitUV < 0.0) || any(hitUV > 1.0))
-                return false;
-                
-            float zScene = GetDepth(hitUV);
-            float zRay = current.z;
-            float depthDiff = zRay - zScene;
-            
-            if (zScene < 0.999 && depthDiff > 0.0 && depthDiff < currentThickness)
-            {
-                // BINARY SEARCH
-                float3 startPos = lastPos;
-                float3 endPos = current;
-                float3 midPos;
-       
-                for (int r = 0; r < 4; r++)
-                {
-                    midPos = (startPos + endPos) * 0.5;
-                    float2 midUV = ViewPosToUV(midPos, pScale);
-                    if (any(midUV < 0.0) || any(midUV > 1.0))
-                        break;
-                        
-                    float midDepth = GetDepth(midUV);
-                    if (midPos.z > midDepth)
-                        endPos = midPos;
-                    else
-                        startPos = midPos;
-                }
-                current = endPos;
-                hitUV = ViewPosToUV(current, pScale);
-                hitPos = current;
-                hitDist = length(current - origin);
-                return true;
-            }
-            lastPos = current;
-        }
-        return false;
-    }
-
-    //------------|
-    // :: TAA  :: |
-    //------------|
-    
-    float3 TAA_Compress(float3 color)
-    {
-        return color / (1.0 + color);
-    }
-
-    float3 TAA_Resolve(float3 color)
-    {
-        return color / max(1e-6, 1.0 - color);
-    }
-
-    float3 ClipToAABB(float3 aabb_min, float3 aabb_max, float3 history_sample)
-    {
-        float3 p_clip = 0.5 * (aabb_max + aabb_min);
-        float3 e_clip = 0.5 * (aabb_max - aabb_min) + 1e-6;
-        float3 v_clip = history_sample - p_clip;
-        float3 v_unit = v_clip / e_clip;
-        float3 a_unit = abs(v_unit);
-        float ma_unit = max(a_unit.x, max(a_unit.y, a_unit.z));
-        
-        return (ma_unit > 1.0) ? (p_clip + v_clip / ma_unit) : history_sample;
-    }
-
-    // Variance Clipping 
-    void ComputeNeighborhoodVariance(sampler sInput, float2 texcoord, float4 current_c, out float4 color_min, out float4 color_max)
-    {
-        float2 pSize = ReShade::PixelSize;
-        float4 m1 = current_c;
-        float4 m2 = current_c * current_c;
-        
-        [unroll]
-        for (int x = -1; x <= 1; x++)
-        {
-            [unroll]
-            for (int y = -1; y <= 1; y++)
-            {
-                if (x == 0 && y == 0) continue;
-                
-                float4 c = GetLod(sInput, texcoord + float2(x, y) * pSize);
-                c.rgb = TAA_Compress(c.rgb);
-                c.rgb = RGBToYCoCg(c.rgb); 
-                
-                m1 += c;
-                m2 += c * c;
-            }
-        }
-        
-        m1 /= 9.0;
-        m2 /= 9.0;
-        
-        float4 sigma = sqrt(abs(m2 - m1 * m1));
-        float gamma = 1.25;
-        
-        color_min = m1 - gamma * sigma;
-        color_max = m1 + gamma * sigma;
-    }
-
-    float4 SampleHistoryCatmullRom(sampler sInput, float2 uv, float2 texSize)
-    {
-        float2 samplePos = uv * texSize;
-        float2 texPos1 = floor(samplePos - 0.5) + 0.5;
-        float2 f = samplePos - texPos1;
-        
-        float2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
-        float2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
-        float2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));
-        float2 w3 = f * f * (-0.5 + 0.5 * f);
-
-        float2 w12 = w1 + w2;
-        float2 offset12 = w2 / (w1 + w2);
-
-        float2 texPos0 = texPos1 - 1.0;
-        float2 texPos3 = texPos1 + 2.0;
-        float2 texPos12 = texPos1 + offset12;
-
-        texPos0 /= texSize;
-        texPos3 /= texSize;
-        texPos12 /= texSize;
-
-        float4 result = 0.0;
-        
-        result += GetLod(sInput, float2(texPos0.x, texPos0.y)) * w0.x * w0.y;
-        result += GetLod(sInput, float2(texPos12.x, texPos0.y)) * w12.x * w0.y;
-        result += GetLod(sInput, float2(texPos3.x, texPos0.y)) * w3.x * w0.y;
-
-        result += GetLod(sInput, float2(texPos0.x, texPos12.y)) * w0.x * w12.y;
-        result += GetLod(sInput, float2(texPos12.x, texPos12.y)) * w12.x * w12.y;
-        result += GetLod(sInput, float2(texPos3.x, texPos12.y)) * w3.x * w12.y;
-        
-        result += GetLod(sInput, float2(texPos0.x, texPos3.y)) * w0.x * w3.y;
-        result += GetLod(sInput, float2(texPos12.x, texPos3.y)) * w12.x * w3.y;
-        result += GetLod(sInput, float2(texPos3.x, texPos3.y)) * w3.x * w3.y;
-
-        return max(result, 0.0);
-    }
-
-    float4 ComputeTAA(VS_OUTPUT input, sampler sHistoryParams)
-    {
-        if (any(input.uv > RenderScale))
-            discard;
-            
-        float2 viewUV = input.uv / RenderScale;
-        float depth = GetDepth(viewUV);
-        
-        if (depth >= 0.999)
-            return float4(0.0, 0.0, 0.0, 1.0);
-            
-        float4 current_gi = GetLod(sAccum, input.uv);
-        
-        float2 velocity = MV_GetVelocity(viewUV);
-        float2 reprojected_view_uv = viewUV + velocity;
-        float2 reprojected_buffer_uv = reprojected_view_uv * RenderScale;
-        
-        float4 history_gi = SampleHistoryCatmullRom(sHistoryParams, reprojected_buffer_uv, float2(GW, GH));
-        float3 current_compressed = TAA_Compress(current_gi.rgb);
-        float3 current_ycocg = RGBToYCoCg(current_compressed);
-        float4 current_c = float4(current_ycocg, current_gi.a);
-        
-        float3 history_compressed = TAA_Compress(history_gi.rgb);
-        float3 history_ycocg = RGBToYCoCg(history_compressed);
-        
-        float raw_confidence = saturate(MV_GetConfidence(viewUV));
-        float4 color_min, color_max;
-        ComputeNeighborhoodVariance(sAccum, input.uv, current_c, color_min, color_max);
-
-        float relax_amount = 0.15 * raw_confidence;
-        color_min -= relax_amount;
-        color_max += relax_amount;
-        float3 clipped_history_ycocg = ClipToAABB(color_min.rgb, color_max.rgb, history_ycocg);
-        float clipped_history_a = clamp(history_gi.a, color_min.a, color_max.a);
-        
-        float clamp_distance = length(clipped_history_ycocg - history_ycocg);
-        float blend_adapt = saturate(1.0 - clamp_distance * 2.0); 
-        
-        float max_feedback = 0.98;
-        float min_feedback = 0.85;
-        float final_feedback = lerp(min_feedback, max_feedback, raw_confidence) * lerp(0.8, 1.0, blend_adapt);
-        
-        float prevRenderScale = tex2Dlod(sRS_Prev, float4(0, 0, 0, 0)).x;
-        if (abs(RenderScale - prevRenderScale) > 0.001)
-            final_feedback = 0.0;
-            
-        float3 result_ycocg = lerp(current_ycocg, clipped_history_ycocg, final_feedback);
-        float3 result_compressed = YCoCgToRGB(result_ycocg);
-        float result_alpha = lerp(current_gi.a, clipped_history_a, final_feedback);
-        
-        return float4(TAA_Resolve(result_compressed), result_alpha);
-    }
-    
     //--------------------|
     // :: Pixel Shaders ::|
     //--------------------|
-    
+
     void PS_CopyColor(VS_OUTPUT input, out float4 outColor : SV_Target)
     {
         outColor = GetColor(input.uv);
@@ -788,9 +505,9 @@ namespace Barbatos_RTGI_150
 
     void PS_GenNormals(VS_OUTPUT input, out float4 outNormal : SV_Target)
     {
+        outNormal = 0.0;
         if (any(input.uv > RenderScale))
             discard;
-            
         float2 viewUV = input.uv / RenderScale;
 
         float d = GetDepth(viewUV);
@@ -805,14 +522,13 @@ namespace Barbatos_RTGI_150
     
     void PS_Trace(VS_OUTPUT input, out float4 outGI : SV_Target)
     {
+        outGI = 0.0;
         if (any(input.uv > RenderScale))
             discard;
-            
         float2 viewUV = input.uv / RenderScale;
 
         float4 gbuffer = GetLod(sNormal, input.uv);
         float depth = gbuffer.a;
-        
         if (depth >= 0.999 || depth > GI_RenderDistance)
         {
             outGI = float4(0.0, 0.0, 0.0, 1.0);
@@ -821,33 +537,29 @@ namespace Barbatos_RTGI_150
 
         float3 normal = gbuffer.rgb;
         float3 viewPos = UVToViewPos(viewUV, depth, input.pScale);
+        float currentMaxRayDistance = MaxRayDistance;
+        float currentAORadius = AO_Radius;
         
-        float activeRadiusDistanceScale = EnableDistantRadius ? 1.0 : 0.0;
-        float distanceScale = 1.0 + (depth * 15.0 * activeRadiusDistanceScale);
-        
-        float currentMaxRayDistance = MaxRayDistance * distanceScale;
-        float currentAORadius = AO_Radius * distanceScale;
-        float currentThickness = Thickness * distanceScale;
+        // Use ZThickness 
+        float currentThickness = ZThickness;
         
         float3 totalRadiance = 0.0;
         float totalVisibility = 0.0;
 
-        uint pixelIndex = uint((input.vpos.y / RenderScale) * GW + (input.vpos.x / RenderScale));
+        uint pixelIndex = uint((input.vpos.y / RenderScale) * BUFFER_WIDTH + (input.vpos.x / RenderScale));
         uint perFrameSeedBase = uint(FRAME_COUNT) * RayCount;
 
-        float3 blueNoiseSeed = float3(
-            frac(pixelIndex * 0.1031),
-            frac(pixelIndex * 0.11369),
-            frac(pixelIndex * 0.13787)
-        );
-        
+        float2 bn_uv = float2(input.vpos.xy / (RenderScale * 1024.0));
+        float frame = fmod((float)FRAME_COUNT, 64.0);
+        float4 bn = tex2Dlod(sTexBlueNoise, float4(bn_uv + float2(0.61803398875 * frame, 0.73205080757 * frame), 0, 0));
+        float3 blueNoiseSeed = float3(bn.r, bn.g, bn.b);
         float bias = (depth * 0.002) + 0.0005;
         float3 rayOrigin = viewPos + normal * bias;
         float3 sunDir = float3(0, 1, 0);
         
-        // View Vector for Reflection Calculation
+        // View Vector for Reflection
         float3 V = normalize(-viewPos);
-        
+        float NdotV = dot(normal, V);  // Backface rejection
         if (Manual_Sun_Enabled || SSS_Enabled)
             sunDir = GetSunVector();
             
@@ -855,7 +567,7 @@ namespace Barbatos_RTGI_150
         for (int s = 0; s < RayCount; s++)
         {
             uint currentSeed = perFrameSeedBase + s;
-            float3 rand = toroidalJitter(sequence3D(currentSeed), blueNoiseSeed);
+            float3 rand = N_ToroidalJitter(N_Sequence3D(currentSeed), blueNoiseSeed);
             float3 rayDir;
 
             if (Manual_Sun_Enabled)
@@ -870,28 +582,37 @@ namespace Barbatos_RTGI_150
             }
             else
             {
-                // GGX Sampling 
-                float3 H = ImportanceSampleGGX(rand.xy, normal, Roughness);
+                // VNDF GGX Sampling
+                float3 H = RT_ImportanceSampleGGX_VNDF(rand.xy, normal, V, Roughness);
                 rayDir = reflect(-V, H);
                 
-                // Fallback 
+                // Fallback
                 if (dot(normal, rayDir) <= 0.0)
-                    rayDir = cosineSample(normal, rand.xy);
+                    rayDir = RT_CosineSample(normal, rand.xy);
             }
     
             float2 hitUV;
             float3 hitPos;
             float hitDist;
 
-            if (TraceRay(rayOrigin, rayDir, input.pScale, RaySteps, rand.z, currentMaxRayDistance, currentThickness, hitUV, hitPos, hitDist))
+            if (RT_TraceRayGI(rayOrigin, rayDir, input.pScale, RaySteps, rand.z, currentMaxRayDistance, currentThickness, hitUV, hitPos, hitDist))
             {
-                float3 hitNormal = tex2Dlod(sNormal, float4(hitUV * RenderScale, 0, 0)).rgb;
-                bool validHit = Manual_Sun_Enabled ? true : (dot(rayDir, hitNormal) < 0.1);
+                float4 hitGbuffer = tex2Dlod(sNormal, float4(hitUV * RenderScale, 0, 0));
+                float3 hitNormal = hitGbuffer.rgb;
+                float hitBufferDepth = hitGbuffer.a;
                 
-               if (validHit)
+                // Z-Thickness Validation: check if the ray fell behind the geometry's backface
+                float3 hitBufferViewPos = UVToViewPos(hitUV, hitBufferDepth, input.pScale);
+                float zDistance = abs(hitPos.z - hitBufferViewPos.z);
+                bool validZThickness = (zDistance <= currentThickness);
+
+                bool validHit = Manual_Sun_Enabled ? validZThickness : ((dot(rayDir, hitNormal) < 0.1) && validZThickness);
+                
+                if (validHit)
                 {
                     float3 rawAlbedo = tex2Dlod(sTexColorCopy, float4(hitUV, 0, 3.0)).rgb;
-                    float3 linearAlbedo = Input2Linear(rawAlbedo);
+                    float3 linearAlbedo = GetStrictLinearAlbedo(rawAlbedo);
+                    
                     float albedoLuma = GetLuminance(linearAlbedo);
                     float3 chroma = linearAlbedo - albedoLuma;
                     linearAlbedo = saturate(albedoLuma + chroma * GI_Bounce_Saturation); 
@@ -900,7 +621,7 @@ namespace Barbatos_RTGI_150
                     // Infinite Bounces
                     if (MultiBounce_Weight > 0.0)
                     {
-                        float3 prevGI = (FRAME_COUNT % 2 == 0) ? 
+                        float3 prevGI = (uint(FRAME_COUNT) % 2 == 0) ?
                             GetLod(sHistory1, hitUV * RenderScale).rgb : 
                             GetLod(sHistory0, hitUV * RenderScale).rgb;
                         linearAlbedo *= (1.0 + prevGI * MultiBounce_Weight);
@@ -914,7 +635,8 @@ namespace Barbatos_RTGI_150
         
                 float distFactor = saturate(hitDist / max(0.001, currentAORadius));
                 float weight_falloff = saturate(1.0 - distFactor * distFactor); // Quadratic
-                float weight = Manual_Sun_Enabled ? Sun_Shadow_Fill : weight_falloff;
+                float weight = Manual_Sun_Enabled ?
+                    Sun_Shadow_Fill : weight_falloff;
 
                 totalVisibility += weight;
             }
@@ -939,20 +661,18 @@ namespace Barbatos_RTGI_150
         else
         {
             finalVisibility = 1.0 - saturate(totalVisibility * invRays * AO_Intensity);
-            
             if (SSS_Enabled)
             {
-                float3 rand = toroidalJitter(sequence3D(perFrameSeedBase), blueNoiseSeed);
+                float3 rand = N_ToroidalJitter(N_Sequence3D(perFrameSeedBase), blueNoiseSeed);
                 float3 jitter = (rand - 0.5) * Shadow_Softness;
                 float3 shadowRayDir = normalize(sunDir + jitter);
-                
                 if (dot(normal, shadowRayDir) > 0.0)
                 {
                     float2 sUV;
                     float3 sPos;
                     float sDist;
 
-                    if (TraceRay(rayOrigin, shadowRayDir, input.pScale, RaySteps, rand.z, currentMaxRayDistance, currentThickness, sUV, sPos, sDist))
+                    if (RT_TraceRayGI(rayOrigin, shadowRayDir, input.pScale, RaySteps, rand.z, currentMaxRayDistance, currentThickness, sUV, sPos, sDist))
                     {
                         float2 edgeFade = smoothstep(0.0, 0.05, sUV) * (1.0 - smoothstep(0.95, 1.0, sUV));
                         float screenFade = edgeFade.x * edgeFade.y;
@@ -962,14 +682,13 @@ namespace Barbatos_RTGI_150
             }
         }
 
-        outGI = float4(totalRadiance * invRays, finalVisibility);
+        outGI = float4(totalRadiance * invRays * saturate(NdotV * 8.0), finalVisibility);
     }
 
     float4 AtrousFilter(VS_OUTPUT input, sampler sInputTex, float stepWidth)
     {
         if (any(input.uv > RenderScale))
             discard;
-            
         float4 c_data = GetLod(sInputTex, input.uv);
         float3 c_val = c_data.rgb;
         float c_ao = c_data.a;
@@ -979,33 +698,32 @@ namespace Barbatos_RTGI_150
         float c_depth = c_gbuffer.a;
         
         static const float kernel[3] = { 1.0, 2.0 / 3.0, 1.0 / 6.0 };
-        float4 sum = float4(c_val, c_ao);
-        float cum_w = 1.0;
+        hfloat4 sum = hfloat4(c_val, c_ao);
+        hfloat cum_w = 1.0;
         
-        float2 px = ReShade::PixelSize * stepWidth;
-        float depth_weight_factor = 1.0 / (0.1 * c_depth + 1e-6);
+        float2 px = bb::PixelSize * stepWidth;
+        float depth_weight_factor = ComputeDepthWeight(c_depth, 0.1);
         
-        [unroll]
+        [loop]
         for (int x = -2; x <= 2; x++)
         {
-            [unroll]
+            [loop]
             for (int y = -2; y <= 2; y++)
             {
                 if (x == 0 && y == 0) continue;
-                   
                 float2 uv_offset = input.uv + float2(x, y) * px;
                 float4 s_data = GetLod(sInputTex, uv_offset);
                 float4 s_gbuffer = GetLod(sNormal, uv_offset);
                 float3 s_norm = s_gbuffer.rgb;
                 float s_depth = s_gbuffer.a;
                 
-                float w_z = exp(-abs(c_depth - s_depth) * depth_weight_factor);
-                float dotN = max(0.0, dot(c_norm, s_norm));
-                dotN = pow(dotN, 4.0);
-                float w_n = dotN;
+                hfloat w_z = exp(-abs(c_depth - s_depth) * depth_weight_factor);
+                hfloat dotN = max(0.0, dot(c_norm, s_norm));
+                hfloat dotN2 = dotN * dotN;
+                hfloat w_n = dotN2 * dotN2;
                 
-                float k_w = kernel[abs(x)] * kernel[abs(y)];
-                float weight = w_z * w_n * k_w;
+                hfloat k_w = kernel[abs(x)] * kernel[abs(y)];
+                hfloat weight = w_z * w_n * k_w;
                 
                 sum += s_data * weight;
                 cum_w += weight;
@@ -1014,23 +732,79 @@ namespace Barbatos_RTGI_150
         return sum / max(cum_w, 0.0001);
     }
     
+    //------------|
+    // :: TAA  :: |
+    //------------|
+
+    float4 ComputeTAA(VS_OUTPUT input, sampler sHistoryParams)
+    {
+        if (any(input.uv > RenderScale))
+            discard;
+        float2 viewUV = input.uv / RenderScale;
+        float depth = GetDepth(viewUV);
+        if (depth >= 0.999)
+            return float4(0.0, 0.0, 0.0, 1.0);
+            
+        float4 current_gi = GetLod(sAccum, input.uv);
+        
+        float2 velocity = MV_GetVelocity(viewUV);
+        float2 reprojected_view_uv = viewUV + velocity;
+        float2 reprojected_buffer_uv = reprojected_view_uv * RenderScale;
+        
+        float4 history_gi = TAA_SampleHistoryCatmullRom(sHistoryParams, reprojected_buffer_uv, float2(BUFFER_WIDTH, BUFFER_HEIGHT));
+        float3 current_compressed = TAA_Compress(current_gi.rgb);
+        float3 current_ycocg = RGBToYCoCg(current_compressed);
+        
+        float3 history_compressed = TAA_Compress(history_gi.rgb);
+        float3 history_ycocg = RGBToYCoCg(history_compressed);
+        
+        float raw_confidence = saturate(MV_GetConfidence(viewUV));
+        float4 color_min, color_max;
+        TAA_ComputeNeighborhoodVariance(sAccum, input.uv, current_gi, bb::PixelSize, color_min, color_max);
+
+        float relax_amount = 0.15 * raw_confidence;
+        color_min -= relax_amount;
+        color_max += relax_amount;
+        float3 clipped_history_ycocg = TAA_ClipToAABB(color_min.rgb, color_max.rgb, history_ycocg);
+        float clipped_history_a = clamp(history_gi.a, color_min.a, color_max.a);
+        
+        float clamp_distance = length(clipped_history_ycocg - history_ycocg);
+        float blend_adapt = saturate(1.0 - clamp_distance * 2.0); 
+        
+        float max_feedback = 0.98;
+        float min_feedback = 0.85;
+        float final_feedback = lerp(min_feedback, max_feedback, raw_confidence) * lerp(0.8, 1.0, blend_adapt);
+        
+        float prevRenderScale = tex2Dlod(sRS_Prev, float4(0, 0, 0, 0)).x;
+        if (abs(RenderScale - prevRenderScale) > 0.001)
+            final_feedback = 0.0;
+            
+        float3 result_ycocg = lerp(current_ycocg, clipped_history_ycocg, final_feedback);
+        float3 result_compressed = YCoCgToRGB(result_ycocg);
+        float result_alpha = lerp(current_gi.a, clipped_history_a, final_feedback);
+        
+        return float4(TAA_Resolve(result_compressed), result_alpha);
+    }
+    
     void PS_Accumulate0(VS_OUTPUT input, out float4 outAccum : SV_Target)
     {
-        if (FRAME_COUNT % 2 != 0)
+        outAccum = 0.0;
+        if (uint(FRAME_COUNT) % 2 != 0)
             discard;
         outAccum = ComputeTAA(input, sHistory1);
     }
 
     void PS_Accumulate1(VS_OUTPUT input, out float4 outAccum : SV_Target)
     {
-        if (FRAME_COUNT % 2 == 0)
+        outAccum = 0.0;
+        if (uint(FRAME_COUNT) % 2 == 0)
             discard;
         outAccum = ComputeTAA(input, sHistory0);
     }
 
     void PS_Atrous1(VS_OUTPUT input, out float4 outColor : SV_Target)
     {
-        if (FRAME_COUNT % 2 == 0)
+        if (uint(FRAME_COUNT) % 2 == 0)
             outColor = AtrousFilter(input, sHistory0, 1.0);
         else
             outColor = AtrousFilter(input, sHistory1, 1.0);
@@ -1067,11 +841,9 @@ namespace Barbatos_RTGI_150
             31727, // 8
             31695  // 9
         };
-        
         int2 ip = int2(floor(uv * float2(3.0, 5.0)));
         if (ip.x < 0 || ip.x > 2 || ip.y < 0 || ip.y > 4)
             return 0.0;
-            
         int bit = (4 - ip.y) * 3 + (2 - ip.x);
         return GetBit(font[d], bit);
     }
@@ -1083,9 +855,10 @@ namespace Barbatos_RTGI_150
             return 0.0;
             
         float res = 0.0;
-        int d1 = (number / 100) % 10;
-        int d2 = (number / 10) % 10;
-        int d3 = number % 10;
+        uint unumber = uint(abs(number));
+        int d1 = int(unumber / 100u);
+        int d2 = int((unumber / 10u) % 10u);
+        int d3 = int(unumber % 10u);
        
         float spacing = 0.4;
         
@@ -1113,7 +886,7 @@ namespace Barbatos_RTGI_150
     float4 DrawSunWidget(float2 texcoord, float3 sunDir, float4 sceneColorLinear)
     {
         float2 uv = texcoord - Sun_Widget_Pos;
-        uv.x *= ReShade::AspectRatio;
+        uv.x *= bb::AspectRatio;
         uv /= Sun_Widget_Scale;
 
         float distCenter = length(uv);
@@ -1147,6 +920,7 @@ namespace Barbatos_RTGI_150
             cos(radAz) * cos(radEl)
         ) * 1.2;
         
+        [loop]
         for (int i = 0; i < 60; i++)
         {
             p = ro + rd * t;
@@ -1196,6 +970,7 @@ namespace Barbatos_RTGI_150
         if (hit)
         {
             float3 N = normalize(p);
+            
             // Fake simple lighting
             float3 L = normalize(float3(0.5, 1.0, -0.5));
             float NdotL = max(0.2, dot(N, L));
@@ -1232,18 +1007,19 @@ namespace Barbatos_RTGI_150
         float2 lowResUV = uv * RenderScale;
         float3 highNormal = CalculateNormal(uv, pScale);
 
-        float4 sumGI = 0.0;
-        float sumWeight = 0.0;
+        float4 result = GetLod(sDNB, lowResUV);
+        hfloat4 sumGI = 0.0;
+        hfloat sumWeight = 0.0;
 
-        float2 texelSize = ReShade::PixelSize;
+        float2 texelSize = bb::PixelSize;
         float2 baseUV = (floor(lowResUV / texelSize) + 0.5) * texelSize;
 
-        float depth_weight_factor = 1.0 / (0.1 * highDepth + 1e-6);
+        float depth_weight_factor = ComputeDepthWeight(highDepth, 0.1);
         
-        [unroll]
+        [loop]
         for (int x = -1; x <= 1; x++)
         {
-            [unroll]
+            [loop]
             for (int y = -1; y <= 1; y++)
             {
                 float2 sampleUV = baseUV + float2(x, y) * texelSize;
@@ -1253,22 +1029,24 @@ namespace Barbatos_RTGI_150
                 float3 lowNormal = gbuffer.rgb;
                 float lowDepth = gbuffer.a;
                 
-                float wDepth = exp(-abs(highDepth - lowDepth) * depth_weight_factor);
-                float dotN = max(0.0, dot(highNormal, lowNormal));
-                float wNormal = pow(dotN, 16.0);
-                float wSpatial = exp(-0.5 * float(x * x + y * y));
+                hfloat wDepth = exp(-abs(highDepth - lowDepth) * depth_weight_factor);
+                hfloat dotN = max(0.0, dot(highNormal, lowNormal));
+                hfloat dotN2 = dotN * dotN;
+                hfloat dotN4 = dotN2 * dotN2;
+                hfloat dotN8 = dotN4 * dotN4;
+                hfloat wNormal = dotN8 * dotN8;
+                hfloat wSpatial = exp(-0.5 * float(x * x + y * y));
 
-                float weight = wDepth * wNormal * wSpatial;
-                
+                hfloat weight = wDepth * wNormal * wSpatial;
                 sumGI += gi * weight;
                 sumWeight += weight;
             }
         }
 
-        if (sumWeight < 1e-6)
-            return GetLod(sDNB, lowResUV);
+        if (sumWeight >= 1e-6)
+            result = sumGI / sumWeight;
             
-        return sumGI / sumWeight;
+        return result;
     }
 
     void PS_Output(VS_OUTPUT input, out float4 outColor : SV_Target)
@@ -1282,8 +1060,14 @@ namespace Barbatos_RTGI_150
         {
             float4 giData = JointBilateralUpsample(input.uv, depth, input.pScale);
             
+            float3 n = GetLod(sNormal, input.uv * RenderScale).rgb;
+            float3 vp = UVToViewPos(input.uv, depth, input.pScale);
+            float backNdotV = dot(n, normalize(-vp));
+            giData.rgb *= saturate(backNdotV * 8.0);
+
             // Tint
-            float3 tint = Use_Color_Temperature ? KelvinToRGB(Color_Temperature) : GI_Color;
+            float3 tint = Use_Color_Temperature ?
+                KelvinToRGB(Color_Temperature) : GI_Color;
             float3 processedGI = giData.rgb * tint;
             
             //HDR Contrast
@@ -1303,7 +1087,7 @@ namespace Barbatos_RTGI_150
 
             float rawAO = saturate(giData.a);
             float finalAO = 1.0;
-        
+            
             if (AO_BlendMode == 0)
             {
                 finalAO = lerp(1.0, rawAO, AO_Intensity);
@@ -1329,7 +1113,6 @@ namespace Barbatos_RTGI_150
                     case 1: // GI Only
                         outColor = float4(Linear2Output(processedGI), 1.0);
                         break;
-                        
                     case 2: // AO Only
                         outColor = float4(finalAO, finalAO, finalAO, 1.0);
                         break;
@@ -1354,7 +1137,7 @@ namespace Barbatos_RTGI_150
                     }
                     
                     case 5: // Raw LowRes GI
-                        outColor = float4((FRAME_COUNT % 2 == 0 ? GetLod(sHistory0, input.uv * RenderScale).rgb : GetLod(sHistory1, input.uv * RenderScale).rgb), 1.0);
+                        outColor = float4((uint(FRAME_COUNT) % 2 == 0 ? GetLod(sHistory0, input.uv * RenderScale).rgb : GetLod(sHistory1, input.uv * RenderScale).rgb), 1.0);
                         break;
                         
                     case 6: // White World
@@ -1366,12 +1149,15 @@ namespace Barbatos_RTGI_150
                     }
                         
                     case 7: // Luminance
-                    {
-                        float debugLum = GetLuminance(processedGI);
-                        outColor = float4(GetFalseColor(saturate(debugLum)), 1.0);
+                        {
+                            float debugLum = GetLuminance(processedGI);
+                            outColor = float4(GetFalseColor(saturate(debugLum)), 1.0);
+                            break;
+                        }
+                    default:
+                        outColor = 0.0;
                         break;
                     }
-                }
 
                 if (Manual_Sun_Enabled && Show_Sun_Widget)
                 {
@@ -1385,12 +1171,18 @@ namespace Barbatos_RTGI_150
 
             // Split Toning
             float sceneLuma = GetLuminance(scene);
-            float luma_normalized = saturate(sceneLuma / (paper_white_norm * 3.0));
+            float3 approxAlbedo = scene / max(sceneLuma, 0.05); 
+            approxAlbedo = saturate(approxAlbedo);
 
-            float shadowCurve = 1.0 - smoothstep(GI_Split_Balance - 0.2, GI_Split_Balance + 0.2, luma_normalized);
-            float highlightCurve = smoothstep(GI_Split_Balance - 0.2, GI_Split_Balance + 0.2, luma_normalized);
+            float luma_normalized = saturate(sceneLuma / (paper_white_norm * 3.0));
+            float transition_width = 0.45;
+            float lower_bound = saturate(GI_Split_Balance - transition_width);
+            float upper_bound = saturate(GI_Split_Balance + transition_width);
+
+            float shadowCurve = 1.0 - smoothstep(lower_bound, upper_bound, luma_normalized);
+            float highlightCurve = smoothstep(lower_bound, upper_bound, luma_normalized);
             
-            float3 surfaceIntegration = lerp(float3(1.0, 1.0, 1.0), max(scene, 0.05), GI_Color_Bleed);
+            float3 surfaceIntegration = lerp(float3(1.0, 1.0, 1.0), approxAlbedo, GI_Color_Bleed);
             
             float3 shadowLight = bouncedLight * surfaceIntegration * shadowCurve * GI_Shadow_Tint;
             float3 litLight = bouncedLight * surfaceIntegration * highlightCurve * GI_Highlight_Tint;
@@ -1398,7 +1190,7 @@ namespace Barbatos_RTGI_150
             finalColor = occludedScene + shadowLight + litLight;
         }
 
-        // Widget Overlay 
+        // Widget Overlay
         if (Manual_Sun_Enabled && Show_Sun_Widget && ViewMode == 0)
         {
             float4 widgetRes = DrawSunWidget(input.uv, GetSunVector(), float4(finalColor, 1.0));

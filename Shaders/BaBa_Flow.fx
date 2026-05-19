@@ -10,10 +10,10 @@
 | Flow shader derived from LumaFlow.            |
 '----------------------------------------------*/
 
-#include "ReShade.fxh"
-
-#define GetColor(c) tex2Dlod(ReShade::BackBuffer, float4((c).xy, 0, 0))
-#define GetLod(s,c) tex2Dlod(s, float4((c).xy, 0, 0))
+#include ".\bb_include\bb_reshade.fxh"
+#include ".\bb_include\bb_common.fxh"
+#include ".\bb_include\bb_depth.fxh"
+#include ".\bb_include\bb_colorspace.fxh"
 
 #ifndef BABAFLOW_QUALITY
     #define BABAFLOW_QUALITY 2 
@@ -54,7 +54,6 @@ uniform int BABAFLOW_QUALITY_INFO <
               "2 = High ";
 >;
 
-uniform int FRAME_COUNT < source = "framecount"; >;
 uniform int DEBUG_VIEW <
     ui_type = "combo";
     ui_items = "Debug Off\0"
@@ -207,7 +206,7 @@ namespace Barbatos_Flow
     float3 MotionToColor(float2 motion)
     {
         float angle = atan2(-motion.y, -motion.x) / 6.283 + 0.5;
-        float raw_length = length(motion) / (15.0 * ReShade::PixelSize.x);
+        float raw_length = length(motion) / (15.0 * bb::PixelSize.x);
         float compressed = raw_length / (1.0 + raw_length * 1.4);
         float boosted = pow(compressed, 0.5);
         float magnitude = saturate(lerp(compressed, boosted, saturate(raw_length * 3.0)));
@@ -215,11 +214,6 @@ namespace Barbatos_Flow
         float4 K = float4(1, 2.0 / 3.0, 1.0 / 3.0, 3);
         float3 p = abs(frac(hsv.xxx + K.xyz) * 6 - K.www);
         return hsv.z * lerp(K.xxx, clamp(p - K.xxx, 0, 1), hsv.y) + 0.1;
-    }
-
-    float GetDepth(float2 xy) 
-    { 
-        return ReShade::GetLinearizedDepth(xy);
     }
 
     bool IsOOB(float2 uv) { return any(uv < 0.0) || any(uv > 1.0); }
@@ -486,7 +480,7 @@ namespace Barbatos_Flow
     {
 #if BABAFLOW_QUALITY == 0
         float3 center_color = GetColor(uv).rgb;
-        float center_luma = dot(center_color, float3(0.2126, 0.7152, 0.0722));
+        float center_luma = GetLuminance(center_color);
         return center_luma * rcp(1.0 + center_luma);
 #else
     #if BABAFLOW_QUALITY == 1
@@ -506,7 +500,7 @@ namespace Barbatos_Flow
         {
             float2 sample_uv = uv + float2(LUMA_OFFS[i]) * texel_size;
             float3 color = GetColor(sample_uv).rgb;
-            float luma = dot(color, float3(0.2126, 0.7152, 0.0722));
+            float luma = GetLuminance(color);
             luma = luma * rcp(1.0 + luma);
             float weight = LUMA_WEIGHTS[i];
             luma_sum += luma * weight;
@@ -516,7 +510,7 @@ namespace Barbatos_Flow
         float smooth_luma = luma_sum / weight_sum;
         
         float3 center_color = GetColor(uv).rgb;
-        float center_luma = dot(center_color, float3(0.2126, 0.7152, 0.0722));
+        float center_luma = GetLuminance(center_color);
         center_luma = center_luma * rcp(1.0 + center_luma);
         return lerp(center_luma, smooth_luma, 0.9);
 #endif

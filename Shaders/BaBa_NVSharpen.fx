@@ -33,7 +33,8 @@
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
 */
 
-#include "ReShade.fxh"
+#include ".\bb_include\bb_reshade.fxh"
+#include ".\bb_include\bb_colorspace.fxh"
 
 // Kernel configuration
 static const int K = 2; // radius of 5x5 kernel
@@ -100,11 +101,6 @@ namespace NEOSPACE
 /*----------------.
 | :: Functions :: |
 '----------------*/
-
-    float getYLinear(float3 rgb)
-    {
-        return 0.2126f * rgb.x + 0.7152f * rgb.y + 0.0722f * rgb.z;
-    }
 
     // YUV -> RGB conversion (NV12 support)
     float3 YUVtoRGB(float3 yuv)
@@ -236,15 +232,15 @@ namespace NEOSPACE
             {
 #if NIS_NV12_SUPPORT
             // NV12 path: sample YUV and convert
-            float2 coord = tex + float2(x, y) * ReShade::PixelSize.xy;
-            float yv = tex2D(ReShade::BackBuffer, coord).r;
-            float2 uv = tex2D(ReShade::BackBuffer, coord).gb;
+            float2 coord = tex + float2(x, y) * bb::PixelSize.xy;
+            float yv = tex2D(bb::BackBuffer, coord).r;
+            float2 uv = tex2D(bb::BackBuffer, coord).gb;
             float3 yuv = float3(yv, uv);
             float3 rgb = YUVtoRGB(yuv);
-            lum[INDEX(x+K, y+K)] = getYLinear(rgb);
+            lum[INDEX(x+K, y+K)] = GetLuminance(rgb);
 #else
-                float4 c = tex2D(ReShade::BackBuffer, tex + float2(x, y) * ReShade::PixelSize.xy);
-                lum[INDEX(x+K, y+K)] = getYLinear(c.rgb);
+                float4 c = tex2D(bb::BackBuffer, tex + float2(x, y) * bb::PixelSize.xy);
+                lum[INDEX(x+K, y+K)] = GetLuminance(c.rgb);
 #endif
             }
         }
@@ -256,8 +252,8 @@ namespace NEOSPACE
         float4 orig = tex2D(sColor, tex);
         if (HDR_BETA)
         {
-            float3 centerRGB = tex2D(ReShade::BackBuffer, tex).rgb;
-            float oldY = getYLinear(centerRGB);
+            float3 centerRGB = tex2D(bb::BackBuffer, tex).rgb;
+            float oldY = GetLuminance(centerRGB);
             float dynamicEps = 1e-4f * HDRCompressionFactor * HDRCompressionFactor;
             float newY = max(oldY + usmY, 0.0);
             float corr = (newY * newY + dynamicEps) / (oldY * oldY + dynamicEps);

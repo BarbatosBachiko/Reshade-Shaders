@@ -6,9 +6,13 @@
 | License: MIT                                  |
 |----------------------------------------------*/
 
-#include "ReShade.fxh"
-#include "ReShadeUI.fxh"
-#include ".\BaBa_Includes\BaBa_MV.fxh"
+#include ".\bb_include\bb_reshade.fxh"
+#include ".\bb_include\bb_ui.fxh"
+#include ".\bb_include\bb_mv.fxh"
+#define USE_HALF 1
+#include ".\bb_include\bb_common.fxh"
+#include ".\bb_include\bb_depth.fxh"
+#include ".\bb_include\bb_normal.fxh"
 
 //----------|
 // :: UI :: |
@@ -137,15 +141,9 @@ uniform int ViewMode <
     ui_items = "None\0AO Only\0Depth\0";
 > = 0;
 
-uniform int FRAME_COUNT < source = "framecount"; >;
-
 // Defines
-#define PI 3.1415926535
+#define SECTOR_COUNT 32
 #define HALF_PI 1.57079632679
-#define FAR_PLANE RESHADE_DEPTH_LINEARIZATION_FAR_PLANE
-#define SECTOR_COUNT 32 
-#define GetLod(s,c) tex2Dlod(s, float4((c).xy, 0, 0))
-#define GetColor(c) tex2Dlod(ReShade::BackBuffer, float4((c).xy, 0, 0))
 static const int BlurRadius = 2;
 
 namespace Barbatos_NeoSSAO2
@@ -154,7 +152,7 @@ namespace Barbatos_NeoSSAO2
     {
         Width = BUFFER_WIDTH;
         Height = BUFFER_HEIGHT;
-        Format = RG16F;
+        Format = RGBA16F;
     };
     sampler sNormal
     {
@@ -216,11 +214,6 @@ namespace Barbatos_NeoSSAO2
         float2 pScale : TEXCOORD1;
     };
 
-    float GetDepth(float2 xy)
-    {
-        return ReShade::GetLinearizedDepth(xy);
-    }
-    
     void VS_NeoSSAO(in uint id : SV_VertexID, out VS_OUTPUT outStruct)
     {
         outStruct.uv.x = (id == 2) ?
@@ -230,13 +223,7 @@ namespace Barbatos_NeoSSAO2
 
         float fov_rad = FOV * (PI / 180.0);
         float y = tan(fov_rad * 0.5);
-        outStruct.pScale = float2(y * ReShade::AspectRatio, y);
-    }
-
-    float3 UVToViewPos(float2 uv, float view_z, float2 pScale, float depthMult)
-    {
-        float2 ndc = uv * 2.0 - 1.0;
-        return float3(ndc.x * pScale.x, -ndc.y * pScale.y, 1.0) * (view_z * depthMult);
+        outStruct.pScale = float2(y * bb::AspectRatio, y);
     }
 
     float4 CalculateEdges(const float centerZ, const float leftZ, const float rightZ, const float topZ, const float bottomZ)
@@ -262,13 +249,6 @@ namespace Barbatos_NeoSSAO2
         return normalize(pixelNormal);
     }
 
-    float3 getNormalFromTex(float2 coords)
-    {
-        float2 normXY = tex2Dlod(sNormal, float4(coords, 0, 0)).xy;
-        float z = sqrt(saturate(1.0 - dot(normXY, normXY)));
-        return float3(normXY, -z);
-    }
-
     float GetBayer8x8(float2 uv)
     {
         int2 pixelPos = int2(uv * float2(BUFFER_WIDTH, BUFFER_HEIGHT));
@@ -280,7 +260,7 @@ namespace Barbatos_NeoSSAO2
       
        15, 47, 7, 39, 13, 45, 5, 37, 63, 31, 55, 23, 61, 29, 53, 21
         };
-        return float(bayer[(pixelPos.x % 8) + (pixelPos.y % 8) * 8]) * (1.0 / 64.0);
+        return float(bayer[(uint(pixelPos.x) % 8) + (uint(pixelPos.y) % 8) * 8]) * (1.0 / 64.0);
     }
 
     float GTAOFastAcos(float x)
@@ -314,10 +294,10 @@ namespace Barbatos_NeoSSAO2
     {
         float depth = GetDepth(input.uv);
         if (depth >= DepthThreshold)
-            return float4(0, 0, 1, 1);
+            return float4(NM_EncodeNormal(float3(0, 0, -1)), 0.0, depth);
         float realDepthMult = EnableDepthMultiplier ? lerp(0.1, 5.0, DepthMultiplier) : 1.0;
-        float2 p = ReShade::PixelSize;
-        float3 p_c = UVToViewPos(input.uv, depth * FAR_PLANE, input.pScale, realDepthMult);
+        float2 p = bb::PixelSize;
+        float3 p_c = UVToViewPos(input.uv, depth * FAR_PLANE * realDepthMult, input.pScale);
 
         float2 uvL = input.uv - float2(p.x, 0);
         float2 uvR = input.uv + float2(p.x, 0);
@@ -329,15 +309,15 @@ namespace Barbatos_NeoSSAO2
         float depthT = GetDepth(uvT);
         float depthB = GetDepth(uvB);
 
-        float3 p_l = UVToViewPos(uvL, depthL * FAR_PLANE, input.pScale, realDepthMult);
-        float3 p_r = UVToViewPos(uvR, depthR * FAR_PLANE, input.pScale, realDepthMult);
-        float3 p_t = UVToViewPos(uvT, depthT * FAR_PLANE, input.pScale, realDepthMult);
-        float3 p_b = UVToViewPos(uvB, depthB * FAR_PLANE, input.pScale, realDepthMult);
+        float3 p_l = UVToViewPos(uvL, depthL * FAR_PLANE * realDepthMult, input.pScale);
+        float3 p_r = UVToViewPos(uvR, depthR * FAR_PLANE * realDepthMult, input.pScale);
+        float3 p_t = UVToViewPos(uvT, depthT * FAR_PLANE * realDepthMult, input.pScale);
+        float3 p_b = UVToViewPos(uvB, depthB * FAR_PLANE * realDepthMult, input.pScale);
 
         float4 edges = CalculateEdges(p_c.z, p_l.z, p_r.z, p_t.z, p_b.z);
         float3 normal = CalculateNormal(edges, p_c, p_l, p_r, p_t, p_b);
 
-        return float4(normal.xy, 0.0, 1.0);
+        return float4(NM_EncodeNormal(normal), 0.0, depth);
     }
 
     float4 PS_SSAO(VS_OUTPUT input) : SV_Target
@@ -351,8 +331,8 @@ namespace Barbatos_NeoSSAO2
             return 1.0;
         float realDepthMult = EnableDepthMultiplier ? lerp(0.1, 5.0, DepthMultiplier) : 1.0;
         float2 invPScale = 1.0 / input.pScale;
-        float3 positionVS = UVToViewPos(scaled_uv, center_depth * FAR_PLANE, input.pScale, realDepthMult);
-        float3 normalVS = getNormalFromTex(scaled_uv);
+        float3 positionVS = UVToViewPos(scaled_uv, center_depth * FAR_PLANE * realDepthMult, input.pScale);
+        float3 normalVS = NM_DecodeNormal(tex2Dlod(sNormal, float4(scaled_uv, 0, 0)).xy);
         positionVS += normalVS * (0.005 * realDepthMult);
         float3 V = normalize(-positionVS);
         float random_val = GetBayer8x8(input.uv);
@@ -427,11 +407,11 @@ namespace Barbatos_NeoSSAO2
         float2 scaled_uv = input.uv / RenderScale;
         if (any(scaled_uv > 1.0))
             discard;
-        float2 texelSize = ReShade::PixelSize * 1.5;
+        float2 texelSize = bb::PixelSize * 1.5;
         float centerDepth = GetDepth(scaled_uv);
         
-        float totalWeight = 1.0;
-        float totalAO = tex2D(sAO, input.uv).r;
+        hfloat totalWeight = 1.0;
+        hfloat totalAO = tex2D(sAO, input.uv).r;
         const int2 offsets[14] =
         {
             int2(0, 1), int2(0, -1),
@@ -459,10 +439,10 @@ namespace Barbatos_NeoSSAO2
         {
             float2 sampleUV = input.uv + (float2(offsets[k]) * texelSize);
             float sampleDepth = GetDepth(sampleUV / RenderScale);
-            float sampleAO = tex2D(sAO, sampleUV).r;
+            hfloat sampleAO = tex2D(sAO, sampleUV).r;
 
-            float depthDiff = abs(centerDepth - sampleDepth);
-            float weight = spatialWeights[k] * exp(-depthDiff * sharpnessMult);
+            hfloat depthDiff = abs(centerDepth - sampleDepth);
+            hfloat weight = spatialWeights[k] * exp(-depthDiff * sharpnessMult);
 
             totalAO += sampleAO * weight;
             totalWeight += weight;
@@ -494,7 +474,7 @@ namespace Barbatos_NeoSSAO2
         float minNeighborhood = 1.0;
         float maxNeighborhood = 0.0;
         
-        float2 texel = ReShade::PixelSize / RenderScale;
+        float2 texel = bb::PixelSize / RenderScale;
         [unroll]
         for (int x = -1; x <= 1; x++)
         {
@@ -519,14 +499,14 @@ namespace Barbatos_NeoSSAO2
 
     float4 PS_Accumulate0(VS_OUTPUT input) : SV_Target
     {
-        if (FRAME_COUNT % 2 != 0)
+        if (uint(FRAME_COUNT) % 2 != 0)
             discard;
         return PS_TAA(input, sHistory1);
     }
 
     float4 PS_Accumulate1(VS_OUTPUT input) : SV_Target
     {
-        if (FRAME_COUNT % 2 == 0)
+        if (uint(FRAME_COUNT) % 2 == 0)
             discard;
         return PS_TAA(input, sHistory0);
     }
@@ -538,7 +518,7 @@ namespace Barbatos_NeoSSAO2
 
         if (EnableTAA)
         {
-            if (FRAME_COUNT % 2 == 0)
+            if (uint(FRAME_COUNT) % 2 == 0)
                 occlusion = tex2D(sHistory0, input.uv).r;
             else
                 occlusion = tex2D(sHistory1, input.uv).r;

@@ -1,4 +1,4 @@
-﻿/*----------------------------------------------|
+/*----------------------------------------------|
 | ::               S_Outline                 :: |
 '-----------------------------------------------|
 | Version: 1.0                                  |
@@ -8,11 +8,12 @@
 | from BBFX                                     |   
 '----------------------------------------------*/
 
-#include "ReShade.fxh"
+#include ".\bb_include\bb_reshade.fxh"
+#include ".\bb_include\bb_colorspace.fxh"
 
-//-----------------|
-// :: UI (New)  ::  |
-//-----------------|
+//-----------|
+// :: UI ::  |
+//-----------|
 
 uniform float OutlineIntensity <
     ui_type = "drag";
@@ -126,12 +127,7 @@ uniform float timer < source = "timer"; >;
 
 float GetDepth(float2 uv)
 {
-    return ReShade::GetLinearizedDepth(uv);
-}
-
-float GetLuminance(float3 color)
-{
-    return dot(color, float3(0.2126, 0.7152, 0.0722));
+    return bb::GetLinearizedDepth(uv);
 }
 
 float GetColorDifference(float3 color1, float3 color2)
@@ -152,14 +148,14 @@ float GetColorDifference(float3 color1, float3 color2)
 
 void PS_OutlineOnly(float4 vpos : SV_Position, float2 uv : TEXCOORD, out float4 outColor : SV_Target0)
 {
-    float3 original_color = tex2D(ReShade::BackBuffer, uv).rgb;
+    float3 original_color = tex2D(bb::BackBuffer, uv).rgb;
     
     float2 wobble_uv = 0;
     if (bEnableWobble)
     {
         float time = (timer / 1000.0f) * WobbleSpeed;
-        float wobble_offset_x = sin(time + uv.y * WobbleFrequency) * WobbleAmount * ReShade::PixelSize.x;
-        float wobble_offset_y = cos(time + uv.x * WobbleFrequency) * WobbleAmount * ReShade::PixelSize.y;
+        float wobble_offset_x = sin(time + uv.y * WobbleFrequency) * WobbleAmount * bb::PixelSize.x;
+        float wobble_offset_y = cos(time + uv.x * WobbleFrequency) * WobbleAmount * bb::PixelSize.y;
         wobble_uv = float2(wobble_offset_x, wobble_offset_y);
     }
     
@@ -178,7 +174,7 @@ void PS_OutlineOnly(float4 vpos : SV_Position, float2 uv : TEXCOORD, out float4 
         [unroll]
         for (int i = 0; i < 8; i++)
         {
-            float sample_depth = GetDepth(uv + offsets[i] * ReShade::PixelSize * OutlineThickness + wobble_uv);
+            float sample_depth = GetDepth(uv + offsets[i] * bb::PixelSize * OutlineThickness + wobble_uv);
             depth_diff += abs(center_depth - sample_depth);
         }
         depth_diff /= 8.0;
@@ -190,7 +186,7 @@ void PS_OutlineOnly(float4 vpos : SV_Position, float2 uv : TEXCOORD, out float4 
         [unroll]
         for (int i = 0; i < 8; i++)
         {
-            float3 sample_color = tex2D(ReShade::BackBuffer, uv + offsets[i] * ReShade::PixelSize * OutlineThickness + wobble_uv).rgb;
+            float3 sample_color = tex2D(bb::BackBuffer, uv + offsets[i] * bb::PixelSize * OutlineThickness + wobble_uv).rgb;
             color_diff += GetColorDifference(original_color, sample_color);
         }
         color_diff /= 8.0;

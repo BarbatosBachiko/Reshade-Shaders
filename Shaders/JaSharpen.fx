@@ -7,7 +7,7 @@
 | About: Implements image sharpening using convolution kernels and unsharp masking.                                            |
 '-----------------------------------------------------------------------------------------------------------------------------*/
 
-#include "ReShade.fxh"
+#include ".\bb_include\bb_reshade.fxh"
 
 /*---------.
 | :: UI::  |
@@ -35,7 +35,7 @@ static const float BoxLPF[9] =
 
 float3 ConvolvePixel3x3(float2 texcoord, float kernel[9])
 {
-    float2 pixelSize = ReShade::PixelSize;
+    float2 pixelSize = bb::PixelSize;
     float3 result = 0.0;
     
     int index = 0;
@@ -44,7 +44,7 @@ float3 ConvolvePixel3x3(float2 texcoord, float kernel[9])
         for (int x = -1; x <= 1; x++)
         {
             float2 offset = float2(x, y) * pixelSize;
-            float3 sampleA = tex2D(ReShade::BackBuffer, texcoord + offset).rgb;
+            float3 sampleA = tex2D(bb::BackBuffer, texcoord + offset).rgb;
             result += sampleA * kernel[index];
             index++;
         }
@@ -55,7 +55,7 @@ float3 ConvolvePixel3x3(float2 texcoord, float kernel[9])
 
 float4 PS_Sharpen(float4 pos : SV_Position, float2 texcoord : TexCoord) : SV_Target
 {
-    float3 image = tex2D(ReShade::BackBuffer, texcoord).rgb;
+    float3 image = tex2D(bb::BackBuffer, texcoord).rgb;
     float3 blurred = ConvolvePixel3x3(texcoord, BoxLPF);
     float3 highPass = image - blurred;
     float3 sharpened = saturate(image + INTENSITY * highPass);

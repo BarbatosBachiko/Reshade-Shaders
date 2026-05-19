@@ -7,9 +7,9 @@
 | Description: Transforms ordinary game visuals    | 
 | into vibrant, high-contrast scenes               |
 '-------------------------------------------------*/
-#include "ReShade.fxh"
-
-#define GetColor(coord) tex2Dlod(ReShade::BackBuffer, float4(coord, 0, 0))
+#include ".\bb_include\bb_reshade.fxh"
+#include ".\bb_include\bb_common.fxh"
+#include ".\bb_include\bb_colorspace.fxh"
 
 /*-------------------.
 | :: Parameters ::   |
@@ -109,8 +109,6 @@ namespace VividTone
         Texture = PREV_LUM;
     };
 
-    static const float3 LUMA = float3(0.2126, 0.7152, 0.0722);
-    
     // Limits
     static const float MinHDR = 1.0; // Neutral Gamma
     static const float MaxHDR = 4.0; // Strong Gamma
@@ -131,11 +129,6 @@ namespace VividTone
 /*----------------.
 | :: Functions :: |
 '----------------*/
-
-    float GetLuminance(float3 color)
-    {
-        return dot(color, LUMA);
-    }
 
     float CalculateSceneLuminance()
     {
@@ -170,7 +163,7 @@ namespace VividTone
     float3 LiftShadows(float3 color, float lift)
     {
         float lum = GetLuminance(color);
-        float shadowMask = pow(1.0 - lum, 2.0);
+        float shadowMask = pow(abs(1.0 - lum), 2.0);
     
         return color + (lift * shadowMask * 0.1);
     }
@@ -185,7 +178,7 @@ namespace VividTone
         float3 brightColor = EnhanceVibrancy(color, BrightSceneVibrancy * brightSceneFactor);
         float midGray = 0.5;
         float realContrast = lerp(0.0, MaxContrast, contrastNorm);
-        brightColor = lerp(brightColor, pow(brightColor / midGray, 1.0 + realContrast * brightSceneFactor) * midGray, 0.5);
+        brightColor = lerp(brightColor, pow(abs(brightColor / midGray), 1.0 + realContrast * brightSceneFactor) * midGray, 0.5);
         color = lerp(darkColor, brightColor, brightSceneFactor);
     
         // Luminance mapping
@@ -213,8 +206,8 @@ namespace VividTone
         float underExp = lerp(2.5, 1.5, brightSceneFactor);
         float overExp = lerp(0.6, 0.8, brightSceneFactor);
     
-        float3 underexposed = pow(color, underExp);
-        float3 overexposed = pow(color, overExp);
+        float3 underexposed = pow(abs(color), underExp);
+        float3 overexposed = pow(abs(color), overExp);
     
         float lum = GetLuminance(color);
         float underWeight = saturate(1.0 - lum * 2.0) * (1.0 - brightSceneFactor * 0.5);

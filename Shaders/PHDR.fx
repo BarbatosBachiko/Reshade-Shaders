@@ -10,7 +10,8 @@
 |  shadows to LDR monitors. It's not true HDR.         | 
 '-----------------------------------------------------*/
 
-#include "ReShade.fxh"
+#include ".\bb_include\bb_reshade.fxh"
+#include ".\bb_include\bb_colorspace.fxh"
 
 //----------|
 // :: UI :: |
@@ -21,7 +22,7 @@ uniform float Strength <
     ui_min = 0.0;
     ui_max = 1.0;
     ui_label = "INTENSITY";
-> = 1.0;
+> = 0.3;
 
 uniform float Radius <
     ui_type = "slider";
@@ -155,11 +156,6 @@ struct VS_OUTPUT
 // :: Functions::|
 //---------------|
 
-float GetLuma(float3 color)
-{
-    return dot(color, float3(0.299, 0.587, 0.114));
-}
-
 // Helper for VIG
 float ScaleFun(float v, float mean_i)
 {
@@ -173,12 +169,12 @@ float ScaleFun(float v, float mean_i)
 
 void PS_Luma(VS_OUTPUT input, out float luma : SV_Target)
 {
-    luma = GetLuma(tex2D(sTexColor, input.uv).rgb);
+    luma = GetLuminance(tex2D(sTexColor, input.uv).rgb);
 }
 
 void PS_CalcMeansH(VS_OUTPUT input, out float2 mean_horiz : SV_Target)
 {
-    float2 ps = ReShade::PixelSize;
+    float2 ps = bb::PixelSize;
     float step = max(1.0, Radius / 3.0);
     
     float2 sum = 0.0;
@@ -196,7 +192,7 @@ void PS_CalcMeansH(VS_OUTPUT input, out float2 mean_horiz : SV_Target)
 
 void PS_CalcMeansV(VS_OUTPUT input, out float2 mean_corr : SV_Target)
 {
-    float2 ps = ReShade::PixelSize;
+    float2 ps = bb::PixelSize;
     float step = max(1.0, Radius / 3.0);
     
     float2 sum = 0.0;

@@ -8,8 +8,9 @@ Description: A performance-focused version of LumaFlow with DX9 compatibility.
 The optimization focused on using the shaders present in my repository; other shaders were not tested.
 */
 
-#include "ReShade.fxh"
-uniform int FRAME_COUNT < source = "framecount"; >;
+#include ".\bb_include\bb_reshade.fxh"
+#include ".\bb_include\bb_common.fxh"
+#include ".\bb_include\bb_depth.fxh"
 
 texture2D texMotionVectors
 {
@@ -239,15 +240,6 @@ namespace Barbatos_Flow_Lite
 //---------------|
 // :: Functions::|
 //---------------|
-    float GetDepth(float2 xy)
-    {
-        return ReShade::GetLinearizedDepth(xy);
-    }
-    float3 GetColor(float2 uv)
-    {
-        return tex2Dlod(ReShade::BackBuffer, float4(uv, 0, 0)).rgb;
-    }
-
     float Cost(sampler2D cur, sampler2D prev, float2 uv, float2 motion, int mip)
     {
         float c = tex2Dlod(cur, float4(uv, 0, mip)).r;
@@ -363,11 +355,11 @@ namespace Barbatos_Flow_Lite
     {
         float2 t = BUFFER_PIXEL_SIZE;
     
-        float l = dot(GetColor(uv), 0.333);
-        l += dot(GetColor(uv + float2(t.x, 0)), 0.333);
-        l += dot(GetColor(uv - float2(t.x, 0)), 0.333);
-        l += dot(GetColor(uv + float2(0, t.y)), 0.333);
-        l += dot(GetColor(uv - float2(0, t.y)), 0.333);
+        float l = dot(GetColor(uv).rgb, 0.333);
+        l += dot(GetColor(uv + float2(t.x, 0)).rgb, 0.333);
+        l += dot(GetColor(uv - float2(t.x, 0)).rgb, 0.333);
+        l += dot(GetColor(uv + float2(0, t.y)).rgb, 0.333);
+        l += dot(GetColor(uv - float2(0, t.y)).rgb, 0.333);
         return l * 0.2;
     }
 
