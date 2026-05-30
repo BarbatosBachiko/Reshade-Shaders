@@ -72,7 +72,7 @@ uniform int RayTraceQuality <
                  "High: 32 steps (Better accuracy)\n"
                  "Extreme: 128 steps (Perfect accuracy, heavy performance impact)";
     ui_type = "combo";
-    ui_items = "Normal (12 steps)\0High (32 steps)\0Extreme (128 steps)\0";
+    ui_items = "Normal (12 steps)\0High (bug)\0Extreme (bug)\0";
 > = 0;
 
 uniform bool EnableRayJitter <
