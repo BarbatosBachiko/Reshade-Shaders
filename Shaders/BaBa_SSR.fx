@@ -1,7 +1,7 @@
 /*----------------------------------------------|
 | | :: Barbatos SSR (Screen-Space Reflections) :: |
 | |-----------------------------------------------|
-| | Version: 1.5.3                                |
+| | Version: 1.5.4                                |
 | | Author: Barbatos                              |
 | | License: MIT                                  |
 | |----------------------------------------------*/
@@ -67,12 +67,12 @@ uniform float OrientationThreshold <
 uniform int RayTraceQuality <
     ui_category = "Reflections";
     ui_label = "Ray Tracing Quality";
-    ui_tooltip = "Defines the amount of steps rays take to find intersections.\n"
-                 "Normal: 12 steps (Good performance)\n"
-                 "High: 32 steps (Better accuracy)\n"
-                 "Extreme: 128 steps (Perfect accuracy, heavy performance impact)";
+    ui_tooltip = "More steps = finer ray march along the same range (not farther).\n"
+                 "Normal: 12 steps, 3 glossy samples\n"
+                 "High: 32 steps, 6 glossy samples\n"
+                 "Extreme: 128 steps, 9 glossy samples";
     ui_type = "combo";
-    ui_items = "Normal (12 steps)\0High (bug)\0Extreme (bug)\0";
+    ui_items = "Normal (12 steps)\0High (32 steps)\0Extreme (128 steps)\0";
 > = 0;
 
 uniform bool EnableRayJitter <
@@ -317,7 +317,7 @@ uniform int ViewMode <
 #endif
 
 #ifndef ENABLE_VNDF
-#define ENABLE_VNDF 1
+#define ENABLE_VNDF 0
 #endif
 
 #ifndef ENABLE_RAY_FALLBACK
@@ -326,6 +326,8 @@ uniform int ViewMode <
 
 // SSR-specific defines
 #define EnableTAAUpscaling 1
+#define SSR_MAX_DIST 4.0
+#define SSR_DIST_FADE 10.0
 
 static const float2 TAA_Offsets[5] =
 {
@@ -533,14 +535,27 @@ namespace Barbatos_SSR152
     // :: Glossy  :: |
     //---------------|
 
-    float3 GetGlossySample(float2 sample_uv, float2 pixel_uv, float local_roughness, float3 n, float2 pScale)
+    int GetGlossySampleCount()
+    {
+        return (RayTraceQuality == 2) ? 9 : ((RayTraceQuality == 1) ? 6 : 3);
+    }
+
+    float3 GetGlossySampleSingle(float2 sample_uv, float2 pixel_uv, float local_roughness, float3 n, float2 pScale, int sampleIndex)
     {
         float netRoughness = saturate(SurfaceGlossiness + (local_roughness * RoughnessDetection));
         if (netRoughness <= 0.001)
             return tex2Dlod(sTexColorCopy, float4(sample_uv, 0, 0)).rgb;
 #if ENABLE_VNDF
+        float2 screen_size = float2(BUFFER_WIDTH, BUFFER_HEIGHT);
+        float2 virtual_vpos = pixel_uv * screen_size;
+        float sampleSeed = float(sampleIndex) * 0.1732 + 0.419;
+        float2 bn_uv = virtual_vpos / 1024.0;
+        float2 golden_offset = float2(0.61803398875, 0.73205080757) * (fmod((float)FRAME_COUNT, 64.0) + sampleSeed);
+        float2 rand_noise = frac(tex2Dlod(sTexBlueNoise, float4(bn_uv + golden_offset, 0, 0)).rg + sampleSeed);
+        float2 offset = ConcentricSquareMapping(rand_noise);
+        float blurRadiusUV = netRoughness * netRoughness * 8.0 * bb::PixelSize;
         float mipLevel = netRoughness * 4.0;
-        return tex2Dlod(sTexColorCopy, float4(sample_uv, 0, mipLevel)).rgb;
+        return tex2Dlod(sTexColorCopy, float4(sample_uv + offset * blurRadiusUV, 0, mipLevel)).rgb;
 #else
         float specularPower = exp2(10.0 * (1.0 - netRoughness) + 1.0);
         float coneTheta = RT_SpecularPowerToConeAngle(specularPower) * 0.5;
@@ -558,11 +573,11 @@ namespace Barbatos_SSR152
 
         float2 virtual_vpos = pixel_uv * screen_size;
         uint pixelIndex = uint(virtual_vpos.y * BUFFER_WIDTH + virtual_vpos.x);
-        uint perFrameSeedBase = uint(FRAME_COUNT);
+        uint perFrameSeedBase = uint(FRAME_COUNT) + uint(sampleIndex) * 7919u;
         float3 blueNoiseSeed = float3(
-            frac(pixelIndex * 0.1031),
-            frac(pixelIndex * 0.11369),
-            frac(pixelIndex * 0.13787)
+            frac(pixelIndex * 0.1031 + float(sampleIndex) * 0.0173),
+            frac(pixelIndex * 0.11369 + float(sampleIndex) * 0.0291),
+            frac(pixelIndex * 0.13787 + float(sampleIndex) * 0.0419)
         );
         float3 seq = float3(
             float2(3242174889u * perFrameSeedBase, 2447445414u * perFrameSeedBase) / 4294967296.0,
@@ -591,7 +606,7 @@ namespace Barbatos_SSR152
 
         float2 offset = ConcentricSquareMapping(rand_noise);
         float2 bn_uv = virtual_vpos / 1024.0;
-        float2 golden_offset = float2(0.61803398875, 0.73205080757) * fmod((float)FRAME_COUNT, 64.0);
+        float2 golden_offset = float2(0.61803398875, 0.73205080757) * (fmod((float)FRAME_COUNT, 64.0) + float(sampleIndex) * 0.37);
         bn_uv += golden_offset;
         float blue_noise_val = tex2Dlod(sTexBlueNoise, float4(bn_uv, 0, 0)).r;
         float scrambleAngle = blue_noise_val * 6.283185307;
@@ -614,6 +629,20 @@ namespace Barbatos_SSR152
 
         return tex2Dlod(sTexColorCopy, float4(sample_uv + offset * blurRadiusUV, 0, mipLevel)).rgb;
 #endif
+    }
+
+    float3 GetGlossySample(float2 sample_uv, float2 pixel_uv, float local_roughness, float3 n, float2 pScale)
+    {
+        int sampleCount = GetGlossySampleCount();
+        float3 accum = 0.0;
+        [loop]
+        for (int s = 0; s < 9; s++)
+        {
+            if (s >= sampleCount)
+                break;
+            accum += GetGlossySampleSingle(sample_uv, pixel_uv, local_roughness, n, pScale, s);
+        }
+        return accum / (float)sampleCount;
     }
     
     //------------|
@@ -872,11 +901,15 @@ namespace Barbatos_SSR152
             return;
         }
 
-        int ray_steps = (RayTraceQuality == 2) ? 128 : ((RayTraceQuality == 1) ? 32 : 12);
-        float max_dist = (RayTraceQuality == 2) ? 100.0 : ((RayTraceQuality == 1) ? 12.0 : 4.0);
-
+        // Same trace range for all qualities; higher tiers add steps for finer intersection only
         float geoThickness = GetThickness(scaled_uv, normal, normalize(viewPos), depth);
-        HitResult hit = TraceRay2D(r, ray_steps, max_dist, pScale, ray_jitter, geoThickness);
+        HitResult hit;
+        if (RayTraceQuality == 2)
+            hit = TraceRay2D(r, 128, SSR_MAX_DIST, pScale, ray_jitter, geoThickness);
+        else if (RayTraceQuality == 1)
+            hit = TraceRay2D(r, 32, SSR_MAX_DIST, pScale, ray_jitter, geoThickness);
+        else
+            hit = TraceRay2D(r, 12, SSR_MAX_DIST, pScale, ray_jitter, geoThickness);
 
         float reflectionAlpha = 0.0;
         float2 finalUV = 0.0;
@@ -884,7 +917,7 @@ namespace Barbatos_SSR152
         if (hit.found)
         {
             finalUV = hit.uv;
-            float distFactor = saturate(1.0 - length(hit.viewPos - viewPos) / 10.0);
+            float distFactor = saturate(1.0 - length(hit.viewPos - viewPos) / SSR_DIST_FADE);
             float depthFade = saturate((FadeDistance - depth) / max(FadeDistance, 0.001));
             depthFade *= depthFade;
             float2 edgeDist = min(hit.uv, 1.0 - hit.uv);
