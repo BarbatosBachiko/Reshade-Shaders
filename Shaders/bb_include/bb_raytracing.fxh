@@ -122,12 +122,17 @@ bool RT_TraceRay(float3 origin, float3 dir, float2 pScale, int num_steps, float 
                 hitDist = length(hitPos - origin);
                 return true;
             }
-            else if (depthDiff < -adaptiveThickness * 3.0)
+            else if (depthDiff > adaptiveThickness)
             {
                 // Deep behind geometry
                 consecutiveMisses++;
                 if (consecutiveMisses >= MAX_MISSES)
                     break;
+            }
+            else
+            {
+                // Ray is in front of geometry
+                consecutiveMisses = 0;
             }
 
             prevRayDepth = rayDepth;
@@ -186,14 +191,20 @@ bool RT_TraceRay(float3 origin, float3 dir, float2 pScale, int num_steps, float 
                 hitDist = length(current - origin);
                 return true;
             }
-            else if (depthDiff < -thickness * 3.0)
+            else if (depthDiff > thickness)
             {
+                // Deep behind geometry
                 consecutiveMisses++;
                 if (consecutiveMisses >= MAX_MISSES_GI)
                 {
                     hitUV = 0.0; hitPos = 0.0; hitDist = 0.0;
                     return false;
                 }
+            }
+            else
+            {
+                // Ray is in front of geometry
+                consecutiveMisses = 0;
             }
 
             lastPos = current;

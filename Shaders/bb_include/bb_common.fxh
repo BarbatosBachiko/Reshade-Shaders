@@ -9,10 +9,7 @@
 #define GetLod(s,c) tex2Dlod(s, float4((c).xy, 0, 0))
 #define fmod(x, y) (frac((x)*rcp(y)) * (y))
 
-// Buffer Macros
-#define BUFFER_PIXEL_SIZE float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT)
-#define BUFFER_SCREEN_SIZE float2(BUFFER_WIDTH, BUFFER_HEIGHT)
-#define BUFFER_ASPECT_RATIO (BUFFER_WIDTH * BUFFER_RCP_HEIGHT)
+
 
 // Constants
 #define PI 3.1415927

@@ -6,13 +6,12 @@
 | License: MIT                                  |
 '----------------------------------------------*/
 
-#include "ReShade.fxh"
-#include "ReShadeUI.fxh"
-#include "Blending.fxh"
-
-#define PI 3.1415927
-#define GetColor(c) tex2Dlod(ReShade::BackBuffer, float4((c).xy, 0.0, 0.0))
-#define GetLod(s,c) tex2Dlod(s, float4((c).xy, 0, 0))
+#include ".\bb_include\bb_reshade.fxh"
+#include ".\bb_include\bb_ui.fxh"
+#include ".\bb_include\bb_colorspace.fxh"
+#include ".\bb_include\bb_common.fxh"
+#include ".\bb_include\bb_depth.fxh"
+#include ".\bb_include\bb_normal.fxh"
 //----------|
 // :: UI :: |
 //----------|
@@ -170,10 +169,7 @@ namespace Barbatos_SSR_Lite34
         float2 uv;
     };
 
-    float GetDepth(float2 uv)
-    {
-        return ReShade::GetLinearizedDepth(uv);
-    }
+
     
     static const float DIELECTRIC_REFLECTANCE = 0.04;
 
@@ -182,10 +178,7 @@ namespace Barbatos_SSR_Lite34
         return f0 + (1.0 - f0) * pow(1.0 - VdotH, 5.0);
     }
 
-    float GetLuminance(float3 linearColor)
-    {
-        return dot(linearColor, float3(0.2126, 0.7152, 0.0722));
-    }
+
 
     float3 AdjustContrast(float3 color, float contrast)
     {
@@ -203,42 +196,7 @@ namespace Barbatos_SSR_Lite34
         return frac(52.9829189 * frac(0.06711056 * pos.x + 0.00583715 * pos.y));
     }
 
-    //------------------------------------|
-    // :: View Space & Normal Functions ::|
-    //------------------------------------|
-    
-    float2 GetProjectionScale()
-    {
-        float fov_rad = VERTICAL_FOV * (PI / 180.0);
-        float y = tan(fov_rad * 0.5);
-        return float2(y * ReShade::AspectRatio, y);
-    }
 
-    float3 UVToViewPos(float2 uv, float view_z, float2 pScale)
-    {
-        float2 ndc = uv * 2.0 - 1.0;
-        return float3(ndc.x * pScale.x * view_z, -ndc.y * pScale.y * view_z, view_z);
-    }
-
-    float2 ViewPosToUV(float3 view_pos, float2 pScale)
-    {
-        float2 ndc = view_pos.xy / (view_pos.z * pScale);
-        return float2(ndc.x, -ndc.y) * 0.5 + 0.5;
-    }
-
-    float3 GVPFUV(float2 uv, float2 pScale)
-    {
-        float depth = GetDepth(uv);
-        return UVToViewPos(uv, depth, pScale);
-    }
-
-    float3 CalculateNormal(float2 texcoord, float2 pScale)
-    {
-        float3 offset_x = GVPFUV(texcoord + float2(ReShade::PixelSize.x, 0.0), pScale);
-        float3 offset_y = GVPFUV(texcoord + float2(0.0, ReShade::PixelSize.y), pScale);
-        float3 center = GVPFUV(texcoord, pScale);
-        return normalize(cross(center - offset_x, center - offset_y));
-    }
     
     SurfaceData CreateSurfaceData(float2 uv, float2 pScale)
     {
@@ -247,7 +205,7 @@ namespace Barbatos_SSR_Lite34
         surface.depth = GetDepth(uv);
         surface.viewPos = UVToViewPos(uv, surface.depth, pScale);
         surface.viewDir = -normalize(surface.viewPos);
-        surface.normal = CalculateNormal(uv, pScale);
+        surface.normal = NM_CalculateNormalSimple(uv, pScale);
         return surface;
     }
 
@@ -334,7 +292,7 @@ namespace Barbatos_SSR_Lite34
             return;
         }
         
-        float2 pScale = GetProjectionScale();
+        float2 pScale = GetProjectionScale(VERTICAL_FOV);
         SurfaceData surface = CreateSurfaceData(scaled_uv, pScale);
         
         if (surface.depth >= 1.0)
@@ -417,7 +375,7 @@ namespace Barbatos_SSR_Lite34
 
     void PS_Output(VS_OUTPUT input, out float4 outColor : SV_Target)
     {
-        float2 pScale = GetProjectionScale();
+        float2 pScale = GetProjectionScale(VERTICAL_FOV);
 
         if (DebugView != 0)
         {
@@ -428,7 +386,7 @@ namespace Barbatos_SSR_Lite34
                     return;
                 case 2:
                     {
-                        float3 debugNormals = CalculateNormal(input.uv, pScale);
+                        float3 debugNormals = NM_CalculateNormalSimple(input.uv, pScale);
                         debugNormals.x = -debugNormals.x;
                         debugNormals.z = -debugNormals.z;
                     
@@ -483,7 +441,7 @@ namespace Barbatos_SSR_Lite34
         else
         {
             float blendAmount = dot(F, float3(0.333, 0.333, 0.334)) * reflectionMask;
-            finalColor = ComHeaders::Blending::Blend(g_BlendMode, originalColor, reflectionColor, blendAmount * Intensity);
+            finalColor = bb::Blending::Blend(g_BlendMode, originalColor, reflectionColor, blendAmount * Intensity);
         }
         
         outColor = float4(finalColor, 1.0);

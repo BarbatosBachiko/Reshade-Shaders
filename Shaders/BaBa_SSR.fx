@@ -930,11 +930,11 @@ namespace Barbatos_SSR152
             reflectionAlpha *= geoMask;
         }
 #if ENABLE_RAY_FALLBACK
-        else
+        else if (r.direction.y > 0.0) // Only trigger fallback for rays pointing up (towards sky)
         {
             float adaptiveDist = min(depth * 1.2 + 0.012, 10.0);
             finalUV = saturate(ViewPosToUV(viewPos + r.direction * adaptiveDist, pScale).xy);
-            reflectionAlpha = smoothstep(0.0, 0.2, 1.0 - scaled_uv.y);
+            reflectionAlpha = smoothstep(0.0, 0.2, 1.0 - scaled_uv.y) * saturate(r.direction.y * 5.0);
         }
 #endif
 
