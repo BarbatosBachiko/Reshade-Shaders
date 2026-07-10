@@ -33,8 +33,8 @@
     (*) Feature (+) Improvement (x) Bugfix (-) Information (!) Compatibility
 */
 
-#include ".\bb_include\bb_reshade.fxh"
-#include ".\bb_include\bb_colorspace.fxh"
+#include ".\Includes\bb_reshade.fxh"
+#include ".\Includes\bb_colorspace.fxh"
 
 // Kernel configuration
 static const int K = 2; // radius of 5x5 kernel
@@ -98,9 +98,9 @@ namespace NEOSPACE
         Texture = ColorTex;
     };
 
-/*----------------.
-| :: Functions :: |
-'----------------*/
+//----------------|
+// :: Functions ::|
+//----------------|
 
     // YUV -> RGB conversion (NV12 support)
     float3 YUVtoRGB(float3 yuv)

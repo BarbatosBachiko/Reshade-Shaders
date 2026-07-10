@@ -10,10 +10,10 @@
 | Flow shader derived from LumaFlow.            |
 '----------------------------------------------*/
 
-#include ".\bb_include\bb_reshade.fxh"
-#include ".\bb_include\bb_common.fxh"
-#include ".\bb_include\bb_depth.fxh"
-#include ".\bb_include\bb_colorspace.fxh"
+#include ".\Includes\bb_reshade.fxh"
+#include ".\Includes\bb_common.fxh"
+#include ".\Includes\bb_colorspace.fxh"
+#include ".\Includes\bb_depth.fxh"
 
 #ifndef BABAFLOW_QUALITY
     #define BABAFLOW_QUALITY 2 
@@ -200,9 +200,9 @@ namespace Barbatos_Flow
     sampler2D sConfidence { Texture = tConfidence; MagFilter = POINT; MinFilter = POINT; AddressU = CLAMP; AddressV = CLAMP;
     AddressW = CLAMP; };
 
-    //-----------------|
-    // :: Functions :: |
-    //-----------------|
+    //----------------|
+    // :: Functions ::|
+    //----------------|
     float3 MotionToColor(float2 motion)
     {
         float angle = atan2(-motion.y, -motion.x) / 6.283 + 0.5;

@@ -6,17 +6,17 @@
 | License: MIT                                  |
 '----------------------------------------------*/
 
-#include ".\bb_include\bb_reshade.fxh"
+#include ".\Includes\bb_reshade.fxh"
 #define USE_HALF 1
-#include ".\bb_include\bb_common.fxh"
-#include ".\bb_include\bb_depth.fxh"
-#include ".\bb_include\bb_normal.fxh"
-#include ".\bb_include\bb_noise.fxh"
-#include ".\bb_include\bb_raytracing.fxh"
-#include ".\bb_include\bb_colorspace.fxh"
-#include ".\bb_include\bb_mv.fxh"
-#include ".\bb_include\bb_taa.fxh"
-#include ".\bb_include\bb_vertex.fxh"
+#include ".\Includes\bb_common.fxh"
+#include ".\Includes\bb_colorspace.fxh"
+#include ".\Includes\bb_depth.fxh"
+#include ".\Includes\bb_normal.fxh"
+#include ".\Includes\bb_noise.fxh"
+#include ".\Includes\bb_raytracing.fxh"
+#include ".\Includes\bb_mv.fxh"
+#include ".\Includes\bb_taa.fxh"
+#include ".\Includes\bb_vertex.fxh"
 
 //----------|
 // :: UI :: |
@@ -402,21 +402,7 @@ namespace Barbatos_RTGI_150
         MipFilter = LINEAR;
     };
 
-    texture TexBlueNoise < source = "SS_BN3.png"; >
-    {
-        Width = 1024;
-        Height = 1024;
-        Format = RGBA8;
-    };
-    sampler sTexBlueNoise
-    {
-        Texture = TexBlueNoise;
-        AddressU = Repeat;
-        AddressV = Repeat;
-        MagFilter = POINT;
-        MinFilter = POINT;
-        MipFilter = POINT;
-    };
+#include ".\Includes\bb_bluenoise.fxh"
 
     texture RS_Prev
     {
@@ -440,9 +426,9 @@ namespace Barbatos_RTGI_150
         VS_Barbatos_FullScreen(id, outStruct, VERTICAL_FOV);
     }
     
-    //-----------------|
-    // :: Functions :: |
-    //-----------------|
+    //----------------|
+    // :: Functions ::|
+    //----------------|
 
     float3 GetFalseColor(float luminance)
     {

@@ -8,11 +8,11 @@
 | Residual multi-scale unsharp sharpening       |
 '----------------------------------------------*/
 
-#include ".\bb_include\bb_reshade.fxh"
+#include ".\Includes\bb_reshade.fxh"
 #define USE_HALF 1
-#include ".\bb_include\bb_common.fxh"
-#include ".\bb_include\bb_colorspace.fxh"
-#include ".\bb_include\bb_vertex.fxh"
+#include ".\Includes\bb_common.fxh"
+#include ".\Includes\bb_colorspace.fxh"
+#include ".\Includes\bb_vertex.fxh"
 
 //----------|
 // :: UI :: |
@@ -111,9 +111,9 @@ namespace Barbatos_Sharpen
         VS_Barbatos_FullScreen(id, outStruct, 60.0);
     }
 
-    //-----------------|
-    // :: Functions :: |
-    //-----------------|
+    //----------------|
+    // :: Functions ::|
+    //----------------|
 
     float GetLuma(float3 rgb)
     {

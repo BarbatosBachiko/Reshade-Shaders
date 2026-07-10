@@ -9,8 +9,6 @@
 #define GetLod(s,c) tex2Dlod(s, float4((c).xy, 0, 0))
 #define fmod(x, y) (frac((x)*rcp(y)) * (y))
 
-
-
 // Constants
 #define PI 3.1415927
 #define FAR_PLANE RESHADE_DEPTH_LINEARIZATION_FAR_PLANE

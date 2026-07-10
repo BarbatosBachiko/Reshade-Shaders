@@ -7,12 +7,16 @@
 | 12-Channel Neural Network Ver 2.8             |
 |----------------------------------------------*/
 
-#include "bb_reshade.fxh"
+#include ".\Includes\bb_reshade.fxh"
 
 namespace Barbatos_ModelAB
 {
 
-#include "ModelAB_weights.fxh"
+#include ".\Includes\Sharpen_Neural\ModelAB_weights.fxh"
+
+//----------|
+// :: UI :: |
+//----------|
 
 uniform int ModelSelector <
     ui_type = "combo";
@@ -44,8 +48,16 @@ uniform float EdgeResponse <
     ui_tooltip = "Controls how sharpening adapts to detected edges. Negative = smooth edges, Positive = enhance edges, 0 = uniform";
 > = 0.0;
 
+//----------------|
+// :: Textures :: |
+//----------------|
+
 texture TexLuma { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = R16F; };
 sampler sTexLuma { Texture = TexLuma; };
+
+//----------------|
+// :: Functions ::|
+//----------------|
 
 float GetLuma(float3 rgb) { return dot(rgb, float3(0.299, 0.587, 0.114)); }
 
@@ -338,6 +350,10 @@ void PS_Apply(float4 vpos : SV_Position, float2 uv : TexCoord, out float4 outCol
 
     outColor = float4(finalColor, 1.0);
 }
+
+//-----------------|
+// :: Techniques ::|
+//-----------------|
 
 technique BaBa_NeuralSharpen_28
 <

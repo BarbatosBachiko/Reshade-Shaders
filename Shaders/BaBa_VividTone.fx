@@ -7,9 +7,9 @@
 | Description: Transforms ordinary game visuals    | 
 | into vibrant, high-contrast scenes               |
 '-------------------------------------------------*/
-#include ".\bb_include\bb_reshade.fxh"
-#include ".\bb_include\bb_common.fxh"
-#include ".\bb_include\bb_colorspace.fxh"
+#include ".\Includes\bb_reshade.fxh"
+#include ".\Includes\bb_common.fxh"
+#include ".\Includes\bb_colorspace.fxh"
 
 /*-------------------.
 | :: Parameters ::   |
@@ -81,9 +81,9 @@ uniform float AdaptationRate <
 
 uniform float FrameTime < source = "frametime"; >;
 
-/*---------------.
-| :: Textures :: |
-'---------------*/
+//----------------|
+// :: Textures :: |
+//----------------|
 
 namespace VividTone
 {
@@ -126,9 +126,9 @@ namespace VividTone
     static const float AdaptiveStrength = 0.5;
     static const float BrightSceneVibrancy = 0.0;
 
-/*----------------.
-| :: Functions :: |
-'----------------*/
+//----------------|
+// :: Functions ::|
+//----------------|
 
     float CalculateSceneLuminance()
     {

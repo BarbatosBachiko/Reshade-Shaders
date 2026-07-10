@@ -10,8 +10,8 @@
 |  shadows to LDR monitors. It's not true HDR.         | 
 '-----------------------------------------------------*/
 
-#include ".\bb_include\bb_reshade.fxh"
-#include ".\bb_include\bb_colorspace.fxh"
+#include ".\Includes\bb_reshade.fxh"
+#include ".\Includes\bb_colorspace.fxh"
 
 //----------|
 // :: UI :: |
@@ -152,9 +152,9 @@ struct VS_OUTPUT
     float2 uv : TEXCOORD0;
 };
 
-//---------------|
-// :: Functions::|
-//---------------|
+//----------------|
+// :: Functions ::|
+//----------------|
 
 // Helper for VIG
 float ScaleFun(float v, float mean_i)

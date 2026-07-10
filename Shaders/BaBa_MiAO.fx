@@ -26,14 +26,14 @@ THE SOFTWARE.
 | posed content from FidelityFX CACAO              |
 '-------------------------------------------------*/
 
-#include ".\bb_include\bb_reshade.fxh"
-#include ".\bb_include\bb_ui.fxh"
-#include ".\bb_include\bb_mv.fxh"
-#include ".\bb_include\bb_colorspace.fxh"
-#include ".\bb_include\bb_common.fxh"
-#include ".\bb_include\bb_depth.fxh"
-#include ".\bb_include\bb_normal.fxh"
-#include ".\bb_include\bb_vertex.fxh"
+#include ".\Includes\bb_reshade.fxh"
+#include ".\Includes\bb_ui.fxh"
+#include ".\Includes\bb_common.fxh"
+#include ".\Includes\bb_colorspace.fxh"
+#include ".\Includes\bb_depth.fxh"
+#include ".\Includes\bb_normal.fxh"
+#include ".\Includes\bb_mv.fxh"
+#include ".\Includes\bb_vertex.fxh"
 
 //--------------------|
 // :: Preprocessor :: |
@@ -265,70 +265,11 @@ namespace MiAO155
         MinFilter = POINT;
     };
 
-#if USE_HILBERT_LUT
-    texture texHilbertLUT < source = "Barbatos_Hilbert_RGB.png"; >
-    {
-        Width = 64;
-        Height = 64;
-        Format = RGBA8;
-    };
-    sampler sHilbertLUT
-    {
-        Texture = texHilbertLUT;
-        AddressU = Wrap;
-        AddressV = Wrap;
-        MagFilter = POINT;
-        MinFilter = POINT;
-        MipFilter = POINT;
-    };
-#endif
-    
+#include ".\Includes\bb_hilbert.fxh"
+
 //----------------|
 // :: Functions ::|
 //----------------|
-#if !USE_HILBERT_LUT
-    float hilbert(float2 p, int level)
-    {
-        float d = 0;
-        for (int k = 0; k < level; k++)
-        {
-            int n = level - k - 1;
-            float n_pow2 = exp2(n);
-            float2 r = fmod(floor(p / n_pow2), 2.0);
-            float term = r.y + r.x * (3.0 - 2.0 * r.y);
-            d += term * exp2(2 * n);
-            if (r.y < 0.5)
-            {
-                if (r.x > 0.5)
-                {
-                    p = n_pow2 - 1.0 - p;
-                }
-                p = p.yx;
-            }
-        }
-        return d;
-    }
-
-    uint HilbertIndex(uint x, uint y)
-    {
-        return (uint)hilbert(float2(x % 64, y % 64), 6);
-    }
-#endif
-
-    float2 SpatioTemporalNoise(uint2 pixCoord, uint temporalIndex)
-    {
-        uint index;
-#if USE_HILBERT_LUT
-        float4 encodedVal = tex2Dfetch(sHilbertLUT, int2(pixCoord.x % 64, pixCoord.y % 64));
-        uint high_byte = (uint) (encodedVal.r * 255.0 + 0.1);
-        uint low_byte = (uint) (encodedVal.g * 255.0 + 0.1);
-        index = (high_byte * 256) + low_byte;
-#else
-        index = HilbertIndex(pixCoord.x, pixCoord.y);
-#endif
-        index += 288 * (temporalIndex % 64);
-        return frac(0.5 + index * R2);
-    }
 
     float ScreenSpaceToViewSpaceDepth(float screenDepth)
     {

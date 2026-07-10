@@ -46,7 +46,6 @@
 // Depth Functions
 float GetDepth(float2 xy)
 {
-    // Clamp to prevent reading outside screen bounds which can wrap around
     xy = clamp(xy, 0.0, 1.0);
     return bb::GetLinearizedDepth(xy);
 }

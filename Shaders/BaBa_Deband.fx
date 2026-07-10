@@ -6,9 +6,9 @@
 | License: MIT                                  |
 '----------------------------------------------*/
 
-#include ".\bb_include\bb_reshade.fxh"
-#include ".\bb_include\bb_common.fxh"
-#include ".\bb_include\bb_colorspace.fxh"
+#include ".\Includes\bb_reshade.fxh"
+#include ".\Includes\bb_common.fxh"
+#include ".\Includes\bb_colorspace.fxh"
 
 //----------|
 // :: UI :: |
@@ -47,9 +47,9 @@ uniform int Iterations <
 
 static const float ANGLE_OFFSETS[3] = { 0.0, 2.09439510239, 4.18879020478 };
 
-/*------------------.
-| :: Functions ::   |
-'------------------*/
+//----------------|
+// :: Functions ::|
+//----------------|
 
 float2 GetDirection(float base_angle, int iteration)
 {

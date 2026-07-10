@@ -8,9 +8,9 @@ Description: A performance-focused version of LumaFlow with DX9 compatibility.
 The optimization focused on using the shaders present in my repository; other shaders were not tested.
 */
 
-#include ".\bb_include\bb_reshade.fxh"
-#include ".\bb_include\bb_common.fxh"
-#include ".\bb_include\bb_depth.fxh"
+#include ".\Includes\bb_reshade.fxh"
+#include ".\Includes\bb_common.fxh"
+#include ".\Includes\bb_depth.fxh"
 
 texture2D texMotionVectors
 {
@@ -237,9 +237,9 @@ namespace Barbatos_Flow_Lite
     };
 
 
-//---------------|
-// :: Functions::|
-//---------------|
+//----------------|
+// :: Functions ::|
+//----------------|
     float Cost(sampler2D cur, sampler2D prev, float2 uv, float2 motion, int mip)
     {
         float c = tex2Dlod(cur, float4(uv, 0, mip)).r;

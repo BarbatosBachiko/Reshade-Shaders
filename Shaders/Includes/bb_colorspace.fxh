@@ -151,8 +151,6 @@ float3 Input2Linear(float3 color)
         return sRGB2Linear(color);
 }
 
-// Extracts pure linear albedo for physically based raytracing,
-// bypassing ITM expansion that would turn surfaces into emitters
 float3 GetStrictLinearAlbedo(float3 color)
 {
     if (GetHDRMode() != 1)

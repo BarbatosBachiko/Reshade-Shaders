@@ -61,9 +61,9 @@ namespace uFakeHDR
         Texture = BackBufferTex;
     };
     
-/*------------------.
-| :: Functions ::   |
-'------------------*/
+//----------------|
+// :: Functions ::|
+//----------------|
 
     struct VSOUT
     {

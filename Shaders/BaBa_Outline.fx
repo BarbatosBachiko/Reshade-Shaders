@@ -8,12 +8,12 @@
 | from BBFX                                     |   
 '----------------------------------------------*/
 
-#include ".\bb_include\bb_reshade.fxh"
-#include ".\bb_include\bb_colorspace.fxh"
+#include ".\Includes\bb_reshade.fxh"
+#include ".\Includes\bb_colorspace.fxh"
 
-//-----------|
-// :: UI ::  |
-//-----------|
+//----------|
+// :: UI :: |
+//----------|
 
 uniform float OutlineIntensity <
     ui_type = "drag";
@@ -121,9 +121,9 @@ uniform int DebugView <
 
 uniform float timer < source = "timer"; >;
 
-//-------------------|
-// :: Functions ::   |
-//-------------------|
+//----------------|
+// :: Functions ::|
+//----------------|
 
 float GetDepth(float2 uv)
 {
