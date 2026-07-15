@@ -27,9 +27,9 @@ uniform float Strength <
 > = 1.0;
 
 uniform bool EnableTemporal <
-    ui_label = "Enable Temporal";
+    ui_label = "Enable Temporal AA";
     ui_tooltip = "TAA after spatial DLAA. Prefer BaBa_Flow (or other MV) earlier in the preset.";
-> = true;
+> = false;
 
 uniform float TemporalStability <
     ui_type = "slider";
