@@ -10,6 +10,7 @@
 
 #include ".\Includes\bb_reshade.fxh"
 #include ".\Includes\bb_colorspace.fxh"
+#include ".\Includes\bb_depth.fxh"
 
 //----------|
 // :: UI :: |
@@ -125,11 +126,6 @@ uniform float timer < source = "timer"; >;
 // :: Functions ::|
 //----------------|
 
-float GetDepth(float2 uv)
-{
-    return bb::GetLinearizedDepth(uv);
-}
-
 float GetColorDifference(float3 color1, float3 color2)
 {
     if (ColorDetectionMode == 0) // 0 = Luminance
@@ -232,6 +228,9 @@ void PS_OutlineOnly(float4 vpos : SV_Position, float2 uv : TEXCOORD, out float4 
 technique BaBa_S_Outline
 <
     ui_label = "BaBa: S Outline";
+    ui_tooltip = "Requires 'BaBa: Launcher' enabled ABOVE this effect in the list.\n"
+                 "Without it, depth will be invalid and the effect won't work correctly.\n"
+                 "To run standalone instead, set 'BABA_USE_LEGACY_PIPELINE' to 1 in the preprocessor definitions.";
 >
 {
     pass Outline

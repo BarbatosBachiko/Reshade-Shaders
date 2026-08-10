@@ -59,9 +59,7 @@ static const float kDetectThres = 0.01; // minimum edge strength
 #endif
 
 // Filters
-#define kSupportSize 5
 #define kEps 1e-4f
-#define kBaseEps 1e-4f
 
 // Edge
 #define kMinContrastRatio 2.0f
@@ -71,10 +69,6 @@ static const float kDetectThres = 0.01; // minimum edge strength
 // Adaptative Sharpness
 #define kSharpStartY 0.5f
 #define kSharpScaleY 1.0f
-
-// HDR
-#define HDR_COMPRESSION_FACTOR 1.0
-#define kEpsHDR (1e-4f * HDR_COMPRESSION_FACTOR * HDR_COMPRESSION_FACTOR)
 
 
 /*---------------.
@@ -90,7 +84,7 @@ uniform float SharpStrength <
     ui_category = "Sharpen";
 > = 2.000;
 
-namespace NEOSPACE
+namespace BaBa_NVSharpen
 {
     texture ColorTex : COLOR;
     sampler sColor

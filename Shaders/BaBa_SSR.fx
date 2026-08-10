@@ -1,7 +1,7 @@
-/*----------------------------------------------|
+/*------------------------------------------------|
 | | :: Barbatos SSR (Screen-Space Reflections) :: |
 | |-----------------------------------------------|
-| | Version: 1.5.4                                |
+| | Version: 1.5.5                                |
 | | Author: Barbatos                              |
 | | License: MIT                                  |
 | |----------------------------------------------*/
@@ -17,6 +17,18 @@
 #include ".\Includes\bb_mv.fxh"
 #include ".\Includes\bb_taa.fxh"
 #include ".\Includes\bb_vertex.fxh"
+
+#if defined(ENABLE_VNDF) && ENABLE_VNDF
+    #define _BABA_ENABLE_VNDF 1
+#else
+    #define _BABA_ENABLE_VNDF 0
+#endif
+
+#if defined(ENABLE_RAY_FALLBACK) && ENABLE_RAY_FALLBACK
+    #define _BABA_ENABLE_RAY_FALLBACK 1
+#else
+    #define _BABA_ENABLE_RAY_FALLBACK 0
+#endif
 
 //----------|
 // :: UI :: |
@@ -108,7 +120,7 @@ uniform float SurfaceGlossiness <
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
 > = 0.30;
 
-#if !ENABLE_VNDF
+#if !_BABA_ENABLE_VNDF
 uniform float Anisotropy <
     ui_category = "Material";
     ui_label = "Anisotropic Stretching";
@@ -309,19 +321,11 @@ uniform int ViewMode <
     ui_label = "Debug View";
     ui_tooltip = "Visualize specific render passes to aid in tweaking and debugging.";
     ui_type = "combo";
-    ui_items = "Off\0Reflections Only\0Surface Normals\0Depth View\0Motion Vectors\0Motion Confidence\0";
+    ui_items = "Off\0Reflections Only\0Motion Vectors\0Motion Confidence\0";
 > = 0;
 
 #ifndef BUFFER_COLOR_SPACE
 #define BUFFER_COLOR_SPACE 0
-#endif
-
-#ifndef ENABLE_VNDF
-#define ENABLE_VNDF 0
-#endif
-
-#ifndef ENABLE_RAY_FALLBACK
-#define ENABLE_RAY_FALLBACK 0
 #endif
 
 // SSR-specific defines
@@ -338,8 +342,32 @@ static const float2 TAA_Offsets[5] =
 // :: Textures :: |
 //----------------|
 
-namespace Barbatos_SSR152
+namespace BaBa_SSR
 {
+#if _BABA_USE_LAUNCHER
+    texture NormalMaterial
+    {
+        Width = BUFFER_WIDTH;
+        Height = BUFFER_HEIGHT;
+        Format = RGBA16F;
+        MipLevels = 6;
+    };
+
+    sampler sNormal
+    {
+        Texture = NormalMaterial;
+        MipFilter = LINEAR;
+    };
+
+    // The Launcher's geometric publication, not NormalMap: NormalMap already carries
+    // the shared "Textured Normals" bump and PS_MaterialResolve adds its own from
+    // the same gradient.
+    sampler sNormal1
+    {
+        Texture = BaBa_Launcher::NormalSmoothV;
+        MipFilter = LINEAR;
+    };
+#else
     texture Normal
     {
         Width = BUFFER_WIDTH;
@@ -364,6 +392,7 @@ namespace Barbatos_SSR152
     {
         Texture = Normal1;
     };
+#endif
     
     texture RayData
     {
@@ -459,22 +488,15 @@ namespace Barbatos_SSR152
         VS_Barbatos_FullScreen(id, outStruct, VERTICAL_FOV);
     }
 
+    // Pin fovDegrees to VERTICAL_FOV and forward to the shared VS_Accumulate0/1.
     void VS_Accumulate0(in uint id : SV_VertexID, out VS_OUTPUT outStruct)
     {
-        VS_Barbatos_FullScreen(id, outStruct, VERTICAL_FOV);
-        if (fmod((float) FRAME_COUNT, 2.0) > 0.5)
-        {
-            outStruct.vpos = float4(-10000.0, -10000.0, 0.0, 0.0);
-        }
+        VS_Accumulate0(id, outStruct, VERTICAL_FOV);
     }
     
     void VS_Accumulate1(in uint id : SV_VertexID, out VS_OUTPUT outStruct)
     {
-        VS_Barbatos_FullScreen(id, outStruct, VERTICAL_FOV);
-        if (fmod((float) FRAME_COUNT, 2.0) < 0.5)
-        {
-            outStruct.vpos = float4(-10000.0, -10000.0, 0.0, 0.0);
-        }
+        VS_Accumulate1(id, outStruct, VERTICAL_FOV);
     }
 
     //------------|
@@ -528,10 +550,17 @@ namespace Barbatos_SSR152
 
     float3 GetGlossySampleSingle(float2 sample_uv, float2 pixel_uv, float local_roughness, float3 n, float2 pScale, int sampleIndex)
     {
+        // Single exit: an early return from a branch on a runtime value makes
+        // ReShade lower this into a return slot that the D3D compiler then reports
+        // as potentially uninitialized (X4000).
+        // Single exit: an early return from a branch on a runtime value makes
+        // ReShade lower this into a return slot that the D3D compiler then reports
+        // as potentially uninitialized (X4000).
         float netRoughness = saturate(SurfaceGlossiness + (local_roughness * RoughnessDetection));
-        if (netRoughness <= 0.001)
-            return tex2Dlod(sTexColorCopy, float4(sample_uv, 0, 0)).rgb;
-#if ENABLE_VNDF
+        float3 result = tex2Dlod(sTexColorCopy, float4(sample_uv, 0, 0)).rgb;
+        if (netRoughness > 0.001)
+        {
+#if _BABA_ENABLE_VNDF
         float2 screen_size = float2(BUFFER_WIDTH, BUFFER_HEIGHT);
         float2 virtual_vpos = pixel_uv * screen_size;
         float sampleSeed = float(sampleIndex) * 0.1732 + 0.419;
@@ -541,7 +570,7 @@ namespace Barbatos_SSR152
         float2 offset = ConcentricSquareMapping(rand_noise);
         float blurRadiusUV = netRoughness * netRoughness * 8.0 * bb::PixelSize;
         float mipLevel = netRoughness * 4.0;
-        return tex2Dlod(sTexColorCopy, float4(sample_uv + offset * blurRadiusUV, 0, mipLevel)).rgb;
+        result = tex2Dlod(sTexColorCopy, float4(sample_uv + offset * blurRadiusUV, 0, mipLevel)).rgb;
 #else
         float specularPower = exp2(10.0 * (1.0 - netRoughness) + 1.0);
         float coneTheta = RT_SpecularPowerToConeAngle(specularPower) * 0.5;
@@ -581,8 +610,9 @@ namespace Barbatos_SSR152
         {
             anisoScaleX = 1.0 + (Anisotropy * 15.0);
             anisoScaleY = 1.0 / (1.0 + Anisotropy * 2.0);
-            float NdotUp = dot(n, float3(0, 0, 0));
-            float3 refAxis = abs(NdotUp) < 0.9 ? float3(0, 0, 1) : float3(0, 0, 1);
+            // Reference axis is the view/depth axis, so the anisotropic streak reads as
+            // view-relative instead of a plain blur.
+            float3 refAxis = float3(0, 0, 1);
             float3 tangentUp = normalize(refAxis - n * dot(n, refAxis));
             float2 screenTangent = float2(tangentUp.x / max(pScale.x, 1e-6),
                                          -tangentUp.y / max(pScale.y, 1e-6));
@@ -613,8 +643,11 @@ namespace Barbatos_SSR152
             offset = rotatedOffset;
         }
 
-        return tex2Dlod(sTexColorCopy, float4(sample_uv + offset * blurRadiusUV, 0, mipLevel)).rgb;
+        result = tex2Dlod(sTexColorCopy, float4(sample_uv + offset * blurRadiusUV, 0, mipLevel)).rgb;
 #endif
+        }
+
+        return result;
     }
 
     float3 GetGlossySample(float2 sample_uv, float2 pixel_uv, float local_roughness, float3 n, float2 pScale)
@@ -643,7 +676,13 @@ namespace Barbatos_SSR152
 
     float4 JointBilateralUpsample(float2 uv, float highDepth, float2 pScale)
     {
-        return TAA_JointBilateralUpsample(uv, highDepth, pScale, RenderResolution, sHistory0, sNormal);
+        // Single exit: see the note on GetGlossySampleSingle above.
+        float4 result;
+        if ((uint(FRAME_COUNT) % 2u) == 0u)
+            result = TAA_JointBilateralUpsample(uv, highDepth, pScale, RenderResolution, sHistory0, sNormal);
+        else
+            result = TAA_JointBilateralUpsample(uv, highDepth, pScale, RenderResolution, sHistory1, sNormal);
+        return result;
     }
 
     float4 ComputeTAA(VS_OUTPUT input, sampler sHistoryParams)
@@ -652,7 +691,7 @@ namespace Barbatos_SSR152
             discard;
 
         float2 viewUV = input.uv / RenderResolution;
-        float depth = GetDepth(viewUV);
+        float depth = TAA_GetStableDepth(viewUV, GetDepth(viewUV));
         if (depth >= 0.999)
             return 0.0;
 
@@ -683,7 +722,10 @@ namespace Barbatos_SSR152
         TAA_ComputeNeighborhoodVariance(sReflection, input.uv, current_reflection, lowres_px, color_min, color_max);
 
         float raw_confidence = saturate(MV_GetConfidence(viewUV));
-        float relax_amount = 0.15 * raw_confidence;
+        float normal_confidence = TAA_GetNormalHistoryConfidence(
+            viewUV, reprojected_view_uv, depth, raw_confidence);
+
+        float relax_amount = 0.15 * normal_confidence;
         color_min.rgb -= relax_amount;
         color_max.rgb += relax_amount;
 
@@ -693,7 +735,7 @@ namespace Barbatos_SSR152
         float blend_adapt = saturate(1.0 - clamp_distance * 2.0); 
         
         float frames = max(1.0, (float)MaxFrames);
-        float blendVal = raw_confidence * (frames / (frames + 1.0));
+        float blendVal = normal_confidence * (frames / (frames + 1.0));
         float final_feedback = blendVal * lerp(0.8, 1.0, blend_adapt);
 
         if (EnableAntiSmear)
@@ -719,7 +761,7 @@ namespace Barbatos_SSR152
     //--------------------|
     void PS_GenNormals(VS_OUTPUT input, out float4 outNormal : SV_Target)
     {
-        float depth = GetDepth(input.uv);
+        float depth = TAA_GetStableDepth(input.uv, GetDepth(input.uv));
         if (depth >= 1.0)
         {
             outNormal = float4(0.0, 0.0, 1.0, 1.0);
@@ -763,10 +805,12 @@ namespace Barbatos_SSR152
         float4 centerNormal = GetLod(sNormal1, input.uv);
         float4 smoothed = centerNormal;
         
+#if !_BABA_USE_LAUNCHER
         if (SmartSurfaceMode != 0 && centerNormal.a < 0.999)
         {
             smoothed = ComputeSmoothedNormal(input.uv, float2(0, 1), sNormal1);
         }
+#endif
         
         float depth = smoothed.a;
         float3 normal = smoothed.rgb;
@@ -775,10 +819,10 @@ namespace Barbatos_SSR152
         // Scharr Filter
         if (SurfaceDetails > 0.0 || GeoCorrectionIntensity > 0.0 || RoughnessDetection > 0.0)
         {
-            float4 pTL = tex2Dgather(bb::BackBuffer, input.uv - bb::PixelSize * 0.5, 1);
-            float4 pTR = tex2Dgather(bb::BackBuffer, input.uv + float2(bb::PixelSize.x, -bb::PixelSize.y) * 0.5, 1);
-            float4 pBL = tex2Dgather(bb::BackBuffer, input.uv + float2(-bb::PixelSize.x, bb::PixelSize.y) * 0.5, 1);
-            float4 pBR = tex2Dgather(bb::BackBuffer, input.uv + bb::PixelSize * 0.5, 1);
+            float4 pTL = tex2DgatherG(bb::BackBuffer, input.uv - bb::PixelSize * 0.5);
+            float4 pTR = tex2DgatherG(bb::BackBuffer, input.uv + float2(bb::PixelSize.x, -bb::PixelSize.y) * 0.5);
+            float4 pBL = tex2DgatherG(bb::BackBuffer, input.uv + float2(-bb::PixelSize.x, bb::PixelSize.y) * 0.5);
+            float4 pBR = tex2DgatherG(bb::BackBuffer, input.uv + bb::PixelSize * 0.5);
 
             float Gx = (3.0 * pTR.z + 10.0 * pBR.z + 3.0 * pBR.y) - (3.0 * pTL.w + 10.0 * pTL.x + 3.0 * pBL.x);
             float Gy = (3.0 * pBL.x + 10.0 * pBL.y + 3.0 * pBR.y) - (3.0 * pTL.w + 10.0 * pTL.z + 3.0 * pTR.z);
@@ -810,7 +854,6 @@ namespace Barbatos_SSR152
             }
         }
 
-        normal.x = -normal.x;
         outNormal = float4(normal, depth);
         outColor  = float4(baseColor, roughness);
     }
@@ -866,7 +909,7 @@ namespace Barbatos_SSR152
         Ray r;
         r.origin = viewPos;
 
-#if ENABLE_VNDF
+#if _BABA_ENABLE_VNDF
         float netRoughness = saturate(SurfaceGlossiness + (estimatedRoughness * RoughnessDetection)) * 0.5;
         float2 golden_offset = float2(0.61803398875, 0.73205080757) * frame;
         float3 stbn_noise = tex2Dlod(sTexBlueNoise, float4(bn_uv + golden_offset, 0, 0)).rgb;
@@ -915,7 +958,7 @@ namespace Barbatos_SSR152
             float geoMask = 1.0 - smoothstep(0.05, EDGE_MASK_THRESHOLD, length(normal - nR) + length(normal - nD));
             reflectionAlpha *= geoMask;
         }
-#if ENABLE_RAY_FALLBACK
+#if _BABA_ENABLE_RAY_FALLBACK
         else if (r.direction.y > 0.0) // Only trigger fallback for rays pointing up (towards sky)
         {
             float adaptiveDist = min(depth * 1.2 + 0.012, 10.0);
@@ -1002,27 +1045,13 @@ namespace Barbatos_SSR152
             }
             else if (ViewMode == 2)
             {
-                float3 debugNormals = SampleGBuffer(input.uv).rgb;
-                if (GetDepth(input.uv) < 0.999)
-                {
-                    debugNormals.x = -debugNormals.x;
-                    debugNormals.z = -debugNormals.z;
-                }
-                debugColor = debugNormals * 0.5 + 0.5;
-            }
-            else if (ViewMode == 3)
-            {
-                debugColor = SampleGBuffer(input.uv).aaa;
-            }
-            else if (ViewMode == 4)
-            {
                 float2 m = SampleMotionVectors(input.uv);
                 float v_mag = length(m) * 100.0;
                 float a = atan2(m.y, m.x);
                 float3 hsv_color = HSVToRGB(float3((a / (2.0 * PI)) + 0.5, 1.0, 1.0));
                 debugColor = lerp(float3(0.5, 0.5, 0.5), hsv_color, saturate(v_mag));
             }
-            else if (ViewMode == 5)
+            else if (ViewMode == 3)
             {
                 float conf = MV_GetConfidence(input.uv);
                 debugColor = conf.xxx;
@@ -1033,6 +1062,9 @@ namespace Barbatos_SSR152
         }
 
         float depth = GetDepth(input.uv);
+#if _BABA_USE_LAUNCHER
+        depth = BaBa_Launcher_SampleNormalData(input.uv).a;
+#endif
         if (depth >= 1.0)
         {
             outColor = GetColor(input.uv);
@@ -1115,8 +1147,12 @@ namespace Barbatos_SSR152
     technique BaBa_SSR
     <
     ui_label = "BaBa: SSR";
+    ui_tooltip = "Requires 'BaBa: Launcher' enabled ABOVE this effect in the list.\n"
+                 "Without it, depth/normals will be invalid and the effect won't work correctly.\n"
+                 "To run standalone instead, set 'BABA_USE_LEGACY_PIPELINE' to 1 in the preprocessor definitions.";
     >
     {
+        #if !_BABA_USE_LAUNCHER
         pass GenNormals
         {
             VertexShader = VS_Barbatos_SSR;
@@ -1129,11 +1165,16 @@ namespace Barbatos_SSR152
             PixelShader = PS_SmoothNormals_H;
             RenderTarget = Normal1;
         }
+        #endif
         pass MaterialResolve
         {
             VertexShader = VS_Barbatos_SSR;
             PixelShader = PS_MaterialResolve;
+#if _BABA_USE_LAUNCHER
+            RenderTarget0 = NormalMaterial;
+#else
             RenderTarget0 = Normal;
+#endif
             RenderTarget1 = TexColorCopy;
         }
         pass TraceRays

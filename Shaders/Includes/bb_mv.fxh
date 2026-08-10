@@ -4,36 +4,34 @@
 
 #pragma once
 
-#ifndef USE_MARTY_LAUNCHPAD_MOTION
-    #define USE_MARTY_LAUNCHPAD_MOTION 0
+#include "bb_pipeline.fxh"
+
+#if _BABA_MOTION_PROVIDER == 0
+    #include "bb_launcher_resources.fxh"
 #endif
 
-#ifndef USE_VORT_MOTION
-    #define USE_VORT_MOTION 0
-#endif
+#include "bb_depth.fxh"
 
-#ifndef USE_LUMENITE_KERNEL_MOTION
-    #define USE_LUMENITE_KERNEL_MOTION 0
-#endif
-
-#ifndef USE_LUMENITE_QUANTMOTION
-    #define USE_LUMENITE_QUANTMOTION 0
-#endif
-
-#ifndef MV_CONFIDENCE_SENSITIVITY
-    #define MV_CONFIDENCE_SENSITIVITY 1.0
+#ifndef _BABA_MV_CONFIDENCE_SENSITIVITY
+    #if defined(MV_CONFIDENCE_SENSITIVITY)
+        #define _BABA_MV_CONFIDENCE_SENSITIVITY MV_CONFIDENCE_SENSITIVITY
+    #else
+        #define _BABA_MV_CONFIDENCE_SENSITIVITY 1.0
+    #endif
 #endif
 
 //----------------|
 // :: Textures :: |
 //----------------|
 
-#if USE_MARTY_LAUNCHPAD_MOTION
+#if _BABA_MOTION_PROVIDER == 0
+    // BaBa_Launcher owns this resource and must run before consumers.
+#elif _BABA_MOTION_PROVIDER == 2
     namespace Deferred {
         texture MotionVectorsTex { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
         sampler sMotionVectorsTex { Texture = MotionVectorsTex; };
     }
-#elif USE_VORT_MOTION
+#elif _BABA_MOTION_PROVIDER == 3
     texture2D MotVectTexVort { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RG16F; };
     sampler2D sMotVectTexVort
     {
@@ -44,7 +42,7 @@
         AddressU  = Clamp;
         AddressV  = Clamp;
     };
-#elif USE_LUMENITE_QUANTMOTION
+#elif _BABA_MOTION_PROVIDER == 5
     namespace QuantMotion {
         texture2D tFlow { Width = BUFFER_WIDTH / 8; Height = BUFFER_HEIGHT / 8; Format = RG16F; };
         sampler2D sFlow { Texture = tFlow; MagFilter = POINT; MinFilter = POINT; };
@@ -52,7 +50,7 @@
         texture2D tConfidence { Width = BUFFER_WIDTH / 8; Height = BUFFER_HEIGHT / 8; Format = R16F; };
         sampler2D sConfidence { Texture = tConfidence; };
     }
-#elif USE_LUMENITE_KERNEL_MOTION
+#elif _BABA_MOTION_PROVIDER == 4
     namespace Kernel {
         texture2D tFlow { Width = BUFFER_WIDTH / 8; Height = BUFFER_HEIGHT / 8; Format = RG16F; };
         sampler2D sFlow { Texture = tFlow; MagFilter = POINT; MinFilter = POINT; };
@@ -80,13 +78,15 @@
 
 float2 SampleMotionVectors(float2 texcoord)
 {
-#if USE_MARTY_LAUNCHPAD_MOTION
+#if _BABA_MOTION_PROVIDER == 0
+    return tex2Dlod(BaBa_Launcher::sMotionVectors, float4(texcoord, 0, 0)).rg;
+#elif _BABA_MOTION_PROVIDER == 2
     return tex2Dlod(Deferred::sMotionVectorsTex, float4(texcoord, 0, 0)).rg;
-#elif USE_VORT_MOTION
+#elif _BABA_MOTION_PROVIDER == 3
     return tex2Dlod(sMotVectTexVort, float4(texcoord, 0, 0)).rg;
-#elif USE_LUMENITE_QUANTMOTION
+#elif _BABA_MOTION_PROVIDER == 5
     return tex2Dlod(QuantMotion::sFlow, float4(texcoord, 0, 0)).rg;
-#elif USE_LUMENITE_KERNEL_MOTION
+#elif _BABA_MOTION_PROVIDER == 4
     return tex2Dlod(Kernel::sFlow, float4(texcoord, 0, 0)).rg;
 #else
     return tex2Dlod(sTexMotionVectorsSampler, float4(texcoord, 0, 0)).rg;
@@ -108,7 +108,7 @@ float2 MV_GetVelocity(float2 texcoord)
     for (int i = 0; i < 5; i++)
     {
         float2 s = texcoord + offsets[i] * pixel_size;
-        float  d = bb::GetLinearizedDepth(s);
+        float  d = GetDepth(s);
         if (d < closest_depth)
         {
             closest_depth = d;
@@ -120,9 +120,9 @@ float2 MV_GetVelocity(float2 texcoord)
 
 float MV_GetConfidence(float2 texcoord)
 {
-#if USE_LUMENITE_QUANTMOTION
+#if _BABA_MOTION_PROVIDER == 5
     return saturate(tex2Dlod(QuantMotion::sConfidence, float4(texcoord, 0, 0)).r);
-#elif USE_LUMENITE_KERNEL_MOTION
+#elif _BABA_MOTION_PROVIDER == 4
     return saturate(tex2Dlod(Kernel::sConfidence, float4(texcoord, 0, 0)).r);
 #else
     float2 velocity = MV_GetVelocity(texcoord);
@@ -139,14 +139,14 @@ float MV_GetConfidence(float2 texcoord)
     {
         float2 dest_velocity = SampleMotionVectors(prev_uv);
         float error = length(velocity - dest_velocity);
-        float normalized_error = (error * MV_CONFIDENCE_SENSITIVITY * 1.25) / (length(velocity) + 1e-6);
+        float normalized_error = (error * _BABA_MV_CONFIDENCE_SENSITIVITY * 1.25) / (length(velocity) + 1e-6);
         consistency_conf = rcp(normalized_error + 1.0);
     }
 
     float length_conf = rcp(flow_magnitude * 0.02 + 1.0);
 
-    float curr_depth = bb::GetLinearizedDepth(texcoord);
-    float dest_depth = bb::GetLinearizedDepth(prev_uv);
+    float curr_depth = GetDepth(texcoord);
+    float dest_depth = GetDepth(prev_uv);
     float depth_conf = exp(-abs(curr_depth - dest_depth) * 100.0);
 
     return saturate(consistency_conf * length_conf * depth_conf);
@@ -155,9 +155,9 @@ float MV_GetConfidence(float2 texcoord)
 
 float MV_GetConfidenceAO(float2 uv, float2 velocity, float flow_magnitude, float curr_luma, sampler sLumaPrev)
 {
-#if USE_LUMENITE_QUANTMOTION
+#if _BABA_MOTION_PROVIDER == 5
     return saturate(tex2Dlod(QuantMotion::sConfidence, float4(uv, 0, 0)).r);
-#elif USE_LUMENITE_KERNEL_MOTION
+#elif _BABA_MOTION_PROVIDER == 4
     return saturate(tex2Dlod(Kernel::sConfidence, float4(uv, 0, 0)).r);
 #else
     float2 prev_uv = uv + velocity;
@@ -170,7 +170,7 @@ float MV_GetConfidenceAO(float2 uv, float2 velocity, float flow_magnitude, float
     {
         float2 dest_velocity = SampleMotionVectors(prev_uv);
         float error = length(velocity - dest_velocity);
-        float normalized_error = (error * MV_CONFIDENCE_SENSITIVITY) / (length(velocity) + 1e-6);
+        float normalized_error = (error * _BABA_MV_CONFIDENCE_SENSITIVITY) / (length(velocity) + 1e-6);
         consistency_conf = rcp(normalized_error + 1.0);
     }
 
@@ -179,8 +179,8 @@ float MV_GetConfidenceAO(float2 uv, float2 velocity, float flow_magnitude, float
     float prev_luma = tex2Dlod(sLumaPrev, float4(prev_uv, 0, 0)).r;
     float photometric_conf = exp(-abs(curr_luma - prev_luma) * 1.5);
 
-    float curr_depth = bb::GetLinearizedDepth(uv);
-    float dest_depth = bb::GetLinearizedDepth(prev_uv);
+    float curr_depth = GetDepth(uv);
+    float dest_depth = GetDepth(prev_uv);
     float depth_conf = exp(-abs(curr_depth - dest_depth) * 100.0);
 
     return saturate(consistency_conf * length_conf * photometric_conf * depth_conf);

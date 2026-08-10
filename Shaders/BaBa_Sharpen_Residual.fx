@@ -4,12 +4,11 @@
 | Version: 1.0.0                                |
 | Author: Barbatos                              |
 | License: MIT                                  |
-|                                               |
 | Residual multi-scale unsharp sharpening       |
 '----------------------------------------------*/
 
 #include ".\Includes\bb_reshade.fxh"
-#define USE_HALF 1
+#define _BABA_USE_HALF 1
 #include ".\Includes\bb_common.fxh"
 #include ".\Includes\bb_colorspace.fxh"
 #include ".\Includes\bb_vertex.fxh"
@@ -55,7 +54,7 @@ uniform float ResidualScale <
     ui_category = "System / Debug";
     ui_category_closed = true;
     ui_label = "Residual Scale";
-    ui_tooltip = "Matches Neural Sharpen SHADER_RESIDUAL_SCALE (default 0.44).";
+    ui_tooltip = "Matches Neural Sharpen";
     ui_type = "drag";
     ui_min = 0.0; ui_max = 2.0; ui_step = 0.01;
 > = 0.44;
@@ -73,7 +72,7 @@ uniform int ViewMode <
     ui_items = "Normal\0Map Only\0Residual Map\0";
 > = 0;
 
-namespace Barbatos_Sharpen
+namespace BaBa_Sharpen
 {
     texture TexLuma
     {
@@ -114,30 +113,6 @@ namespace Barbatos_Sharpen
     //----------------|
     // :: Functions ::|
     //----------------|
-
-    float GetLuma(float3 rgb)
-    {
-        return dot(rgb, float3(0.299, 0.587, 0.114));
-    }
-
-    float3 RGBToYCbCr(float3 rgb)
-    {
-        float y = dot(rgb, float3(0.299, 0.587, 0.114));
-        float cb = (rgb.b - y) * 0.564 + 0.5;
-        float cr = (rgb.r - y) * 0.713 + 0.5;
-        return float3(y, cb, cr);
-    }
-
-    float3 YCbCrToRGB(float3 ycbcr)
-    {
-        float y = ycbcr.x;
-        float cb = ycbcr.y - 0.5;
-        float cr = ycbcr.z - 0.5;
-        float r = y + 1.403 * cr;
-        float g = y - 0.344 * cb - 0.714 * cr;
-        float b = y + 1.770 * cb;
-        return float3(r, g, b);
-    }
 
     float ComputeShadowRecoveryGain(float luma)
     {
@@ -249,7 +224,7 @@ namespace Barbatos_Sharpen
     technique BaBa_Sharpen
     <
         ui_label = "BaBa: Sharpen";
-        ui_tooltip = "Multi-scale residual sharpening (fine 3x3 + coarse 5x5).";
+        ui_tooltip = "Multi-scale residual sharpening.";
     >
     {
         pass GetLuma

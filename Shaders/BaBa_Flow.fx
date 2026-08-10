@@ -8,6 +8,9 @@
 | Description:                                  |
 | BarbatosFlow is a Dense Real-time Optical     |
 | Flow shader derived from LumaFlow.            |
+|-----------------------------------------------|
+| LEGACY: superseded by 'BaBa: Launcher'. Only  |
+| needed for BABA_USE_LEGACY_PIPELINE = 1.      |
 '----------------------------------------------*/
 
 #include ".\Includes\bb_reshade.fxh"
@@ -470,7 +473,18 @@ namespace Barbatos_Flow
         subpixel_offset.y = (cost_down - cost_up)   / (2.0 * (cost_down + cost_up   - 2.0 * match_cost) + EPSILON);
         subpixel_offset = clamp(subpixel_offset, -0.5, 0.5);
 
-        return (integer_match + subpixel_offset*texel_size);
+        float2 refined = integer_match + subpixel_offset * texel_size;
+
+        // Cost the fitted position before emitting it: a displacement only leaves a
+        // level if it was measured there and beat the incumbent.
+        if (any(subpixel_offset != 0.0))
+        {
+            float refined_cost = ZAD(sCurrLuma, sPrevLuma, uv, uv + refined, texel_size, mip2);
+            if (!(refined_cost < match_cost))
+                refined = integer_match;
+        }
+
+        return refined;
     }
 
     //--------------------|
@@ -747,8 +761,11 @@ namespace Barbatos_Flow
     }
 
     technique BaBa_Flow <
-        ui_label = "BaBa: Flow";
-        ui_tooltip = "Dense Real-time Optical Flow.";
+        ui_label = "BaBa: Flow (Legacy)";
+        ui_tooltip = "Dense Real-time Optical Flow.\n\n"
+                     "Legacy standalone motion vector provider, superseded by 'BaBa: Launcher'.\n"
+                     "Only needed if you set 'BABA_USE_LEGACY_PIPELINE' to 1 in the preprocessor "
+                     "definitions to run this suite without the Launcher.";
     >
     {
         //=== Luma pyramid

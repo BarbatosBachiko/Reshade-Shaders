@@ -33,6 +33,7 @@ THE SOFTWARE.
 #include ".\Includes\bb_depth.fxh"
 #include ".\Includes\bb_normal.fxh"
 #include ".\Includes\bb_mv.fxh"
+#include ".\Includes\bb_taa.fxh"
 #include ".\Includes\bb_vertex.fxh"
 
 //--------------------|
@@ -136,7 +137,7 @@ uniform int DebugView <
     ui_type = "combo";
     ui_category = "Debug";
     ui_label = "Debug View";
-    ui_items = "None\0Raw SSAO\0View-space Normals\0";
+    ui_items = "None\0Raw SSAO\0";
 > = 0;
 
 static const int g_TapCounts[5] = { 3, 5, 12, 20, 31 };
@@ -144,8 +145,12 @@ static const int g_TapCounts[5] = { 3, 5, 12, 20, 31 };
 //----------------|
 // :: Textures :: |
 //----------------|
-#ifndef USE_HILBERT_LUT
-#define USE_HILBERT_LUT 1 
+#ifndef _BABA_USE_HILBERT_LUT
+    #if defined(USE_HILBERT_LUT) && !USE_HILBERT_LUT
+        #define _BABA_USE_HILBERT_LUT 0
+    #else
+        #define _BABA_USE_HILBERT_LUT 1
+    #endif
 #endif
 
 texture texPrevLuma
@@ -160,8 +165,24 @@ sampler sPrevLuma
     Texture = texPrevLuma;
 };
 
-namespace MiAO155
+namespace MiAO
 {
+#if _BABA_USE_LAUNCHER
+    sampler sDEPTH
+    {
+        Texture = BaBa_Launcher::ViewDepth;
+        MagFilter = LINEAR;
+        MinFilter = LINEAR;
+    };
+
+    sampler sNORMALS
+    {
+        // The launcher publishes the full view-space normal in RGB.
+        Texture = BaBa_Launcher::NormalMap;
+        MagFilter = LINEAR;
+        MinFilter = LINEAR;
+    };
+#else
     texture DEPTH
     {
         Width = BUFFER_WIDTH;
@@ -183,6 +204,22 @@ namespace MiAO155
     {
         Texture = NORMALS;
     };
+#endif
+
+    float3 SampleMiAONormal(float2 uv, float3 viewPosition)
+    {
+        float4 normalData = GetLod(sNORMALS, uv);
+        float3 normal;
+#if _BABA_USE_LAUNCHER
+        normal = NM_SafeNormalize(normalData.rgb);
+#else
+        normal = NM_DecodeNormal(normalData.rg);
+#endif
+
+        if (dot(normal, -viewPosition) < 0.0)
+            normal = -normal;
+        return normal;
+    }
 
     texture AO
     {
@@ -287,29 +324,6 @@ namespace MiAO155
         return ret;
     }
 
-    float4 CalculateEdges(const float centerZ, const float leftZ, const float rightZ, const float topZ, const float bottomZ)
-    {
-        float4 edgesLRTB = float4(leftZ, rightZ, topZ, bottomZ) - centerZ;
-        float4 edgesLRTBSlopeAdjusted = edgesLRTB + edgesLRTB.yxwz;
-        edgesLRTB = min(abs(edgesLRTB), abs(edgesLRTBSlopeAdjusted));
-        return saturate(1.3 - (edgesLRTB * 25.0) / centerZ);
-    }
-
-    float3 CalculateNormal(const float4 edgesLRTB, float3 pixCenterPos, float3 pixLPos, float3 pixRPos, float3 pixTPos, float3 pixBPos)
-    {
-        float4 acceptedNormals = float4(edgesLRTB.x * edgesLRTB.z, edgesLRTB.z * edgesLRTB.y, edgesLRTB.y * edgesLRTB.w, edgesLRTB.w * edgesLRTB.x);
-        pixLPos = normalize(pixLPos - pixCenterPos);
-        pixRPos = normalize(pixRPos - pixCenterPos);
-        pixTPos = normalize(pixTPos - pixCenterPos);
-        pixBPos = normalize(pixBPos - pixCenterPos);
-        float3 pixelNormal = float3(0, 0, -0.0005);
-        pixelNormal += (acceptedNormals.x) * cross(pixLPos, pixTPos);
-        pixelNormal += (acceptedNormals.y) * cross(pixTPos, pixRPos);
-        pixelNormal += (acceptedNormals.z) * cross(pixRPos, pixBPos);
-        pixelNormal += (acceptedNormals.w) * cross(pixBPos, pixLPos);
-        return normalize(pixelNormal);
-    }
-
     static const float K_Weights[31] =
     {
     2.87855, 3.89337, 2.03928, 2.57912, 2.82997, 2.49643, 1.65273, 1.14063,
@@ -381,42 +395,6 @@ namespace MiAO155
         weightSum += weight2 * weightMod;
     }
 
-    float SampleHistoryCatmullRom_Scalar(sampler sInput, float2 uv, float2 texSize)
-    {
-        float2 samplePos = uv * texSize;
-        float2 texPos1 = floor(samplePos - 0.5) + 0.5;
-        float2 f = samplePos - texPos1;
-        float2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
-        float2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
-        float2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));
-        float2 w3 = f * f * (-0.5 + 0.5 * f);
-
-        float2 w12 = w1 + w2;
-        float2 offset12 = w2 / (w1 + w2);
-
-        float2 texPos0 = texPos1 - 1.0;
-        float2 texPos3 = texPos1 + 2.0;
-        float2 texPos12 = texPos1 + offset12;
-
-        texPos0 /= texSize;
-        texPos3 /= texSize;
-        texPos12 /= texSize;
-
-        float result = 0.0;
-        result += GetLod(sInput, float2(texPos0.x, texPos0.y)).r * w0.x * w0.y;
-        result += GetLod(sInput, float2(texPos12.x, texPos0.y)).r * w12.x * w0.y;
-        result += GetLod(sInput, float2(texPos3.x, texPos0.y)).r * w3.x * w0.y;
-
-        result += GetLod(sInput, float2(texPos0.x, texPos12.y)).r * w0.x * w12.y;
-        result += GetLod(sInput, float2(texPos12.x, texPos12.y)).r * w12.x * w12.y;
-        result += GetLod(sInput, float2(texPos3.x, texPos12.y)).r * w3.x * w12.y;
-        result += GetLod(sInput, float2(texPos0.x, texPos3.y)).r * w0.x * w3.y;
-        result += GetLod(sInput, float2(texPos12.x, texPos3.y)).r * w12.x * w3.y;
-        result += GetLod(sInput, float2(texPos3.x, texPos3.y)).r * w3.x * w3.y;
-
-        return max(result, 0.0);
-    }
-
 /*--------------------.
 | :: Vertex Shader :: |
 '--------------------*/
@@ -435,13 +413,13 @@ namespace MiAO155
     void VS_MiAO_Even(in uint id : SV_VertexID, out VS_OUTPUT outStruct)
     {
         VS_MiAO(id, outStruct);
-        if ((uint(FRAME_COUNT) % 2) != 0) outStruct.vpos = float4(-10000.0, -10000.0, 0.0, 1.0);
+        if ((uint(FRAME_COUNT) % 2u) != 0u) outStruct.vpos = float4(-10000.0, -10000.0, 0.0, 1.0);
     }
 
     void VS_MiAO_Odd(in uint id : SV_VertexID, out VS_OUTPUT outStruct)
     {
         VS_MiAO(id, outStruct);
-        if ((uint(FRAME_COUNT) % 2) == 0) outStruct.vpos = float4(-10000.0, -10000.0, 0.0, 1.0);
+        if ((uint(FRAME_COUNT) % 2u) == 0u) outStruct.vpos = float4(-10000.0, -10000.0, 0.0, 1.0);
     }
 
 /*--------------------.
@@ -461,8 +439,8 @@ namespace MiAO155
         float3 p_t = DepthBufferUVToViewSpace(uv - float2(0, p.y), ScreenSpaceToViewSpaceDepth(GetDepth(uv - float2(0, p.y))), input.pScale);
         float3 p_b = DepthBufferUVToViewSpace(uv + float2(0, p.y), ScreenSpaceToViewSpaceDepth(GetDepth(uv + float2(0, p.y))), input.pScale);
 
-        float4 edges = CalculateEdges(p_c.z, p_l.z, p_r.z, p_t.z, p_b.z);
-        float3 normal = CalculateNormal(edges, p_c, p_l, p_r, p_t, p_b);
+        float4 edges = NM_CalculateDepthEdges(p_c.z, p_l.z, p_r.z, p_t.z, p_b.z);
+        float3 normal = NM_CalculateEdgeWeightedNormal(edges, p_c, p_l, p_r, p_t, p_b);
     
         outNormal = float4(NM_EncodeNormal(normal), 0.0, linear_depth);
     }
@@ -483,24 +461,28 @@ namespace MiAO155
         float pixTZ = GetLod(sDEPTH, scaled_uv - float2(0, p.y)).r;
         float pixBZ = GetLod(sDEPTH, scaled_uv + float2(0, p.y)).r;
         float3 pixCenterPos = DepthBufferUVToViewSpace(scaled_uv, pixZ, input.pScale);
-        float3 pixelNormal = NM_DecodeNormal(tex2D(sNORMALS, scaled_uv).rg);
+        float3 pixelNormal = SampleMiAONormal(scaled_uv, pixCenterPos);
 
         float activeRadiusDistanceScale = EnableDistantRadius ? 1.0 : 0.0;
         float effectViewspaceRadius = Radius + (pixZ * activeRadiusDistanceScale);
         float pixelRadius = effectViewspaceRadius / pixZ;
         uint2 random_coord = uint2(vpos.xy);
-        uint pseudoRandomIndex = (random_coord.y * 2 + random_coord.x) % 5;
+        uint pseudoRandomIndex = (random_coord.y * 2u + random_coord.x) % 5u;
         float angle = (pseudoRandomIndex / 5.0) * 2.0 * PI;
         float2 noise = SpatioTemporalNoise(uint2(vpos.xy), FRAME_COUNT);
         angle += noise.x * 2.0 * PI;
 
         float s, c;
         sincos(angle, s, c);
-        float2x2 rotScale = float2x2(c, s, -s, c) * pixelRadius * 100.0;
+        // Build the matrix pre-scaled: the GLSL backend lowers float2x2(...) * scalar
+        // to matrixCompMult with a DIAGONAL mat2x2(scalar), which zeroes the rotation
+        // terms on OpenGL and Vulkan.
+        float2 rs = float2(c, s) * (pixelRadius * 100.0);
+        float2x2 rotScale = float2x2(rs.x, rs.y, -rs.y, rs.x);
 
         float obscuranceSum = 0.0;
         float weightSum = 0.0001;
-        float4 edgesLRTB = CalculateEdges(pixZ, pixLZ, pixRZ, pixTZ, pixBZ);
+        float4 edgesLRTB = NM_CalculateDepthEdges(pixZ, pixLZ, pixRZ, pixTZ, pixBZ);
     
         float falloffCalcMulSq = -1.0 / (effectViewspaceRadius * effectViewspaceRadius);
         const int numberOfTaps = g_TapCounts[clamp(QualityLevel, 0, 4)];
@@ -531,7 +513,7 @@ namespace MiAO155
     {
         if (any(input.uv > RenderScale)) discard;
         float2 viewUV = input.uv / RenderScale;
-        float rawDepth = GetDepth(viewUV);
+        float rawDepth = TAA_GetStableDepth(viewUV, GetDepth(viewUV));
         
         if (rawDepth >= 0.999) return 1.0;
         float current_ao = GetLod(sAO, input.uv).r;
@@ -543,7 +525,7 @@ namespace MiAO155
         float2 reprojected_buffer_uv = reprojected_view_uv * RenderScale;
         if (any(reprojected_view_uv < 0.0) || any(reprojected_view_uv > 1.0))
             return current_ao;
-        float history_ao = SampleHistoryCatmullRom_Scalar(sHistoryParams, reprojected_buffer_uv, float2(BUFFER_WIDTH, BUFFER_HEIGHT));
+        float history_ao = TAA_SampleHistoryCatmullRom1(sHistoryParams, reprojected_buffer_uv, float2(BUFFER_WIDTH, BUFFER_HEIGHT));
 
         // Variance Clipping
         float m1 = 0.0;
@@ -572,7 +554,9 @@ namespace MiAO155
         float flow_magnitude = length(velocity * float2(BUFFER_WIDTH, BUFFER_HEIGHT));
         float curr_luma = GetLuminance(Input2Linear(GetColor(viewUV).rgb));
         float raw_confidence = saturate(MV_GetConfidenceAO(viewUV, velocity, flow_magnitude, curr_luma, sPrevLuma));
-        float relax_amount = 0.15 * raw_confidence;
+        float normal_confidence = TAA_GetNormalHistoryConfidence(
+            viewUV, reprojected_view_uv, rawDepth, raw_confidence);
+        float relax_amount = 0.15 * normal_confidence;
         val_min -= relax_amount;
         val_max += relax_amount;
 
@@ -582,7 +566,7 @@ namespace MiAO155
 
         float max_feedback = 0.98;
         float min_feedback = 0.85;
-        float final_feedback = lerp(min_feedback, max_feedback, raw_confidence) * lerp(0.8, 1.0, blend_adapt);
+        float final_feedback = lerp(min_feedback, max_feedback, normal_confidence) * lerp(0.8, 1.0, blend_adapt);
 
         return lerp(current_ao, clipped_history, final_feedback);
     }
@@ -590,14 +574,14 @@ namespace MiAO155
     void PS_SpatioTemporal0(VS_OUTPUT input, out float outHistory : SV_Target)
     {
         outHistory = 0.0;
-        if ((uint(FRAME_COUNT) % 2) != 0) discard;
+        if ((uint(FRAME_COUNT) % 2u) != 0u) discard;
         outHistory = ComputeTAA(input, sHistory1);
     }
 
     void PS_SpatioTemporal1(VS_OUTPUT input, out float outHistory : SV_Target)
     {
         outHistory = 0.0;
-        if ((uint(FRAME_COUNT) % 2) == 0) discard;
+        if ((uint(FRAME_COUNT) % 2u) == 0u) discard;
         outHistory = ComputeTAA(input, sHistory0);
     }
 
@@ -608,8 +592,9 @@ namespace MiAO155
         float2 fullResUV = input.uv / RenderScale;
 
         float c_ao = GetLod(sInputTex, input.uv).r;
-        float3 c_norm = NM_DecodeNormal(GetLod(sNORMALS, fullResUV).rg);
         float c_depth = GetLod(sDEPTH, fullResUV).r;
+        float3 c_pos = DepthBufferUVToViewSpace(fullResUV, c_depth, input.pScale);
+        float3 c_norm = SampleMiAONormal(fullResUV, c_pos);
 
         static const float kernel[3] = { 1.0, 2.0 / 3.0, 1.0 / 6.0 };
         float sum = c_ao;
@@ -630,8 +615,9 @@ namespace MiAO155
                 float2 fullResUV_offset = uv_offset / RenderScale;
 
                 float s_ao = GetLod(sInputTex, uv_offset).r;
-                float3 s_norm = NM_DecodeNormal(GetLod(sNORMALS, fullResUV_offset).rg);
                 float s_depth = GetLod(sDEPTH, fullResUV_offset).r;
+                float3 s_pos = DepthBufferUVToViewSpace(fullResUV_offset, s_depth, input.pScale);
+                float3 s_norm = SampleMiAONormal(fullResUV_offset, s_pos);
 
                 float w_z = exp(-abs(c_depth - s_depth) * depth_weight_factor);
                 float dotN = max(0.0, dot(c_norm, s_norm));
@@ -650,7 +636,7 @@ namespace MiAO155
     void PS_Atrous1(VS_OUTPUT input, out float outAO : SV_Target)
     {
         outAO = 0.0;
-        if (uint(FRAME_COUNT) % 2 == 0)
+        if (uint(FRAME_COUNT) % 2u == 0u)
             outAO = AtrousFilter(input, sHistory0, 1.0);
         else
             outAO = AtrousFilter(input, sHistory1, 1.0);
@@ -665,7 +651,8 @@ namespace MiAO155
     float JointBilateralUpsample(float2 uv, float highDepth)
     {
         float2 lowResUV = uv * RenderScale;
-        float3 highNormal = NM_DecodeNormal(GetLod(sNORMALS, uv).rg);
+        float3 highPosition = DepthBufferUVToViewSpace(uv, highDepth, GetProjectionScale(FOV));
+        float3 highNormal = SampleMiAONormal(uv, highPosition);
 
         float result = GetLod(sAtrousB, lowResUV).r;
         float sumAO = 0.0;
@@ -686,7 +673,8 @@ namespace MiAO155
 
                 float2 fullResSampleUV = sampleUV / RenderScale;
                 float lowDepth = GetLod(sDEPTH, fullResSampleUV).r;
-                float3 lowNormal = NM_DecodeNormal(GetLod(sNORMALS, fullResSampleUV).rg);
+                float3 lowPosition = DepthBufferUVToViewSpace(fullResSampleUV, lowDepth, GetProjectionScale(FOV));
+                float3 lowNormal = SampleMiAONormal(fullResSampleUV, lowPosition);
 
                 float wDepth = exp(-abs(highDepth - lowDepth) * depth_weight_factor);
                 float dotN = max(0.0, dot(normalize(highNormal), normalize(lowNormal)));
@@ -737,15 +725,7 @@ namespace MiAO155
         {
             return float4(ao, ao, ao, 1.0);
         }
-        else if (DebugView == 2) // Normals
-        {
-            float3 debugNormals = NM_DecodeNormal(GetLod(sNORMALS, uv).rg);
-            debugNormals.x = -debugNormals.x;
-            debugNormals.z = -debugNormals.z;
-            
-            return float4(debugNormals * 0.5 + 0.5, 1.0);
-        }
-    
+
         float3 linearColor = Input2Linear(color.rgb);
         linearColor *= ao;
         return float4(Linear2Output(linearColor), color.a);
@@ -757,7 +737,14 @@ namespace MiAO155
     }
     
     technique MiAO
+    <
+    ui_label = "BaBa: MiAO";
+    ui_tooltip = "Requires 'BaBa: Launcher' enabled ABOVE this effect in the list.\n"
+                 "Without it, depth/normals will be invalid and the effect won't work correctly.\n"
+                 "To run standalone instead, set 'BABA_USE_LEGACY_PIPELINE' to 1 in the preprocessor definitions.";
+    >
     {
+        #if !_BABA_USE_LAUNCHER
         pass Prepare
         {
             VertexShader = VS_MiAO;
@@ -765,6 +752,7 @@ namespace MiAO155
             RenderTarget0 = DEPTH;
             RenderTarget1 = NORMALS;
         }
+        #endif
         pass GenerateAO
         {
             VertexShader = VS_MiAO;

@@ -4,11 +4,15 @@
 
 #pragma once
 
-#ifndef USE_HILBERT_LUT
-#define USE_HILBERT_LUT 1
+#ifndef _BABA_USE_HILBERT_LUT
+    #if defined(USE_HILBERT_LUT) && !USE_HILBERT_LUT
+        #define _BABA_USE_HILBERT_LUT 0
+    #else
+        #define _BABA_USE_HILBERT_LUT 1
+    #endif
 #endif
 
-#if USE_HILBERT_LUT
+#if _BABA_USE_HILBERT_LUT
 texture texHilbertLUT < source = "Barbatos_Hilbert_RGB.png"; >
 {
     Width = 64;
@@ -26,7 +30,7 @@ sampler sHilbertLUT
 };
 #endif
 
-#if !USE_HILBERT_LUT
+#if !_BABA_USE_HILBERT_LUT
 float hilbert_procedural(float2 p, int level)
 {
     float d = 0;
@@ -50,15 +54,15 @@ float hilbert_procedural(float2 p, int level)
 
 uint HilbertIndex_Procedural(uint x, uint y)
 {
-    return (uint)hilbert_procedural(float2(x % 64, y % 64), 6);
+    return (uint)hilbert_procedural(float2(uint(x) % 64u, uint(y) % 64u), 6);
 }
 #endif
 
 float2 SpatioTemporalNoise(uint2 pixCoord, uint temporalIndex)
 {
     uint index;
-#if USE_HILBERT_LUT
-    float4 encodedVal = tex2Dfetch(sHilbertLUT, int2(pixCoord.x % 64, pixCoord.y % 64));
+#if _BABA_USE_HILBERT_LUT
+    float4 encodedVal = tex2Dfetch(sHilbertLUT, int2(uint(pixCoord.x) % 64u, uint(pixCoord.y) % 64u));
     uint high_byte = (uint) (encodedVal.r * 255.0 + 0.1);
     uint low_byte = (uint) (encodedVal.g * 255.0 + 0.1);
     index = (high_byte * 256) + low_byte;
@@ -70,10 +74,10 @@ float2 SpatioTemporalNoise(uint2 pixCoord, uint temporalIndex)
 #if __RENDERER__ >= 0xa000
     index += 288 * (temporalIndex & 63);
 #else
-    index += 288 * (temporalIndex % 64);
+    index += 288 * int(uint(temporalIndex) % 64u);
 #endif
 #else
-    index += 288 * (temporalIndex % 64);
+    index += 288 * int(uint(temporalIndex) % 64u);
 #endif
 
     return frac(0.5 + index * float2(0.75487766624669276005, 0.5698402909980532659114));

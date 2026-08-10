@@ -6,6 +6,8 @@ Author: Barbatos (Original by umar-afzaal - Kaidô)
 License: CC-BY-NC-4.0 (https://github.com/umar-afzaal/LumeniteFX/blob/mainline/Shaders/LumaFlow.fx)
 Description: A performance-focused version of LumaFlow with DX9 compatibility.
 The optimization focused on using the shaders present in my repository; other shaders were not tested.
+
+LEGACY: superseded by 'BaBa: Launcher'. Only needed for BABA_USE_LEGACY_PIPELINE = 1.
 */
 
 #include ".\Includes\bb_reshade.fxh"
@@ -440,7 +442,10 @@ namespace Barbatos_Flow_Lite
 
     technique BaBa_Flow_Lite
     <
-    ui_label = "BaBa: Flow Lite";
+    ui_label = "BaBa: Flow Lite (Legacy)";
+    ui_tooltip = "Legacy standalone motion vector provider, superseded by 'BaBa: Launcher'.\n"
+                 "Only needed if you set 'BABA_USE_LEGACY_PIPELINE' to 1 in the preprocessor "
+                 "definitions to run this suite without the Launcher.";
     >
     {
         pass

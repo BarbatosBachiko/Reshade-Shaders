@@ -85,7 +85,7 @@ uniform float FrameTime < source = "frametime"; >;
 // :: Textures :: |
 //----------------|
 
-namespace VividTone
+namespace BaBa_VividTone
 {
     texture LUM
     {

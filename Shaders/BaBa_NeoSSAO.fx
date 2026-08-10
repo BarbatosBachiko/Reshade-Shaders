@@ -8,11 +8,12 @@
 
 #include ".\Includes\bb_reshade.fxh"
 #include ".\Includes\bb_ui.fxh"
-#define USE_HALF 1
+#define _BABA_USE_HALF 1
 #include ".\Includes\bb_common.fxh"
 #include ".\Includes\bb_depth.fxh"
 #include ".\Includes\bb_normal.fxh"
 #include ".\Includes\bb_mv.fxh"
+#include ".\Includes\bb_taa.fxh"
 
 //----------|
 // :: UI :: |
@@ -134,7 +135,7 @@ uniform float4 OcclusionColor <
     ui_label = "Occlusion Color";
 > = float4(0.0, 0.0, 0.0, 1.0);
 
-uniform int ViewMode < 
+uniform int ViewMode <
     ui_type = "combo";
     ui_category = "Debug & Style";
     ui_label = "View Mode";
@@ -146,8 +147,17 @@ uniform int ViewMode <
 #define HALF_PI 1.57079632679
 static const int BlurRadius = 2;
 
-namespace Barbatos_NeoSSAO2
+namespace NeoSSAO
 {
+#if _BABA_USE_LAUNCHER
+    sampler sNormal
+    {
+        // Launcher's canonical full-precision normal; the RG encoding is legacy only.
+        Texture = BaBa_Launcher::NormalMap;
+        MagFilter = LINEAR;
+        MinFilter = LINEAR;
+    };
+#else
     texture2D normalTex
     {
         Width = BUFFER_WIDTH;
@@ -158,6 +168,17 @@ namespace Barbatos_NeoSSAO2
     {
         Texture = normalTex;
     };
+#endif
+
+    float3 SampleNeoNormal(float2 uv)
+    {
+        float4 normalData = tex2Dlod(sNormal, float4(uv, 0.0, 0.0));
+#if _BABA_USE_LAUNCHER
+        return NM_SafeNormalize(normalData.rgb);
+#else
+        return NM_DecodeNormal(normalData.rg);
+#endif
+    }
 
     texture2D AO
     {
@@ -226,29 +247,6 @@ namespace Barbatos_NeoSSAO2
         outStruct.pScale = float2(y * bb::AspectRatio, y);
     }
 
-    float4 CalculateEdges(const float centerZ, const float leftZ, const float rightZ, const float topZ, const float bottomZ)
-    {
-        float4 edgesLRTB = float4(leftZ, rightZ, topZ, bottomZ) - centerZ;
-        float4 edgesLRTBSlopeAdjusted = edgesLRTB + edgesLRTB.yxwz;
-        edgesLRTB = min(abs(edgesLRTB), abs(edgesLRTBSlopeAdjusted));
-        return saturate((1.3 - edgesLRTB / (centerZ * 0.040)));
-    }
-
-    float3 CalculateNormal(const float4 edgesLRTB, float3 pixCenterPos, float3 pixLPos, float3 pixRPos, float3 pixTPos, float3 pixBPos)
-    {
-        float4 acceptedNormals = float4(edgesLRTB.x * edgesLRTB.z, edgesLRTB.z * edgesLRTB.y, edgesLRTB.y * edgesLRTB.w, edgesLRTB.w * edgesLRTB.x);
-        pixLPos = normalize(pixLPos - pixCenterPos);
-        pixRPos = normalize(pixRPos - pixCenterPos);
-        pixTPos = normalize(pixTPos - pixCenterPos);
-        pixBPos = normalize(pixBPos - pixCenterPos);
-        float3 pixelNormal = float3(0, 0, -0.0005);
-        pixelNormal += (acceptedNormals.x) * cross(pixLPos, pixTPos);
-        pixelNormal += (acceptedNormals.y) * cross(pixTPos, pixRPos);
-        pixelNormal += (acceptedNormals.z) * cross(pixRPos, pixBPos);
-        pixelNormal += (acceptedNormals.w) * cross(pixBPos, pixLPos);
-        return normalize(pixelNormal);
-    }
-
     float GetBayer8x8(float2 uv)
     {
         int2 pixelPos = int2(uv * float2(BUFFER_WIDTH, BUFFER_HEIGHT));
@@ -260,7 +258,7 @@ namespace Barbatos_NeoSSAO2
       
        15, 47, 7, 39, 13, 45, 5, 37, 63, 31, 55, 23, 61, 29, 53, 21
         };
-        return float(bayer[(uint(pixelPos.x) % 8) + (uint(pixelPos.y) % 8) * 8]) * (1.0 / 64.0);
+        return float(bayer[(uint(pixelPos.x) % 8u) + (uint(pixelPos.y) % 8u) * 8u]) * (1.0 / 64.0);
     }
 
     float GTAOFastAcos(float x)
@@ -314,8 +312,8 @@ namespace Barbatos_NeoSSAO2
         float3 p_t = UVToViewPos(uvT, depthT * FAR_PLANE * realDepthMult, input.pScale);
         float3 p_b = UVToViewPos(uvB, depthB * FAR_PLANE * realDepthMult, input.pScale);
 
-        float4 edges = CalculateEdges(p_c.z, p_l.z, p_r.z, p_t.z, p_b.z);
-        float3 normal = CalculateNormal(edges, p_c, p_l, p_r, p_t, p_b);
+        float4 edges = NM_CalculateDepthEdges(p_c.z, p_l.z, p_r.z, p_t.z, p_b.z);
+        float3 normal = NM_CalculateEdgeWeightedNormal(edges, p_c, p_l, p_r, p_t, p_b);
 
         return float4(NM_EncodeNormal(normal), 0.0, depth);
     }
@@ -332,7 +330,7 @@ namespace Barbatos_NeoSSAO2
         float realDepthMult = EnableDepthMultiplier ? lerp(0.1, 5.0, DepthMultiplier) : 1.0;
         float2 invPScale = 1.0 / input.pScale;
         float3 positionVS = UVToViewPos(scaled_uv, center_depth * FAR_PLANE * realDepthMult, input.pScale);
-        float3 normalVS = NM_DecodeNormal(tex2Dlod(sNormal, float4(scaled_uv, 0, 0)).xy);
+        float3 normalVS = SampleNeoNormal(scaled_uv);
         positionVS += normalVS * (0.005 * realDepthMult);
         float3 V = normalize(-positionVS);
         float random_val = GetBayer8x8(input.uv);
@@ -458,7 +456,11 @@ namespace Barbatos_NeoSSAO2
             discard;
         float currentAO = tex2D(sAOBlur, input.uv).r; 
         
-        if (!EnableTAA)
+        if (!EnableTAA || FRAME_COUNT <= 1)
+            return currentAO;
+
+        // Gate on the far plane first, or this pass reprojects sky.
+        if (GetDepth(scaled_uv) >= 0.999)
             return currentAO;
 
         float2 velocity = MV_GetVelocity(input.uv);
@@ -492,6 +494,8 @@ namespace Barbatos_NeoSSAO2
 
         // Confidence
         float confidence = MV_GetConfidence(input.uv);
+        confidence = TAA_GetNormalHistoryConfidence(
+            scaled_uv, prevUV, TAA_GetStableDepth(scaled_uv, GetDepth(scaled_uv)), confidence);
 
         // Blend
         return lerp(currentAO, historyAO, TemporalStability * confidence);
@@ -499,14 +503,14 @@ namespace Barbatos_NeoSSAO2
 
     float4 PS_Accumulate0(VS_OUTPUT input) : SV_Target
     {
-        if (uint(FRAME_COUNT) % 2 != 0)
+        if (uint(FRAME_COUNT) % 2u != 0u)
             discard;
         return PS_TAA(input, sHistory1);
     }
 
     float4 PS_Accumulate1(VS_OUTPUT input) : SV_Target
     {
-        if (uint(FRAME_COUNT) % 2 == 0)
+        if (uint(FRAME_COUNT) % 2u == 0u)
             discard;
         return PS_TAA(input, sHistory0);
     }
@@ -518,7 +522,7 @@ namespace Barbatos_NeoSSAO2
 
         if (EnableTAA)
         {
-            if (uint(FRAME_COUNT) % 2 == 0)
+            if (uint(FRAME_COUNT) % 2u == 0u)
                 occlusion = tex2D(sHistory0, input.uv).r;
             else
                 occlusion = tex2D(sHistory1, input.uv).r;
@@ -543,13 +547,21 @@ namespace Barbatos_NeoSSAO2
     }
 
     technique NeoSSAO
+    <
+    ui_label = "BaBa: NeoSSAO";
+    ui_tooltip = "Requires 'BaBa: Launcher' enabled ABOVE this effect in the list.\n"
+                 "Without it, depth/normals will be invalid and the effect won't work correctly.\n"
+                 "To run standalone instead, set 'BABA_USE_LEGACY_PIPELINE' to 1 in the preprocessor definitions.";
+    >
     {
+        #if !_BABA_USE_LAUNCHER
         pass GenNormals
         {
             VertexShader = VS_NeoSSAO;
             PixelShader = PS_GenNormals;
             RenderTarget = normalTex;
         }
+        #endif
         pass SSAOPass
         {
             VertexShader = VS_NeoSSAO;

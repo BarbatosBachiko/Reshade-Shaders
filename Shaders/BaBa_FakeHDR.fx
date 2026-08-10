@@ -1,11 +1,13 @@
 /*-------------------------------------------------|
-| ::                  uFakeHDR                  :: |
+| ::                BaBa_FakeHDR                :: |
 | Version: 3.2                                     |
 | Author: Barbatos                                 |
 | License: CC0                                     |
 '-------------------------------------------------*/
 
-namespace uFakeHDR
+#include ".\Includes\bb_noise.fxh"
+
+namespace BaBa_FakeHDR
 {
     static const int LUT_COUNT = 3;
     static const float LUT_SIZE = 64.0;
@@ -15,7 +17,6 @@ namespace uFakeHDR
     static const float INV_LUT_COUNT = 1.0 / float(LUT_COUNT);
     static const float LUT_SIZE_MINUS_ONE = LUT_SIZE - 1.0;
     static const float DITHER_INTENSITY = 0.00392156862;
-    static const float2 ScreenSize = float2(BUFFER_WIDTH, BUFFER_HEIGHT);
     
 //----------|
 // :: UI :: |
@@ -69,10 +70,9 @@ namespace uFakeHDR
     {
         float4 vpos : SV_Position;
         float2 texcoord : TEXCOORD0;
-        float magicDot : TEXCOORD1;
     };
 
-    VSOUT VS_FHD(in uint id : SV_VertexID)
+    VSOUT MainVS(in uint id : SV_VertexID)
     {
         VSOUT o;
         
@@ -80,19 +80,12 @@ namespace uFakeHDR
         o.texcoord.y = (id == 1) ? 2.0 : 0.0;
         o.vpos = float4(o.texcoord * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
         
-        const float2 pixelCoord = o.texcoord * ScreenSize;
-        o.magicDot = dot(pixelCoord, float2(0.06711056, 0.00583715));
-        
         return o;
     }
 
-    float3 ApplyDither(const float3 color, const float magicDot)
+    float3 ApplyDither(const float3 color, const float2 pixelPos)
     {
-        const float noise1 = frac(52.9829189 * frac(magicDot));
-        const float noise2 = frac(52.9829189 * frac(magicDot + 0.036473855));
-        const float triangleNoise = noise1 + noise2 - 1.0;
-        
-        return color + (triangleNoise * DITHER_INTENSITY);
+        return color + (N_GetTriangleNoise(pixelPos) * DITHER_INTENSITY);
     }
 
     float3 ApplyLUT(sampler s, const float3 color, const int presetIndex)
@@ -115,13 +108,13 @@ namespace uFakeHDR
         return lerp(col0, col1, sliceFrac);
     }
 
-    float3 PS_FHD(VSOUT i) : SV_Target
+    float3 MainPS(VSOUT i) : SV_Target
     {
         const float3 color = tex2D(Color, i.texcoord).rgb;
         const float3 lut_output = ApplyLUT(SamplerLUT, color, Preset);
         const float3 final_color = lerp(color, lut_output, Strength);
         
-        return ApplyDither(final_color, i.magicDot);
+        return ApplyDither(final_color, i.vpos.xy);
     }
 
     technique BaBa_FakeHDR
@@ -131,8 +124,8 @@ namespace uFakeHDR
     {
         pass
         {
-            VertexShader = VS_FHD;
-            PixelShader = PS_FHD;
+            VertexShader = MainVS;
+            PixelShader = MainPS;
         }
     }
 }

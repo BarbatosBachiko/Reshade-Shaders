@@ -82,8 +82,8 @@ sampler sPreFilter { Texture = TexPreFilter; };
 texture TexSpatial { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RGBA8; };
 sampler sSpatial { Texture = TexSpatial; };
 
-texture HistoryTex { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RGBA8; };
-sampler sHistoryTex { Texture = HistoryTex; };
+texture TexHistory { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RGBA8; };
+sampler sHistory { Texture = TexHistory; };
 
 //----------------|
 // :: Functions ::|
@@ -115,46 +115,20 @@ float SafeLumaT(float blurred, float fromLum, float toLum)
     return (t > 0.0 && t < 1.0) ? t : 0.0;
 }
 
-//---------------------|
-// :: Pixel Shaders :: |
-//---------------------|
-
-float4 PS_PreFilter(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
+// Short edge - talk p43 / TFU2 (5-tap H/V). Shared by PS_Spatial and
+// PS_Resolve's Short Mask debug view.
+void ComputeShortEdgeMasks(float4 Center, float4 Left, float4 Right, float4 Up, float4 Down,
+                            out float4 blurredH, out float4 blurredV,
+                            out float satAmountH, out float satAmountV)
 {
-    float4 center = LoadBB(uv, float2(0, 0));
-    float4 left   = LoadBB(uv, float2(-1, 0));
-    float4 right  = LoadBB(uv, float2( 1, 0));
-    float4 top    = LoadBB(uv, float2( 0,-1));
-    float4 bottom = LoadBB(uv, float2( 0, 1));
-
-    // High-pass + crush (talk slide 22): saturate(abs(x)*a - b)
-    // Scale *4 restores classic DLAA edge magnitude so Edge Contrast / Epsilon are visible
-    float4 edges = 4.0 * abs((left + right + top + bottom) - 4.0 * center);
-    float edgesLum = LI(edges.rgb);
-    float crushed = saturate(edgesLum * EdgeContrast - Epsilon);
-
-    return float4(center.rgb, crushed);
-}
-
-float4 PS_Spatial(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
-{
-    float4 Center = LoadPF(uv, float2( 0,  0));
-    float4 Left   = LoadPF(uv, float2(-1,  0));
-    float4 Right  = LoadPF(uv, float2( 1,  0));
-    float4 Up     = LoadPF(uv, float2( 0, -1));
-    float4 Down   = LoadPF(uv, float2( 0,  1));
-
-    // Short edge — talk §43 / TFU2 (5-tap H/V)
-    // Horizontal blur along horizontal edges (detected via vertical high-pass)
-    // Vertical blur along vertical edges (detected via horizontal high-pass)
     float4 combH = 2.0 * (Left + Right);
     float4 combV = 2.0 * (Up + Down);
 
     float4 centerDiffH = abs(combH - 4.0 * Center) / 4.0;
     float4 centerDiffV = abs(combV - 4.0 * Center) / 4.0;
 
-    float4 blurredH = (combH + 2.0 * Center) / 6.0;
-    float4 blurredV = (combV + 2.0 * Center) / 6.0;
+    blurredH = (combH + 2.0 * Center) / 6.0;
+    blurredV = (combV + 2.0 * Center) / 6.0;
 
     float lumH  = LI(centerDiffH.rgb);
     float lumV  = LI(centerDiffV.rgb);
@@ -162,16 +136,16 @@ float4 PS_Spatial(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     float lumVB = max(LI(blurredV.rgb), 1e-4);
 
     // Intensity-independent masks; epsilon scaled to edge magnitude domain
-    float satAmountH = saturate((Lambda * lumH - Epsilon) / lumVB);
-    float satAmountV = saturate((Lambda * lumV - Epsilon) / lumHB);
+    satAmountH = saturate((Lambda * lumH - Epsilon) / lumVB);
+    satAmountV = saturate((Lambda * lumV - Epsilon) / lumHB);
+}
 
-    float4 dlaa = Center;
-    dlaa = lerp(dlaa, blurredH, satAmountV);
-    // Second axis at half weight — matches proven ReShade ports; full weight over-softens
-    // diagonals into new stair artifacts
-    dlaa = lerp(dlaa, blurredV, satAmountH * 0.5);
-
-    // Long edge sparse samples — talk §44 (reuse ±1 short taps + ±3.5/5.5/7.5)
+// Long edge sparse samples - talk p44 (reuse +-1 short taps + +-3.5/5.5/7.5).
+void ComputeLongEdgeMasks(float2 uv, float4 Left, float4 Right, float4 Up, float4 Down,
+                           out float longMaskH, out float longMaskV,
+                           out float longEdgeSep, out float longGate,
+                           out float lbH, out float lbV)
+{
     float4 HNegA = LoadPF(uv, float2(-3.5, 0));
     float4 HNegB = LoadPF(uv, float2(-5.5, 0));
     float4 HNegC = LoadPF(uv, float2(-7.5, 0));
@@ -189,18 +163,59 @@ float4 PS_Spatial(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     float4 avgBlurH = (Left + HNegA + HNegB + HNegC + Right + HPosA + HPosB + HPosC) / 8.0;
     float4 avgBlurV = (Up + VNegA + VNegB + VNegC + Down + VPosA + VPosB + VPosC) / 8.0;
 
-    float longMaskH = saturate(avgBlurH.a * 2.0 - 1.0);
-    float longMaskV = saturate(avgBlurV.a * 2.0 - 1.0);
-    float longEdgeSep = abs(longMaskH - longMaskV);
-    float longGate = longEdgeSep > LongEdgeThreshold ? 1.0 : 0.0;
+    longMaskH = saturate(avgBlurH.a * 2.0 - 1.0);
+    longMaskV = saturate(avgBlurV.a * 2.0 - 1.0);
+    longEdgeSep = abs(longMaskH - longMaskV);
+    longGate = longEdgeSep > LongEdgeThreshold ? 1.0 : 0.0;
+
+    lbH = LI(avgBlurH.rgb);
+    lbV = LI(avgBlurV.rgb);
+}
+
+//---------------------|
+// :: Pixel Shaders :: |
+//---------------------|
+
+float4 PS_PreFilter(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
+{
+    float4 center = LoadBB(uv, float2(0, 0));
+    float4 left   = LoadBB(uv, float2(-1, 0));
+    float4 right  = LoadBB(uv, float2( 1, 0));
+    float4 top    = LoadBB(uv, float2( 0,-1));
+    float4 bottom = LoadBB(uv, float2( 0, 1));
+
+    // High-pass + crush (talk slide 22): saturate(abs(x)*a - b)
+    float4 edges = 4.0 * abs((left + right + top + bottom) - 4.0 * center);
+    float edgesLum = LI(edges.rgb);
+    float crushed = saturate(edgesLum * EdgeContrast - Epsilon);
+
+    return float4(center.rgb, crushed);
+}
+
+float4 PS_Spatial(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
+{
+    float4 Center = LoadPF(uv, float2( 0,  0));
+    float4 Left   = LoadPF(uv, float2(-1,  0));
+    float4 Right  = LoadPF(uv, float2( 1,  0));
+    float4 Up     = LoadPF(uv, float2( 0, -1));
+    float4 Down   = LoadPF(uv, float2( 0,  1));
+
+    float4 blurredH, blurredV;
+    float satAmountH, satAmountV;
+    ComputeShortEdgeMasks(Center, Left, Right, Up, Down, blurredH, blurredV, satAmountH, satAmountV);
+
+    float4 dlaa = Center;
+    dlaa = lerp(dlaa, blurredH, satAmountV);
+    // Second axis at half weight.
+    dlaa = lerp(dlaa, blurredV, satAmountH * 0.5);
+
+    float longMaskH, longMaskV, longEdgeSep, longGate, lbH, lbV;
+    ComputeLongEdgeMasks(uv, Left, Right, Up, Down, longMaskH, longMaskV, longEdgeSep, longGate, lbH, lbV);
 
     // Only one dominant axis, and only where the mask is actually strong
     [branch]
     if (longGate > 0.0 && max(longMaskH, longMaskV) > 0.15)
     {
-        float lbH = LI(avgBlurH.rgb);
-        float lbV = LI(avgBlurV.rgb);
-
         float cL = LI(Center.rgb);
         float lL = LI(Left.rgb);
         float rL = LI(Right.rgb);
@@ -232,8 +247,7 @@ float4 PS_Spatial(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     }
 
     float3 outRgb = lerp(Center.rgb, dlaa.rgb, Strength);
-    // Always write clean AA — debug overlays are applied in Resolve only so
-    // HistoryTex never stores a debug frame.
+    // Always write clean AA; debug overlays are applied in Resolve only.
     return float4(outRgb, 1.0);
 }
 
@@ -260,41 +274,15 @@ float4 PS_Resolve(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
 
         if (ViewMode == 2) // Short Mask
         {
-            float4 combH = 2.0 * (Left + Right);
-            float4 combV = 2.0 * (Up + Down);
-            float4 centerDiffH = abs(combH - 4.0 * Center) / 4.0;
-            float4 centerDiffV = abs(combV - 4.0 * Center) / 4.0;
-            float4 blurredH = (combH + 2.0 * Center) / 6.0;
-            float4 blurredV = (combV + 2.0 * Center) / 6.0;
-            float lumH  = LI(centerDiffH.rgb);
-            float lumV  = LI(centerDiffV.rgb);
-            float lumHB = max(LI(blurredH.rgb), 1e-4);
-            float lumVB = max(LI(blurredV.rgb), 1e-4);
-            float satH = saturate((Lambda * lumH - Epsilon) / lumVB);
-            float satV = saturate((Lambda * lumV - Epsilon) / lumHB);
+            float4 blurredH, blurredV;
+            float satH, satV;
+            ComputeShortEdgeMasks(Center, Left, Right, Up, Down, blurredH, blurredV, satH, satV);
             overlay = float3(satH, satV, max(satH, satV));
         }
         else // Long Mask
         {
-            float4 HNegA = LoadPF(uv, float2(-3.5, 0));
-            float4 HNegB = LoadPF(uv, float2(-5.5, 0));
-            float4 HNegC = LoadPF(uv, float2(-7.5, 0));
-            float4 HPosA = LoadPF(uv, float2( 3.5, 0));
-            float4 HPosB = LoadPF(uv, float2( 5.5, 0));
-            float4 HPosC = LoadPF(uv, float2( 7.5, 0));
-            float4 VNegA = LoadPF(uv, float2(0, -3.5));
-            float4 VNegB = LoadPF(uv, float2(0, -5.5));
-            float4 VNegC = LoadPF(uv, float2(0, -7.5));
-            float4 VPosA = LoadPF(uv, float2(0,  3.5));
-            float4 VPosB = LoadPF(uv, float2(0,  5.5));
-            float4 VPosC = LoadPF(uv, float2(0,  7.5));
-
-            float4 avgBlurH = (Left + HNegA + HNegB + HNegC + Right + HPosA + HPosB + HPosC) / 8.0;
-            float4 avgBlurV = (Up + VNegA + VNegB + VNegC + Down + VPosA + VPosB + VPosC) / 8.0;
-            float longMaskH = saturate(avgBlurH.a * 2.0 - 1.0);
-            float longMaskV = saturate(avgBlurV.a * 2.0 - 1.0);
-            float longEdgeSep = abs(longMaskH - longMaskV);
-            float longGate = longEdgeSep > LongEdgeThreshold ? 1.0 : 0.0;
+            float longMaskH, longMaskV, longEdgeSep, longGate, lbH, lbV;
+            ComputeLongEdgeMasks(uv, Left, Right, Up, Down, longMaskH, longMaskV, longEdgeSep, longGate, lbH, lbV);
             overlay = float3(longMaskH * longGate, longMaskV * longGate, longEdgeSep);
         }
 
@@ -306,7 +294,12 @@ float4 PS_Resolve(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
         return float4(spatial, 1.0);
 
     // Sky / no usable depth: skip temporal
+#if _BABA_USE_LAUNCHER
+    float depth = TAA_GetStableDepth(uv,
+        tex2Dlod(BaBa_Launcher::sLinearDepth, float4(clamp(uv, 0.0, 1.0), 0.0, 0.0)).r);
+#else
     float depth = bb::GetLinearizedDepth(uv);
+#endif
     if (depth >= 0.98)
         return float4(spatial, 1.0);
 
@@ -318,10 +311,11 @@ float4 PS_Resolve(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
         return float4(spatial, 1.0);
 
     float conf = saturate(MV_GetConfidence(uv));
+    conf = TAA_GetNormalHistoryConfidence(uv, histUV, depth, conf);
     if (conf < 0.05)
         return float4(spatial, 1.0);
 
-    float3 history = TAA_SampleHistoryCatmullRom(sHistoryTex, histUV, float2(BUFFER_WIDTH, BUFFER_HEIGHT)).rgb;
+    float3 history = TAA_SampleHistoryCatmullRom(sHistory, histUV, float2(BUFFER_WIDTH, BUFFER_HEIGHT)).rgb;
 
     float3 cur_c  = TAA_Compress(spatial);
     float3 hist_c = TAA_Compress(history);
@@ -365,7 +359,9 @@ float4 PS_UpdateHistory(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Tar
 
 technique BaBa_DTLAA <
     ui_label = "BaBa: DTLAA";
-    ui_tooltip = "Directionally Localized AA (Andreev) + optional TAA. Run BaBa_Flow before this when using temporal.";
+    ui_tooltip = "Directionally Localized AA (Andreev) + optional TAA. Run BaBa_Flow before this when using temporal.\n\n"
+                 "Also uses depth from 'BaBa: Launcher' if enabled ABOVE this effect (to skip temporal AA on sky).\n"
+                 "Without it, sky handling may be inaccurate. To run standalone instead, set 'BABA_USE_LEGACY_PIPELINE' to 1 in the preprocessor definitions.";
 >
 {
     pass PreFilter
@@ -389,6 +385,6 @@ technique BaBa_DTLAA <
     {
         VertexShader = PostProcessVS;
         PixelShader = PS_UpdateHistory;
-        RenderTarget = HistoryTex;
+        RenderTarget = TexHistory;
     }
 }

@@ -65,7 +65,7 @@ uniform float FrameTime < source = "frametime"; >;
 #define SCALE 2
 #define GW (BUFFER_WIDTH / SCALE)
 #define GH (BUFFER_HEIGHT / SCALE)
-namespace BaBaPHDR
+namespace BaBa_PHDR
 {
 texture TexColor : COLOR;
 sampler sTexColor

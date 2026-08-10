@@ -26,12 +26,17 @@
 #include ".\Includes\bb_colorspace.fxh"
 #include ".\Includes\bb_normal.fxh"
 #include ".\Includes\bb_mv.fxh"
+#include ".\Includes\bb_taa.fxh"
 
 #undef EnableDepthMultiplier
 #undef DepthMultiplier
 
-#ifndef USE_HILBERT_LUT
-    #define USE_HILBERT_LUT 1 
+#ifndef _BABA_USE_HILBERT_LUT
+    #if defined(USE_HILBERT_LUT) && !USE_HILBERT_LUT
+        #define _BABA_USE_HILBERT_LUT 0
+    #else
+        #define _BABA_USE_HILBERT_LUT 1
+    #endif
 #endif
 
 #undef PI
@@ -53,7 +58,11 @@ static const float2 ZERO_LOD = float2(0.0, 0.0);
 #define S_PC MagFilter=POINT;MinFilter=POINT;MipFilter=POINT;AddressU=Clamp;AddressV=Clamp;AddressW=Clamp;
 #define S_LC MagFilter=LINEAR;MinFilter=LINEAR;MipFilter=LINEAR;AddressU=Clamp;AddressV=Clamp;AddressW=Clamp;
 
-#define getDepth(coords) bb::GetLinearizedDepth(coords)
+#if _BABA_USE_LAUNCHER
+    #define getDepth(coords) tex2Dlod(BaBa_Launcher::sLinearDepth, float4(clamp(coords, 0.0, 1.0), 0.0, 0.0)).r
+#else
+    #define getDepth(coords) bb::GetLinearizedDepth(coords)
+#endif
 
 #define bEnableDenoise 1
 #define c_phi 1
@@ -184,30 +193,6 @@ uniform float RadiusMultiplier <
     ui_tooltip = "Additional radius multiplier.";
 > = 1.0;
 
-uniform float HeightmapIntensity <
-    ui_category = "Heightmap Normals";
-    ui_category_closed = true;
-    ui_label = "Heightmap Intensity";
-    ui_tooltip = "Controls the strength of heightmap-based normal perturbation.";
-    ui_type = "drag";
-    ui_min = 0.0; ui_max = 200.0; ui_step = 0.1;
-> = 100.0;
-
-uniform float HeightmapBlendAmount <
-    ui_category = "Heightmap Normals";
-    ui_label = "Heightmap Blend Amount";
-    ui_tooltip = "How much to blend heightmap normals with geometric normals.";
-    ui_type = "drag";
-    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
-> = 0.0;
-uniform float HeightmapDepthThreshold <
-    ui_category = "Heightmap Normals";
-    ui_label = "Heightmap Depth Threshold";
-    ui_tooltip = "Limits the heightmap normals to objects closer than this value. Useful to prevent the sky from looking bumpy.";
-    ui_type = "drag";
-    ui_min = 0.0; ui_max = 1.0; ui_step = 0.001;
-> = 0.900;
-
 uniform int SmartSurfaceMode <
     ui_category = "Advanced";
     ui_category_closed = true;
@@ -228,7 +213,7 @@ uniform float Smooth_Threshold <
 
 uniform int ViewMode <
     ui_type = "combo";
-    ui_items = "None\0AO\0Normals\0Depth\0Confidence Check\0";
+    ui_items = "None\0AO\0Confidence Check\0";
     ui_category = "Debug";
     ui_category_closed = true;
     ui_label = "View Mode";
@@ -238,8 +223,25 @@ uniform int ViewMode <
 //----------------|
 // :: Textures :: |
 //----------------|
-namespace Barbatos_XeGTAO150
+namespace BaBa_XeGTAO
 {
+#if _BABA_USE_LAUNCHER
+    sampler sNormalEdges
+    {
+        Texture = BaBa_Launcher::NormalMap;
+        S_PC
+    };
+    sampler sNormalLinear
+    {
+        Texture = BaBa_Launcher::NormalMap;
+        S_LC
+    };
+    sampler sNormalEdges1
+    {
+        Texture = BaBa_Launcher::NormalMap;
+        S_PC
+    };
+#else
     texture texNormalEdges
     {
         Width = BUFFER_WIDTH;
@@ -268,6 +270,17 @@ namespace Barbatos_XeGTAO150
         Texture = texNormalEdges1;
         S_PC
     };
+#endif
+
+    float3 SampleXeNormal(sampler normalSampler, float2 uv)
+    {
+        float4 normalData = tex2Dlod(normalSampler, float4(uv, 0.0, 0.0));
+#if _BABA_USE_LAUNCHER
+        return NM_SafeNormalize(normalData.rgb);
+#else
+        return NM_DecodeNormal(normalData.rg);
+#endif
+    }
 
     texture B_PrevLuma
     {
@@ -361,7 +374,7 @@ namespace Barbatos_XeGTAO150
 #if __RENDERER__ >= 0xa000
         isOdd = (FRAME_COUNT & 1) != 0;
 #else
-        isOdd = (FRAME_COUNT % 2) != 0;
+        isOdd = (uint(FRAME_COUNT) % 2u) != 0u;
 #endif
         if (isOdd)
             outStruct.vpos = float4(-10000.0, -10000.0, 0.0, 1.0);
@@ -374,7 +387,7 @@ namespace Barbatos_XeGTAO150
 #if __RENDERER__ >= 0xa000
         isEven = (FRAME_COUNT & 1) == 0;
 #else
-        isEven = (FRAME_COUNT % 2) == 0;
+        isEven = (uint(FRAME_COUNT) % 2u) == 0u;
 #endif
         if (isEven)
             outStruct.vpos = float4(-10000.0, -10000.0, 0.0, 1.0);
@@ -385,7 +398,7 @@ namespace Barbatos_XeGTAO150
 #if __RENDERER__ >= 0xa000 
         bool isEven = (FRAME_COUNT & 1) == 0;
 #else 
-        bool isEven = (FRAME_COUNT % 2) == 0;
+        bool isEven = (uint(FRAME_COUNT) % 2u) == 0u;
 #endif
         return isEven ? tex2Dlod(sHistory0, float4(uv, 0, 0)).r : tex2Dlod(sHistory1, float4(uv, 0, 0)).r;
     }
@@ -417,41 +430,6 @@ namespace Barbatos_XeGTAO150
         return normalize(pixelNormal);
     }
     
-    // DecodeNormal replaced by NM_DecodeNormal from bb_normal.fxh
-    // bb_normal.fxh is already included via bb_common or another include
-    #define DecodeNormal(enc) NM_DecodeNormal(enc)
-
-    float3 blend_normals(float3 n1, float3 n2)
-    {
-        n1 += float3(0, 0, 1);
-        n2 *= float3(-1, -1, 1);
-        return n1 * dot(n1, n2) / n1.z - n2;
-    }
-
-    float3 ComputeHeightmapNormal(float h00, float h10, float h20, float h01, float h11, float h21, float h02, float h12, float h22, const float3 pixelWorldSize)
-    {
-        h00 -= h11; h10 -= h11; h20 -= h11; h01 -= h11; h21 -= h11; h02 -= h11; h12 -= h11; h22 -= h11;
-        float Gx = h00 - h20 + 2.0 * h01 - 2.0 * h21 + h02 - h22;
-        float Gy = h00 + 2.0 * h10 + h20 - h02 - 2.0 * h12 - h22;
-        return normalize(float3(Gx * pixelWorldSize.y * pixelWorldSize.z, Gy * pixelWorldSize.x * pixelWorldSize.z, pixelWorldSize.x * pixelWorldSize.y * 16));
-    }
-
-    float3 GetHeightmapNormal(float2 texcoord)
-    {
-        float2 p = bb::PixelSize;
-        float h00 = GetColor(texcoord + float2(-p.x, -p.y)).r;
-        float h10 = GetColor(texcoord + float2(0, -p.y)).r;
-        float h20 = GetColor(texcoord + float2(p.x, -p.y)).r;
-        float h01 = GetColor(texcoord + float2(-p.x, 0)).r;
-        float h11 = GetColor(texcoord).r;
-        float h21 = GetColor(texcoord + float2(p.x, 0)).r;
-        float h02 = GetColor(texcoord + float2(-p.x, p.y)).r;
-        float h12 = GetColor(texcoord + float2(0, p.y)).r;
-        float h22 = GetColor(texcoord + float2(p.x, p.y)).r;
-        float3 pixelWorldSize = float3(p.x, p.y, HeightmapIntensity * 0.001);
-        return ComputeHeightmapNormal(h00, h10, h20, h01, h11, h21, h02, h12, h22, pixelWorldSize);
-    }
-
     float atrous_scalar(sampler input_sampler, float2 bufferUV, float2 viewUV, int level, float center_depth, float3 center_normal, float4 NDCToView)
     {
         float2 inv_proj_scale = float2(-NDCToView.z, NDCToView.w);
@@ -477,7 +455,11 @@ namespace Barbatos_XeGTAO150
             
             float sample_val = tex2Dlod(input_sampler, float4(b_uv, 0.0, 0.0)).r;
             float sample_depth = getDepth(v_uv) * DepthMultiplier;
-            float3 sample_normal = DecodeNormal(tex2Dlod(sNormalLinear, float4(b_uv, 0.0, 0.0)).xy);
+#if _BABA_USE_LAUNCHER
+            float3 sample_normal = SampleXeNormal(sNormalLinear, v_uv);
+#else
+            float3 sample_normal = SampleXeNormal(sNormalLinear, b_uv);
+#endif
             float is_valid_depth = step(sample_depth / (DepthMultiplier * 10.0), DepthThreshold);
             float2 sample_clip_pos = v_uv * 2.0 - 1.0;
             
@@ -524,25 +506,6 @@ namespace Barbatos_XeGTAO150
         return ret;
     }
 
-    float3 UVToViewPos(float2 uv, float view_z)
-    {
-        float2 ndc = uv * 2.0 - 1.0;
-        float tanHalfFOV = tan(FOV * PI_OVER_360);
-        float aspect = BUFFER_ASPECT_RATIO;
-        float2 pScale = float2(aspect * tanHalfFOV * 2.0, tanHalfFOV * 2.0);
-        return float3(ndc.x * pScale.x * view_z, -ndc.y * pScale.y * view_z, view_z);
-    }
-
-    float3 CalculateNormal(float2 uv)
-    {
-        float3 center = UVToViewPos(uv, getDepth(uv));
-        float3 offset_x = UVToViewPos(uv + float2(bb::PixelSize.x, 0), getDepth(uv + float2(bb::PixelSize.x, 0)));
-        float3 offset_y = UVToViewPos(uv + float2(0, bb::PixelSize.y), getDepth(uv + float2(0, bb::PixelSize.y)));
-        float3 n = cross(center - offset_x, center - offset_y);
-        float lenSq = dot(n, n);
-        return (lenSq > 1e-25) ? n * rsqrt(lenSq) : float3(0, 0, -1);
-    }
-
     float ClipToAABB(float aabb_min, float aabb_max, float history_sample)
     {
         float p_clip = 0.5 * (aabb_max + aabb_min);
@@ -573,7 +536,13 @@ namespace Barbatos_XeGTAO150
     float JointBilateralUpsample(float2 uv, float highDepth)
     {
         float2 lowResUV = uv * RenderScale;
-        float3 highNormal = CalculateNormal(uv);
+        // sNormalLinear is the full-resolution shared Launcher normal map, but the
+        // standalone pipeline packs it into the [0, RenderScale] corner instead.
+#if _BABA_USE_LAUNCHER
+        float3 highNormal = SampleXeNormal(sNormalLinear, uv);
+#else
+        float3 highNormal = SampleXeNormal(sNormalLinear, lowResUV);
+#endif
 
         float result = GetLod(sAO, lowResUV).r;
         float sumAO = 0.0;
@@ -594,7 +563,11 @@ namespace Barbatos_XeGTAO150
                 
                 float sampleAO = GetLod(sAO, sampleUV).r;
                 
-                float3 lowNormal = DecodeNormal(GetLod(sNormalEdges, sampleUV).xy);
+#if _BABA_USE_LAUNCHER
+                float3 lowNormal = SampleXeNormal(sNormalEdges, sampleUV / max(RenderScale, 1e-6));
+#else
+                float3 lowNormal = SampleXeNormal(sNormalEdges, sampleUV);
+#endif
                 float lowDepth = getDepth(sampleUV / RenderScale);
                 
                 float wDepth = exp(-abs(highDepth - lowDepth) * depth_weight_factor);
@@ -652,14 +625,6 @@ namespace Barbatos_XeGTAO150
         
         float3 viewspaceNormal = XeGTAO_CalculateNormalBGI(CENTER, LEFT, RIGHT, TOP, BOTTOM);
 
-        if (HeightmapBlendAmount > 0.001 && depth01 < HeightmapDepthThreshold)
-        {
-            float3 heightmapNormal = GetHeightmapNormal(viewUV);
-            float3 blended = blend_normals(heightmapNormal, viewspaceNormal);
-            float fade = 1.0 - smoothstep(HeightmapDepthThreshold - 0.05, HeightmapDepthThreshold, depth01);
-            viewspaceNormal = normalize(lerp(viewspaceNormal, blended, HeightmapBlendAmount * fade));
-        }
-        
         outNormalEdges = float4(viewspaceNormal.xy * 0.5 + 0.5, 0.0, depth01);
     }
 
@@ -687,8 +652,13 @@ namespace Barbatos_XeGTAO150
 
         lpfloat viewspaceZ = (lpfloat) depth * DepthMultiplier * 0.99920;
         
-        float2 encodedNormal = tex2D(sNormalEdges, input.uv).xy;
-        lpfloat3 viewspaceNormal = (lpfloat3) DecodeNormal(encodedNormal);
+        // Full-resolution with the Launcher (sample at viewUV); low-res packed into the
+        // [0, RenderScale] corner in the standalone pipeline (sample at input.uv).
+#if _BABA_USE_LAUNCHER
+        lpfloat3 viewspaceNormal = (lpfloat3) SampleXeNormal(sNormalEdges, viewUV);
+#else
+        lpfloat3 viewspaceNormal = (lpfloat3) SampleXeNormal(sNormalEdges, input.uv);
+#endif
 
         const float3 pixCenterPos = XeGTAO_ComputeViewspacePosition(viewUV, viewspaceZ, consts);
         const lpfloat3 viewVec = (lpfloat3) normalize(-pixCenterPos);
@@ -811,7 +781,7 @@ namespace Barbatos_XeGTAO150
         float2 viewUV = input.uv; 
         float2 bufferUV = input.uv * RenderScale; 
         
-        float rawDepth = getDepth(viewUV);
+        float rawDepth = TAA_GetStableDepth(viewUV, getDepth(viewUV));
         if (rawDepth >= DepthThreshold)
             return float4(1, 1, 1, 1);
 
@@ -827,7 +797,7 @@ namespace Barbatos_XeGTAO150
         }
         else
         {
-            float3 normal = DecodeNormal(tex2Dlod(sNormalLinear, float4(viewUV, 0.0, 0.0)).xy);
+            float3 normal = SampleXeNormal(sNormalLinear, viewUV);
             if (bEnableDenoise)
                 current_signal = atrous_scalar(sAO, bufferUV, viewUV, 1, center_depth, normal, input.NDCToView);
             else
@@ -845,7 +815,7 @@ namespace Barbatos_XeGTAO150
         
         float history_signal = GetLod(sHistoryParams, float4(reprojected_buffer_uv, 0, 0)).r;
         
-        float history_depth = getDepth(reprojected_view_uv);
+        float history_depth = TAA_GetStableDepth(reprojected_view_uv, getDepth(reprojected_view_uv));
         bool valid_depth = abs(history_depth - rawDepth) < 0.02;
         bool inside_screen = all(saturate(reprojected_view_uv) == reprojected_view_uv);
 
@@ -859,6 +829,8 @@ namespace Barbatos_XeGTAO150
         float curr_luma_ao = linear_luma / (1.0 + linear_luma);
         
         float confidence = MV_GetConfidenceAO(viewUV, velocity, flow_magnitude, curr_luma_ao, sB_PrevLuma);
+        confidence = TAA_GetNormalHistoryConfidence(
+            viewUV, reprojected_view_uv, TAA_GetStableDepth(viewUV, rawDepth), confidence);
         
         float val_min, val_max;
         ComputeNeighborhoodMinMax_Scalar(sAO, bufferUV, current_signal, val_min, val_max);
@@ -962,7 +934,7 @@ namespace Barbatos_XeGTAO150
 #if __RENDERER__ >= 0xa000
         if ((FRAME_COUNT & 1) != 0)
 #else
-        if ((uint(FRAME_COUNT) % 2) != 0)
+        if ((uint(FRAME_COUNT) % 2u) != 0u)
 #endif
             discard;
         outHistory = SpatioTemporalDenoise(input, sHistory1);
@@ -974,7 +946,7 @@ namespace Barbatos_XeGTAO150
 #if __RENDERER__ >= 0xa000
         if ((FRAME_COUNT & 1) == 0)
 #else
-        if ((uint(FRAME_COUNT) % 2) == 0)
+        if ((uint(FRAME_COUNT) % 2u) == 0u)
 #endif
             discard;
         outHistory = SpatioTemporalDenoise(input, sHistory0);
@@ -1015,19 +987,7 @@ namespace Barbatos_XeGTAO150
             ao *= fade;
             return float4(lerp(float3(1, 1, 1), float3(0, 0, 0), ao), 1.0);
         }
-        else if (ViewMode == 2) // Normals
-        {
-            float3 debugNormals = DecodeNormal(GetLod(sNormalEdges, input.uv * RenderScale).xy);
-            debugNormals.x = -debugNormals.x;
-            debugNormals.z = -debugNormals.z;
-            return float4(debugNormals * 0.5 + 0.5, 1.0);
-        }
-        else if (ViewMode == 3) // Depth
-        {
-            float view_depth = (depth * DepthMultiplier) / (DepthMultiplier * 10.0);
-            return float4(saturate(view_depth).xxx, 1.0);
-        }
-        else if (ViewMode == 4) // Confidence Check
+        else if (ViewMode == 2) // Confidence Check
         {
             float2 velocity = MV_GetVelocity(input.uv);
             float  flow_mag = length(velocity * BUFFER_SCREEN_SIZE);
@@ -1050,8 +1010,12 @@ namespace Barbatos_XeGTAO150
     technique BaBa_XeGTAO
     <
     ui_label = "BaBa: XeGTAO";
+    ui_tooltip = "Requires 'BaBa: Launcher' enabled ABOVE this effect in the list.\n"
+                 "Without it, depth/normals will be invalid and the effect won't work correctly.\n"
+                 "To run standalone instead, set 'BABA_USE_LEGACY_PIPELINE' to 1 in the preprocessor definitions.";
     >
     {
+        #if !_BABA_USE_LAUNCHER
         pass NormalsEdges
         {
             VertexShader = VS_GTAO;
@@ -1071,6 +1035,7 @@ namespace Barbatos_XeGTAO150
             PixelShader = PS_SmoothNormals_V;
             RenderTarget = texNormalEdges;
         }
+        #endif
         pass GTAO_Main
         {
             VertexShader = VS_GTAO;

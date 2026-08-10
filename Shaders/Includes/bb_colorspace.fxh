@@ -153,11 +153,16 @@ float3 Input2Linear(float3 color)
 
 float3 GetStrictLinearAlbedo(float3 color)
 {
-    if (GetHDRMode() != 1)
-        return Input2Linear(color);
-
+    // Single exit: GetHDRMode() is a runtime value, and returning early from a
+    // branch on it makes ReShade lower this into a return slot that the D3D
+    // compiler then reports as potentially uninitialized (X4000).
     float3 srgbColor = max(color, 0.0);
-    return (srgbColor < 0.04045) ? (srgbColor / 12.92) : pow(abs((srgbColor + 0.055) / 1.055), 2.4);
+    float3 result = (srgbColor < 0.04045) ? (srgbColor / 12.92) : pow(abs((srgbColor + 0.055) / 1.055), 2.4);
+
+    if (GetHDRMode() != 1)
+        result = Input2Linear(color);
+
+    return result;
 }
 
 float3 Linear2Output(float3 color)
@@ -181,6 +186,31 @@ float GetLuminance(float3 color)
     return dot(color, lumaCoeff);
 }
 
+// Fixed BT.601 (SDTV) weights, paired with RGBToYCbCr/YCbCrToRGB below.
+float GetLuma(float3 rgb)
+{
+    return dot(rgb, float3(0.299, 0.587, 0.114));
+}
+
+float3 RGBToYCbCr(float3 rgb)
+{
+    float y = GetLuma(rgb);
+    float cb = (rgb.b - y) * 0.564 + 0.5;
+    float cr = (rgb.r - y) * 0.713 + 0.5;
+    return float3(y, cb, cr);
+}
+
+float3 YCbCrToRGB(float3 ycbcr)
+{
+    float y = ycbcr.x;
+    float cb = ycbcr.y - 0.5;
+    float cr = ycbcr.z - 0.5;
+    float r = y + 1.403 * cr;
+    float g = y - 0.344 * cb - 0.714 * cr;
+    float b = y + 1.770 * cb;
+    return float3(r, g, b);
+}
+
 float3 KelvinToRGB(float k)
 {
     float3 color;
@@ -197,8 +227,11 @@ float3 KelvinToRGB(float k)
     }
     else
     {
-        color.r = 329.698727446 * pow(k - 60.0, -0.1332047592);
-        color.g = 288.1221695283 * pow(k - 60.0, -0.0755148492);
+        // This branch only runs for k > 66, so k - 60 is always positive, but the
+        // compiler cannot prove it and warns about pow() on a negative base (X3571).
+        float kb = max(k - 60.0, 1e-4);
+        color.r = 329.698727446 * pow(kb, -0.1332047592);
+        color.g = 288.1221695283 * pow(kb, -0.0755148492);
         color.b = 255.0;
     }
     

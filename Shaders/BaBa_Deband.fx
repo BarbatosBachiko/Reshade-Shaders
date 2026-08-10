@@ -9,6 +9,7 @@
 #include ".\Includes\bb_reshade.fxh"
 #include ".\Includes\bb_common.fxh"
 #include ".\Includes\bb_colorspace.fxh"
+#include ".\Includes\bb_noise.fxh"
 
 //----------|
 // :: UI :: |
@@ -45,6 +46,7 @@ uniform int Iterations <
     ui_max = 3;
 > = 1;
 
+// 0, 120 and 240 degrees in radians.
 static const float ANGLE_OFFSETS[3] = { 0.0, 2.09439510239, 4.18879020478 };
 
 //----------------|
@@ -57,11 +59,6 @@ float2 GetDirection(float base_angle, int iteration)
     float2 dir;
     sincos(angle, dir.y, dir.x);
     return dir;
-}
-
-float GetDither(float2 pos)
-{
-    return frac(52.9829189 * frac(dot(pos, float2(0.06711056, 0.00583715)))) - 0.5;
 }
 
 /*------------------.
@@ -79,6 +76,7 @@ float4 MainPS(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     for (int i = 0; i < Iterations; i++)
     {
         float2 dir = GetDirection(base_angle, i);
+        // 0.618034 = golden ratio conjugate.
         float radius_scale = 1.0 + (float(i) * 0.618034);
         float2 offset = dir * (Radius * radius_scale * bb::PixelSize);
 
@@ -100,7 +98,8 @@ float4 MainPS(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     
     result = lerp(color, result, Strength);
 
-    float dither = GetDither(pos.xy);
+    // Centered to [-0.5, 0.5) to dither the quantization steps left by the loop above.
+    float dither = N_GetSpatialNoise(pos.xy) - 0.5;
     result += dither * Threshold * 0.3;
         
     return float4(saturate(result), 1.0);

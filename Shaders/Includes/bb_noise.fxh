@@ -67,7 +67,25 @@ float3 N_ToroidalJitter(float3 x, float3 jitter)
     return 2.0 * abs(frac(x + jitter) - 0.5);
 }
 
+// Interleaved Gradient Noise (Jorge Jimenez) in [0,1).
 float N_GetSpatialNoise(float2 pos)
 {
     return frac(52.9829189 * frac(0.06711056 * pos.x + 0.00583715 * pos.y));
+}
+
+// Interleaved Gradient Noise animated across frames (Jimenez, SIGGRAPH 2016).
+float N_GetAnimatedSpatialNoise(float2 pos, int frameCount)
+{
+    // uint modulus: the signed form makes FXC emit X3556 (slow integer modulus).
+    pos += (float) (uint(max(frameCount, 0)) % 64u) * 5.588238;
+    return N_GetSpatialNoise(pos);
+}
+
+// Triangle-shaped dither in roughly [-0.5, 0.5): two phase-offset IGN taps.
+float N_GetTriangleNoise(float2 pos)
+{
+    float dotIGN = 0.06711056 * pos.x + 0.00583715 * pos.y;
+    float noise1 = frac(52.9829189 * frac(dotIGN));
+    float noise2 = frac(52.9829189 * frac(dotIGN + 0.036473855));
+    return noise1 + noise2 - 1.0;
 }

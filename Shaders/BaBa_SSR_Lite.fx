@@ -8,7 +8,7 @@
 
 #include ".\Includes\bb_reshade.fxh"
 #include ".\Includes\bb_ui.fxh"
-#define USE_HALF 1
+#define _BABA_USE_HALF 1
 #include ".\Includes\bb_common.fxh"
 #include ".\Includes\bb_colorspace.fxh"
 #include ".\Includes\bb_depth.fxh"
@@ -225,7 +225,7 @@ uniform int ViewMode <
     ui_category = "Advanced";
     ui_label = "Debug View";
     ui_type = "combo";
-    ui_items = "Off\0Reflections Only\0Surface Normals\0Depth View\0Motion Vectors\0Raw LowRes\0";
+    ui_items = "Off\0Reflections Only\0Motion Vectors\0Raw LowRes\0";
 > = 0;
 
 #ifndef BUFFER_COLOR_SPACE
@@ -239,8 +239,16 @@ static const float SSR_DIST_FADE = 10.0;
 // :: Textures :: |
 //----------------|
 
-namespace Barbatos_SSR_Lite_200
+namespace BaBa_SSR_Lite
 {
+#if _BABA_USE_LAUNCHER
+    sampler sNormal
+    {
+        Texture = BaBa_Launcher::NormalMap;
+        MagFilter = LINEAR;
+        MinFilter = LINEAR;
+    };
+#else
     texture Normal
     {
         Width = BUFFER_WIDTH;
@@ -253,6 +261,7 @@ namespace Barbatos_SSR_Lite_200
         MagFilter = LINEAR;
         MinFilter = LINEAR;
     };
+#endif
 
     texture Accum
     {
@@ -368,17 +377,21 @@ namespace Barbatos_SSR_Lite_200
     // :: Functions ::|
     //----------------|
 
-    float GetDepth(float2 xy)
-    {
-        return bb::GetLinearizedDepth(xy);
-    }
-
     float3 CalculateNormal(float2 uv, float2 pScale)
     {
-        // Match BaBa_SSR: NM_CalculateNormal + flip X before tracing
-        float3 n = NM_CalculateNormal(uv, pScale);
-        n.x = -n.x;
-        return n;
+        // Keep the same view-space convention as the shared Launcher normal.
+        return NM_CalculateNormal(uv, pScale);
+    }
+
+    // All reads of the shared g-buffer go through this helper: the Launcher's
+    // NormalMap is full-resolution, the legacy local texture is RenderScale-packed.
+    float4 SampleSharedGBuffer(float2 fullResUV)
+    {
+#if _BABA_USE_LAUNCHER
+        return GetLod(sNormal, fullResUV);
+#else
+        return GetLod(sNormal, fullResUV * RenderScale);
+#endif
     }
 
     float GetOrientationIntensity(float3 normal)
@@ -452,7 +465,7 @@ namespace Barbatos_SSR_Lite_200
             discard;
         float2 viewUV = input.uv / RenderScale;
 
-        float4 gbuffer = GetLod(sNormal, input.uv);
+        float4 gbuffer = SampleSharedGBuffer(viewUV);
         float depth = gbuffer.a;
         if (depth >= 0.999)
             return;
@@ -523,8 +536,8 @@ namespace Barbatos_SSR_Lite_200
             float2 edgeDist = min(hit.uv, 1.0 - hit.uv);
             float screenFade = smoothstep(0.0, 0.10, min(edgeDist.x, edgeDist.y));
 
-            float3 nR = GetLod(sNormal, input.uv + float2(bb::PixelSize.x, 0) * RenderScale).rgb;
-            float3 nD = GetLod(sNormal, input.uv + float2(0, bb::PixelSize.y) * RenderScale).rgb;
+            float3 nR = SampleSharedGBuffer(viewUV + float2(bb::PixelSize.x, 0)).rgb;
+            float3 nD = SampleSharedGBuffer(viewUV + float2(0, bb::PixelSize.y)).rgb;
             float geoMask = 1.0 - smoothstep(0.05, max(EDGE_MASK_THRESHOLD, 0.001), length(normal - nR) + length(normal - nD));
 
             // Must match BaBa_SSR: dot(-viewDir, reflectDir)
@@ -548,7 +561,7 @@ namespace Barbatos_SSR_Lite_200
         float3 c_val = c_data.rgb;
         float c_a = c_data.a;
 
-        float4 c_gbuffer = GetLod(sNormal, input.uv);
+        float4 c_gbuffer = SampleSharedGBuffer(input.uv / max(RenderScale, 1e-6));
         float3 c_norm = c_gbuffer.rgb;
         float c_depth = c_gbuffer.a;
 
@@ -569,7 +582,7 @@ namespace Barbatos_SSR_Lite_200
                     continue;
                 float2 uv_offset = input.uv + float2(x, y) * px;
                 float4 s_data = GetLod(sInputTex, uv_offset);
-                float4 s_gbuffer = GetLod(sNormal, uv_offset);
+                float4 s_gbuffer = SampleSharedGBuffer(uv_offset / max(RenderScale, 1e-6));
                 float3 s_norm = s_gbuffer.rgb;
                 float s_depth = s_gbuffer.a;
 
@@ -597,7 +610,7 @@ namespace Barbatos_SSR_Lite_200
         if (any(input.uv > RenderScale))
             discard;
         float2 viewUV = input.uv / RenderScale;
-        float depth = GetDepth(viewUV);
+        float depth = TAA_GetStableDepth(viewUV, GetDepth(viewUV));
         if (depth >= 0.999)
             return float4(0.0, 0.0, 0.0, 0.0);
 
@@ -620,10 +633,12 @@ namespace Barbatos_SSR_Lite_200
         float3 history_ycocg = RGBToYCoCg(history_compressed);
 
         float raw_confidence = saturate(MV_GetConfidence(viewUV));
+        float normal_confidence = TAA_GetNormalHistoryConfidence(
+            viewUV, reprojected_view_uv, depth, raw_confidence);
         float4 color_min, color_max;
         TAA_ComputeNeighborhoodVariance(sAccum, input.uv, current_ssr, bb::PixelSize, color_min, color_max);
 
-        float relax_amount = 0.15 * raw_confidence;
+        float relax_amount = 0.15 * normal_confidence;
         color_min -= relax_amount;
         color_max += relax_amount;
         float3 clipped_history_ycocg = TAA_ClipToAABB(color_min.rgb, color_max.rgb, history_ycocg);
@@ -633,7 +648,7 @@ namespace Barbatos_SSR_Lite_200
         float blend_adapt = saturate(1.0 - clamp_distance * 2.0);
 
         float frames = max(1.0, (float)MaxFrames);
-        float blendVal = raw_confidence * (frames / (frames + 1.0));
+        float blendVal = normal_confidence * (frames / (frames + 1.0));
         float final_feedback = blendVal * lerp(0.8, 1.0, blend_adapt);
 
         if (EnableAntiSmear)
@@ -656,7 +671,7 @@ namespace Barbatos_SSR_Lite_200
     void PS_Accumulate0(VS_OUTPUT input, out float4 outAccum : SV_Target)
     {
         outAccum = 0.0;
-        if (uint(FRAME_COUNT) % 2 != 0)
+        if (uint(FRAME_COUNT) % 2u != 0u)
             discard;
         outAccum = ComputeTAA(input, sHistory1);
     }
@@ -664,14 +679,14 @@ namespace Barbatos_SSR_Lite_200
     void PS_Accumulate1(VS_OUTPUT input, out float4 outAccum : SV_Target)
     {
         outAccum = 0.0;
-        if (uint(FRAME_COUNT) % 2 == 0)
+        if (uint(FRAME_COUNT) % 2u == 0u)
             discard;
         outAccum = ComputeTAA(input, sHistory0);
     }
 
     void PS_Atrous1(VS_OUTPUT input, out float4 outColor : SV_Target)
     {
-        if (uint(FRAME_COUNT) % 2 == 0)
+        if (uint(FRAME_COUNT) % 2u == 0u)
             outColor = AtrousFilter(input, sHistory0, 1.0);
         else
             outColor = AtrousFilter(input, sHistory1, 1.0);
@@ -685,7 +700,11 @@ namespace Barbatos_SSR_Lite_200
     float4 JointBilateralUpsample(float2 uv, float highDepth, float2 pScale)
     {
         float2 lowResUV = uv * RenderScale;
+#if _BABA_USE_LAUNCHER
+        float3 highNormal = normalize(GetLod(sNormal, uv).rgb);
+#else
         float3 highNormal = CalculateNormal(uv, pScale);
+#endif
 
         float4 result = GetLod(sDNB, lowResUV);
         hfloat4 sumSSR = 0.0;
@@ -703,7 +722,7 @@ namespace Barbatos_SSR_Lite_200
             {
                 float2 sampleUV = baseUV + float2(x, y) * texelSize;
                 float4 ssr = GetLod(sDNB, sampleUV);
-                float4 gbuffer = GetLod(sNormal, sampleUV);
+                float4 gbuffer = SampleSharedGBuffer(sampleUV / max(RenderScale, 1e-6));
 
                 float3 lowNormal = gbuffer.rgb;
                 float lowDepth = gbuffer.a;
@@ -730,7 +749,10 @@ namespace Barbatos_SSR_Lite_200
 
     void PS_Output(VS_OUTPUT input, out float4 outColor : SV_Target)
     {
-        float depth = GetDepth(input.uv);
+        float depth = TAA_GetStableDepth(input.uv, GetDepth(input.uv));
+#if _BABA_USE_LAUNCHER
+        depth = BaBa_Launcher_SampleNormalData(input.uv).a;
+#endif
         float3 rawScene = GetColor(input.uv).rgb;
         float3 scene = Input2Linear(rawScene);
 
@@ -744,26 +766,12 @@ namespace Barbatos_SSR_Lite_200
             }
             else if (ViewMode == 2)
             {
-                float3 debugNormals = GetLod(sNormal, input.uv * RenderScale).rgb;
-                if (depth < 0.999)
-                {
-                    debugNormals.x = -debugNormals.x;
-                    debugNormals.z = -debugNormals.z;
-                }
-                debugColor = debugNormals * 0.5 + 0.5;
-            }
-            else if (ViewMode == 3)
-            {
-                debugColor = depth.xxx;
-            }
-            else if (ViewMode == 4)
-            {
                 float2 mv = SampleMotionVectors(input.uv);
                 debugColor = saturate(float3(mv.x, mv.y, 0.0) * 50.0 + 0.5);
             }
-            else if (ViewMode == 5)
+            else if (ViewMode == 3)
             {
-                debugColor = (uint(FRAME_COUNT) % 2 == 0 ?
+                debugColor = (uint(FRAME_COUNT) % 2u == 0u ?
                     GetLod(sHistory0, input.uv * RenderScale).rgb :
                     GetLod(sHistory1, input.uv * RenderScale).rgb);
             }
@@ -781,7 +789,7 @@ namespace Barbatos_SSR_Lite_200
         float3 reflectionColor = reflectionSample.rgb;
         float reflectionMask = reflectionSample.a;
 
-        float3 normal = GetLod(sNormal, input.uv * RenderScale).rgb;
+        float3 normal = SampleSharedGBuffer(input.uv).rgb;
 
         // Color Grading (from BaBa_SSR)
         float3 tint = Use_Color_Temperature ?
@@ -843,7 +851,10 @@ namespace Barbatos_SSR_Lite_200
     technique BaBa_SSR_Lite
     <
         ui_label = "BaBa: SSR Lite";
-        ui_tooltip = "Lightweight screen-space reflections (GI-style pipeline)";
+        ui_tooltip = "Lightweight screen-space reflections (GI-style pipeline)\n\n"
+                     "Requires 'BaBa: Launcher' enabled ABOVE this effect in the list.\n"
+                     "Without it, depth/normals will be invalid and the effect won't work correctly.\n"
+                     "To run standalone instead, set 'BABA_USE_LEGACY_PIPELINE' to 1 in the preprocessor definitions.";
     >
     {
         pass CopyColorGenMips
@@ -852,12 +863,14 @@ namespace Barbatos_SSR_Lite_200
             PixelShader = PS_CopyColor;
             RenderTarget = TexColorCopy;
         }
+        #if !_BABA_USE_LAUNCHER
         pass Normals
         {
             VertexShader = VS_Barbatos_SSR_Lite;
             PixelShader = PS_GenNormals;
             RenderTarget = Normal;
         }
+        #endif
         pass Trace
         {
             VertexShader = VS_Barbatos_SSR_Lite;

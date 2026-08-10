@@ -28,11 +28,15 @@ float ComputeEdgeMask(float depth, float threshold)
     return 1.0 - smoothstep(0.0, threshold, depthDerivative);
 }
 
-#ifndef USE_HALF
-    #define USE_HALF 0
+#ifndef _BABA_USE_HALF
+    #if defined(USE_HALF) && USE_HALF
+        #define _BABA_USE_HALF 1
+    #else
+        #define _BABA_USE_HALF 0
+    #endif
 #endif
 
-#if USE_HALF
+#if _BABA_USE_HALF
     #define hfloat  min16float
     #define hfloat2 min16float2
     #define hfloat3 min16float3

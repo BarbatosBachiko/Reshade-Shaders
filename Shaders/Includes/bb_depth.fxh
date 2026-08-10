@@ -6,6 +6,12 @@
 
 #include "bb_common.fxh"
 
+#include "bb_pipeline.fxh"
+
+#if _BABA_USE_LAUNCHER && !defined(_BABA_LAUNCHER_PROVIDER)
+    #include "bb_launcher_resources.fxh"
+#endif
+
 #ifndef RESHADE_DEPTH_INPUT_IS_UPSIDE_DOWN
     #define RESHADE_DEPTH_INPUT_IS_UPSIDE_DOWN 0
 #endif
@@ -47,7 +53,11 @@
 float GetDepth(float2 xy)
 {
     xy = clamp(xy, 0.0, 1.0);
+#if _BABA_USE_LAUNCHER && !defined(_BABA_LAUNCHER_PROVIDER)
+    return tex2Dlod(BaBa_Launcher::sLinearDepth, float4(xy, 0.0, 0.0)).r;
+#else
     return bb::GetLinearizedDepth(xy);
+#endif
 }
 
 float GetRawDepth(float2 xy)

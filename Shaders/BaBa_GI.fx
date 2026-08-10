@@ -7,7 +7,7 @@
 '----------------------------------------------*/
 
 #include ".\Includes\bb_reshade.fxh"
-#define USE_HALF 1
+#define _BABA_USE_HALF 1
 #include ".\Includes\bb_common.fxh"
 #include ".\Includes\bb_colorspace.fxh"
 #include ".\Includes\bb_depth.fxh"
@@ -298,11 +298,19 @@ uniform int ViewMode <
     ui_category = "System / Debug";
     ui_label = "Debug View";
     ui_type = "combo";
-    ui_items = "Off\0GI Only\0AO Only\0Surface Normals\0Motion Vectors\0Raw LowRes GI\0White World\0Luminance\0";
+    ui_items = "Off\0GI Only\0AO Only\0Motion Vectors\0Raw LowRes GI\0White World\0Luminance\0";
 > = 0;
 
-namespace Barbatos_RTGI_150
+namespace BaBa_GI
 {
+#if _BABA_USE_LAUNCHER
+    sampler sNormal
+    {
+        Texture = BaBa_Launcher::NormalMap;
+        MagFilter = LINEAR;
+        MinFilter = LINEAR;
+    };
+#else
     texture Normal
     {
         Width = BUFFER_WIDTH;
@@ -315,6 +323,7 @@ namespace Barbatos_RTGI_150
         MagFilter = LINEAR;
         MinFilter = LINEAR;
     };
+#endif
 
     texture Accum
     {
@@ -355,6 +364,7 @@ namespace Barbatos_RTGI_150
         MinFilter = LINEAR;
     };
 
+    // Ping-pong buffers for the 2-pass A-trous denoise (Denoise A / Denoise B).
     texture DNA
     {
         Width = BUFFER_WIDTH;
@@ -456,7 +466,11 @@ namespace Barbatos_RTGI_150
 
     float GetDepth(float2 xy)
     {
+#if _BABA_USE_LAUNCHER
+        float depth = tex2Dlod(BaBa_Launcher::sLinearDepth, float4(clamp(xy, 0.0, 1.0), 0.0, 0.0)).r;
+#else
         float depth = bb::GetLinearizedDepth(xy);
+#endif
         if (EnableDepthMultiplier)
         {
             depth = saturate(depth * DepthMultiplier);
@@ -478,6 +492,17 @@ namespace Barbatos_RTGI_150
         float lenSq = dot(n, n);
         return (lenSq > 1e-25) ?
             n * rsqrt(lenSq) : float3(0, 0, -1);
+    }
+
+    // All reads of the shared g-buffer go through this helper: the Launcher's
+    // NormalMap is full-resolution, the legacy local texture is RenderScale-packed.
+    float4 SampleSharedGBuffer(float2 fullResUV)
+    {
+#if _BABA_USE_LAUNCHER
+        return GetLod(sNormal, fullResUV);
+#else
+        return GetLod(sNormal, fullResUV * RenderScale);
+#endif
     }
 
     //--------------------|
@@ -513,7 +538,7 @@ namespace Barbatos_RTGI_150
             discard;
         float2 viewUV = input.uv / RenderScale;
 
-        float4 gbuffer = GetLod(sNormal, input.uv);
+        float4 gbuffer = SampleSharedGBuffer(viewUV);
         float depth = gbuffer.a;
         if (depth >= 0.999 || depth > GI_RenderDistance)
         {
@@ -532,13 +557,10 @@ namespace Barbatos_RTGI_150
         float3 totalRadiance = 0.0;
         float totalVisibility = 0.0;
 
-        uint pixelIndex = uint((input.vpos.y / RenderScale) * BUFFER_WIDTH + (input.vpos.x / RenderScale));
         uint perFrameSeedBase = uint(FRAME_COUNT) * RayCount;
 
-        float2 bn_uv = float2(input.vpos.xy / (RenderScale * 1024.0));
-        float frame = fmod((float)FRAME_COUNT, 64.0);
-        float4 bn = tex2Dlod(sTexBlueNoise, float4(bn_uv + float2(0.61803398875 * frame, 0.73205080757 * frame), 0, 0));
-        float3 blueNoiseSeed = float3(bn.r, bn.g, bn.b);
+        float4 bn = N_GetSpatialTemporalNoise4(input.vpos.xy / RenderScale, sTexBlueNoise, FRAME_COUNT);
+        float3 blueNoiseSeed = bn.rgb;
         float bias = (depth * 0.002) + 0.0005;
         float3 rayOrigin = viewPos + normal * bias;
         float3 sunDir = float3(0, 1, 0);
@@ -583,7 +605,7 @@ namespace Barbatos_RTGI_150
 
             if (RT_TraceRayGI(rayOrigin, rayDir, input.pScale, RaySteps, rand.z, currentMaxRayDistance, currentThickness, hitUV, hitPos, hitDist))
             {
-                float4 hitGbuffer = tex2Dlod(sNormal, float4(hitUV * RenderScale, 0, 0));
+                float4 hitGbuffer = SampleSharedGBuffer(hitUV);
                 float3 hitNormal = hitGbuffer.rgb;
                 float hitBufferDepth = hitGbuffer.a;
                 
@@ -607,7 +629,7 @@ namespace Barbatos_RTGI_150
                     // Infinite Bounces
                     if (MultiBounce_Weight > 0.0)
                     {
-                        float3 prevGI = (uint(FRAME_COUNT) % 2 == 0) ?
+                        float3 prevGI = (uint(FRAME_COUNT) % 2u == 0u) ?
                             GetLod(sHistory1, hitUV * RenderScale).rgb : 
                             GetLod(sHistory0, hitUV * RenderScale).rgb;
                         linearAlbedo *= (1.0 + prevGI * MultiBounce_Weight);
@@ -679,7 +701,7 @@ namespace Barbatos_RTGI_150
         float3 c_val = c_data.rgb;
         float c_ao = c_data.a;
         
-        float4 c_gbuffer = GetLod(sNormal, input.uv);
+        float4 c_gbuffer = SampleSharedGBuffer(input.uv / RenderScale);
         float3 c_norm = c_gbuffer.rgb;
         float c_depth = c_gbuffer.a;
         
@@ -699,7 +721,7 @@ namespace Barbatos_RTGI_150
                 if (x == 0 && y == 0) continue;
                 float2 uv_offset = input.uv + float2(x, y) * px;
                 float4 s_data = GetLod(sInputTex, uv_offset);
-                float4 s_gbuffer = GetLod(sNormal, uv_offset);
+                float4 s_gbuffer = SampleSharedGBuffer(uv_offset / RenderScale);
                 float3 s_norm = s_gbuffer.rgb;
                 float s_depth = s_gbuffer.a;
                 
@@ -727,14 +749,18 @@ namespace Barbatos_RTGI_150
         if (any(input.uv > RenderScale))
             discard;
         float2 viewUV = input.uv / RenderScale;
-        float depth = GetDepth(viewUV);
+        float depth = TAA_GetStableDepth(viewUV, GetDepth(viewUV));
         if (depth >= 0.999)
             return float4(0.0, 0.0, 0.0, 1.0);
             
         float4 current_gi = GetLod(sAccum, input.uv);
+        if (FRAME_COUNT <= 1)
+            return current_gi;
         
         float2 velocity = MV_GetVelocity(viewUV);
         float2 reprojected_view_uv = viewUV + velocity;
+        if (any(reprojected_view_uv < 0.0) || any(reprojected_view_uv > 1.0))
+            return current_gi;
         float2 reprojected_buffer_uv = reprojected_view_uv * RenderScale;
         
         float4 history_gi = TAA_SampleHistoryCatmullRom(sHistoryParams, reprojected_buffer_uv, float2(BUFFER_WIDTH, BUFFER_HEIGHT));
@@ -745,10 +771,12 @@ namespace Barbatos_RTGI_150
         float3 history_ycocg = RGBToYCoCg(history_compressed);
         
         float raw_confidence = saturate(MV_GetConfidence(viewUV));
+        float normal_confidence = TAA_GetNormalHistoryConfidence(
+            viewUV, reprojected_view_uv, depth, raw_confidence);
         float4 color_min, color_max;
         TAA_ComputeNeighborhoodVariance(sAccum, input.uv, current_gi, bb::PixelSize, color_min, color_max);
 
-        float relax_amount = 0.15 * raw_confidence;
+        float relax_amount = 0.15 * normal_confidence;
         color_min -= relax_amount;
         color_max += relax_amount;
         float3 clipped_history_ycocg = TAA_ClipToAABB(color_min.rgb, color_max.rgb, history_ycocg);
@@ -759,7 +787,7 @@ namespace Barbatos_RTGI_150
         
         float max_feedback = 0.98;
         float min_feedback = 0.85;
-        float final_feedback = lerp(min_feedback, max_feedback, raw_confidence) * lerp(0.8, 1.0, blend_adapt);
+        float final_feedback = lerp(min_feedback, max_feedback, normal_confidence) * lerp(0.8, 1.0, blend_adapt);
         
         float prevRenderScale = tex2Dlod(sRS_Prev, float4(0, 0, 0, 0)).x;
         if (abs(RenderScale - prevRenderScale) > 0.001)
@@ -775,7 +803,7 @@ namespace Barbatos_RTGI_150
     void PS_Accumulate0(VS_OUTPUT input, out float4 outAccum : SV_Target)
     {
         outAccum = 0.0;
-        if (uint(FRAME_COUNT) % 2 != 0)
+        if (uint(FRAME_COUNT) % 2u != 0u)
             discard;
         outAccum = ComputeTAA(input, sHistory1);
     }
@@ -783,14 +811,14 @@ namespace Barbatos_RTGI_150
     void PS_Accumulate1(VS_OUTPUT input, out float4 outAccum : SV_Target)
     {
         outAccum = 0.0;
-        if (uint(FRAME_COUNT) % 2 == 0)
+        if (uint(FRAME_COUNT) % 2u == 0u)
             discard;
         outAccum = ComputeTAA(input, sHistory0);
     }
 
     void PS_Atrous1(VS_OUTPUT input, out float4 outColor : SV_Target)
     {
-        if (uint(FRAME_COUNT) % 2 == 0)
+        if (uint(FRAME_COUNT) % 2u == 0u)
             outColor = AtrousFilter(input, sHistory0, 1.0);
         else
             outColor = AtrousFilter(input, sHistory1, 1.0);
@@ -991,7 +1019,11 @@ namespace Barbatos_RTGI_150
     float4 JointBilateralUpsample(float2 uv, float highDepth, float2 pScale)
     {
         float2 lowResUV = uv * RenderScale;
+#if _BABA_USE_LAUNCHER
+        float3 highNormal = GetLod(sNormal, uv).rgb;
+#else
         float3 highNormal = CalculateNormal(uv, pScale);
+#endif
 
         float4 result = GetLod(sDNB, lowResUV);
         hfloat4 sumGI = 0.0;
@@ -1010,7 +1042,7 @@ namespace Barbatos_RTGI_150
             {
                 float2 sampleUV = baseUV + float2(x, y) * texelSize;
                 float4 gi = GetLod(sDNB, sampleUV);
-                float4 gbuffer = GetLod(sNormal, sampleUV);
+                float4 gbuffer = SampleSharedGBuffer(sampleUV / RenderScale);
 
                 float3 lowNormal = gbuffer.rgb;
                 float lowDepth = gbuffer.a;
@@ -1037,7 +1069,11 @@ namespace Barbatos_RTGI_150
 
     void PS_Output(VS_OUTPUT input, out float4 outColor : SV_Target)
     {
-        float depth = GetDepth(input.uv);
+        float depth = TAA_GetStableDepth(input.uv, GetDepth(input.uv));
+#if _BABA_USE_LAUNCHER
+        // Stabilized normal/depth for the spatial reconstruction stage.
+        depth = BaBa_Launcher_SampleNormalData(input.uv).a;
+#endif
         float3 rawScene = GetColor(input.uv).rgb;
         float3 scene = Input2Linear(rawScene);
         float3 finalColor = scene;
@@ -1046,7 +1082,7 @@ namespace Barbatos_RTGI_150
         {
             float4 giData = JointBilateralUpsample(input.uv, depth, input.pScale);
             
-            float3 n = GetLod(sNormal, input.uv * RenderScale).rgb;
+            float3 n = SampleSharedGBuffer(input.uv).rgb;
             float3 vp = UVToViewPos(input.uv, depth, input.pScale);
             float backNdotV = dot(n, normalize(-vp));
             giData.rgb *= saturate(backNdotV * 8.0);
@@ -1103,30 +1139,18 @@ namespace Barbatos_RTGI_150
                         outColor = float4(finalAO, finalAO, finalAO, 1.0);
                         break;
                         
-                    case 3: // Surface Normals
-                    {
-                        float3 debugNormals = GetLod(sNormal, input.uv * RenderScale).rgb;
-                        if (depth < 0.999)
-                        {
-                            debugNormals.x = -debugNormals.x;
-                            debugNormals.z = -debugNormals.z;
-                        }
-                        outColor = float4(debugNormals * 0.5 + 0.5, 1.0);
-                        break;
-                    }
-                    
-                    case 4: // Motion Vectors
+                    case 3: // Motion Vectors
                     {
                         float2 mv = SampleMotionVectors(input.uv);
                         outColor = float4(saturate(float3(mv.x, mv.y, 0.0) * 50.0 + 0.5), 1.0);
                         break;
                     }
                     
-                    case 5: // Raw LowRes GI
-                        outColor = float4((uint(FRAME_COUNT) % 2 == 0 ? GetLod(sHistory0, input.uv * RenderScale).rgb : GetLod(sHistory1, input.uv * RenderScale).rgb), 1.0);
+                    case 4: // Raw LowRes GI
+                        outColor = float4((uint(FRAME_COUNT) % 2u == 0u ? GetLod(sHistory0, input.uv * RenderScale).rgb : GetLod(sHistory1, input.uv * RenderScale).rgb), 1.0);
                         break;
                         
-                    case 6: // White World
+                    case 5: // White World
                     {
                         float3 clayColor = float3(0.5, 0.5, 0.5);
                         float3 clayComposite = (clayColor * finalAO) + bouncedLight;
@@ -1134,7 +1158,7 @@ namespace Barbatos_RTGI_150
                         break;
                     }
                         
-                    case 7: // Luminance
+                    case 6: // Luminance
                         {
                             float debugLum = GetLuminance(processedGI);
                             outColor = float4(GetFalseColor(saturate(debugLum)), 1.0);
@@ -1194,7 +1218,10 @@ namespace Barbatos_RTGI_150
     technique BaBa_GI
     <
     ui_label = "BaBa: GI";
-    ui_tooltip = "GI, AO and Shadows";
+    ui_tooltip = "GI, AO and Shadows\n\n"
+                 "Requires 'BaBa: Launcher' enabled ABOVE this effect in the list.\n"
+                 "Without it, depth/normals will be invalid and the effect won't work correctly.\n"
+                 "To run standalone instead, set 'BABA_USE_LEGACY_PIPELINE' to 1 in the preprocessor definitions.";
     >
     {
         pass CopyColorGenMips
@@ -1203,12 +1230,14 @@ namespace Barbatos_RTGI_150
             PixelShader = PS_CopyColor;
             RenderTarget = TexColorCopy;
         }
+        #if !_BABA_USE_LAUNCHER
         pass Normals
         {
             VertexShader = VS_Barbatos_PTGI;
             PixelShader = PS_GenNormals;
             RenderTarget = Normal;
         }
+        #endif
         pass Trace
         {
             VertexShader = VS_Barbatos_PTGI;
