@@ -1,7 +1,7 @@
 /*------------------------------------------------|
 | | :: Barbatos SSR (Screen-Space Reflections) :: |
 | |-----------------------------------------------|
-| | Version: 1.5.5                                |
+| | Version: 1.5.6                                |
 | | Author: Barbatos                              |
 | | License: MIT                                  |
 | |----------------------------------------------*/
@@ -17,18 +17,6 @@
 #include ".\Includes\bb_mv.fxh"
 #include ".\Includes\bb_taa.fxh"
 #include ".\Includes\bb_vertex.fxh"
-
-#if defined(ENABLE_VNDF) && ENABLE_VNDF
-    #define _BABA_ENABLE_VNDF 1
-#else
-    #define _BABA_ENABLE_VNDF 0
-#endif
-
-#if defined(ENABLE_RAY_FALLBACK) && ENABLE_RAY_FALLBACK
-    #define _BABA_ENABLE_RAY_FALLBACK 1
-#else
-    #define _BABA_ENABLE_RAY_FALLBACK 0
-#endif
 
 //----------|
 // :: UI :: |
@@ -93,6 +81,12 @@ uniform bool EnableRayJitter <
     ui_tooltip = "Applies noise to the ray marching steps to trade banding artifacts for noise (which is then smoothed by the denoiser).";
 > = true;
 
+uniform bool EnableRayFallback <
+    ui_category = "Reflections";
+    ui_label = "Enable Sky Fallback";
+    ui_tooltip = "When a ray pointing towards the sky misses all geometry, approximates the reflection by sampling near the top of the screen instead of leaving a hole.";
+> = true;
+
 uniform float RenderResolution <
     ui_category = "Reflections";
     ui_label = "Resolution";
@@ -120,16 +114,20 @@ uniform float SurfaceGlossiness <
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
 > = 0.30;
 
-#if !_BABA_ENABLE_VNDF
+uniform bool EnableVNDF <
+    ui_category = "Material";
+    ui_label = "Enable VNDF Sampling";
+    ui_tooltip = "Uses GGX visible-normal distribution (VNDF) importance sampling for glossy ray directions and blur, instead of the cone-approximation path.";
+> = false;
+
 uniform float Anisotropy <
     ui_category = "Material";
     ui_label = "Anisotropic Stretching";
-    ui_tooltip = "Stretches the specular highlight to simulate brushed metals or anisotropic materials.";
+    ui_tooltip = "Stretches the specular highlight to simulate brushed metals or anisotropic materials.\nOnly used when VNDF Sampling is disabled.";
     ui_type = "drag";
     ui_min = 0.0;
     ui_max = 0.4; ui_step = 0.01;
 > = 0.0;
-#endif
 
 uniform float Metallic <
     ui_category = "Material";
@@ -359,9 +357,6 @@ namespace BaBa_SSR
         MipFilter = LINEAR;
     };
 
-    // The Launcher's geometric publication, not NormalMap: NormalMap already carries
-    // the shared "Textured Normals" bump and PS_MaterialResolve adds its own from
-    // the same gradient.
     sampler sNormal1
     {
         Texture = BaBa_Launcher::NormalSmoothV;
@@ -488,7 +483,6 @@ namespace BaBa_SSR
         VS_Barbatos_FullScreen(id, outStruct, VERTICAL_FOV);
     }
 
-    // Pin fovDegrees to VERTICAL_FOV and forward to the shared VS_Accumulate0/1.
     void VS_Accumulate0(in uint id : SV_VertexID, out VS_OUTPUT outStruct)
     {
         VS_Accumulate0(id, outStruct, VERTICAL_FOV);
@@ -550,17 +544,12 @@ namespace BaBa_SSR
 
     float3 GetGlossySampleSingle(float2 sample_uv, float2 pixel_uv, float local_roughness, float3 n, float2 pScale, int sampleIndex)
     {
-        // Single exit: an early return from a branch on a runtime value makes
-        // ReShade lower this into a return slot that the D3D compiler then reports
-        // as potentially uninitialized (X4000).
-        // Single exit: an early return from a branch on a runtime value makes
-        // ReShade lower this into a return slot that the D3D compiler then reports
-        // as potentially uninitialized (X4000).
         float netRoughness = saturate(SurfaceGlossiness + (local_roughness * RoughnessDetection));
         float3 result = tex2Dlod(sTexColorCopy, float4(sample_uv, 0, 0)).rgb;
         if (netRoughness > 0.001)
         {
-#if _BABA_ENABLE_VNDF
+        if (EnableVNDF)
+        {
         float2 screen_size = float2(BUFFER_WIDTH, BUFFER_HEIGHT);
         float2 virtual_vpos = pixel_uv * screen_size;
         float sampleSeed = float(sampleIndex) * 0.1732 + 0.419;
@@ -568,10 +557,12 @@ namespace BaBa_SSR
         float2 golden_offset = float2(0.61803398875, 0.73205080757) * (fmod((float)FRAME_COUNT, 64.0) + sampleSeed);
         float2 rand_noise = frac(tex2Dlod(sTexBlueNoise, float4(bn_uv + golden_offset, 0, 0)).rg + sampleSeed);
         float2 offset = ConcentricSquareMapping(rand_noise);
-        float blurRadiusUV = netRoughness * netRoughness * 8.0 * bb::PixelSize;
+        float blurRadiusUV = netRoughness * netRoughness * 8.0 * bb::PixelSize.x;
         float mipLevel = netRoughness * 4.0;
         result = tex2Dlod(sTexColorCopy, float4(sample_uv + offset * blurRadiusUV, 0, mipLevel)).rgb;
-#else
+        }
+        else
+        {
         float specularPower = exp2(10.0 * (1.0 - netRoughness) + 1.0);
         float coneTheta = RT_SpecularPowerToConeAngle(specularPower) * 0.5;
     
@@ -610,8 +601,6 @@ namespace BaBa_SSR
         {
             anisoScaleX = 1.0 + (Anisotropy * 15.0);
             anisoScaleY = 1.0 / (1.0 + Anisotropy * 2.0);
-            // Reference axis is the view/depth axis, so the anisotropic streak reads as
-            // view-relative instead of a plain blur.
             float3 refAxis = float3(0, 0, 1);
             float3 tangentUp = normalize(refAxis - n * dot(n, refAxis));
             float2 screenTangent = float2(tangentUp.x / max(pScale.x, 1e-6),
@@ -644,7 +633,7 @@ namespace BaBa_SSR
         }
 
         result = tex2Dlod(sTexColorCopy, float4(sample_uv + offset * blurRadiusUV, 0, mipLevel)).rgb;
-#endif
+        }
         }
 
         return result;
@@ -676,7 +665,6 @@ namespace BaBa_SSR
 
     float4 JointBilateralUpsample(float2 uv, float highDepth, float2 pScale)
     {
-        // Single exit: see the note on GetGlossySampleSingle above.
         float4 result;
         if ((uint(FRAME_COUNT) % 2u) == 0u)
             result = TAA_JointBilateralUpsample(uv, highDepth, pScale, RenderResolution, sHistory0, sNormal);
@@ -909,18 +897,21 @@ namespace BaBa_SSR
         Ray r;
         r.origin = viewPos;
 
-#if _BABA_ENABLE_VNDF
-        float netRoughness = saturate(SurfaceGlossiness + (estimatedRoughness * RoughnessDetection)) * 0.5;
-        float2 golden_offset = float2(0.61803398875, 0.73205080757) * frame;
-        float3 stbn_noise = tex2Dlod(sTexBlueNoise, float4(bn_uv + golden_offset, 0, 0)).rgb;
-        float2 Xi = frac(stbn_noise.gb + frac(sin(dot(scaled_uv ,float2(12.9898,78.233))) * 43758.5453));
-        float3 H = RT_ImportanceSampleGGX_VNDF(Xi, normal, viewDir, netRoughness);
-        float3 reflectDir = reflect(-viewDir, H);
-        if (dot(reflectDir, normal) < 0.0) reflectDir = reflectDir - 2.0 * dot(reflectDir, normal) * normal;
-        r.direction = normalize(reflectDir);
-#else
-        r.direction = normalize(reflect(-viewDir, normal));
-#endif
+        if (EnableVNDF)
+        {
+            float netRoughness = saturate(SurfaceGlossiness + (estimatedRoughness * RoughnessDetection)) * 0.5;
+            float2 golden_offset = float2(0.61803398875, 0.73205080757) * frame;
+            float3 stbn_noise = tex2Dlod(sTexBlueNoise, float4(bn_uv + golden_offset, 0, 0)).rgb;
+            float2 Xi = frac(stbn_noise.gb + frac(sin(dot(scaled_uv ,float2(12.9898,78.233))) * 43758.5453));
+            float3 H = RT_ImportanceSampleGGX_VNDF(Xi, normal, viewDir, netRoughness);
+            float3 reflectDir = reflect(-viewDir, H);
+            if (dot(reflectDir, normal) < 0.0) reflectDir = reflectDir - 2.0 * dot(reflectDir, normal) * normal;
+            r.direction = normalize(reflectDir);
+        }
+        else
+        {
+            r.direction = normalize(reflect(-viewDir, normal));
+        }
 
         r.origin += r.direction * (0.0005 + (depth * 0.02));
 
@@ -929,8 +920,7 @@ namespace BaBa_SSR
             outRayData = 0.0;
             return;
         }
-
-        // Same trace range for all qualities; higher tiers add steps for finer intersection only
+        
         float geoThickness = GetThickness(scaled_uv, normal, normalize(viewPos), depth);
         HitResult hit;
         if (RayTraceQuality == 2)
@@ -958,14 +948,12 @@ namespace BaBa_SSR
             float geoMask = 1.0 - smoothstep(0.05, EDGE_MASK_THRESHOLD, length(normal - nR) + length(normal - nD));
             reflectionAlpha *= geoMask;
         }
-#if _BABA_ENABLE_RAY_FALLBACK
-        else if (r.direction.y > 0.0) // Only trigger fallback for rays pointing up (towards sky)
+        else if (EnableRayFallback && r.direction.y > 0.0)
         {
             float adaptiveDist = min(depth * 1.2 + 0.012, 10.0);
             finalUV = saturate(ViewPosToUV(viewPos + r.direction * adaptiveDist, pScale).xy);
             reflectionAlpha = smoothstep(0.0, 0.2, 1.0 - scaled_uv.y) * saturate(r.direction.y * 5.0);
         }
-#endif
 
         float fresnelFadeNV = max(0.0, dot(-viewDir, r.direction));
         float fresnelFade = fresnelFadeNV * fresnelFadeNV;
