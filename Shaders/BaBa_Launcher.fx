@@ -1,7 +1,7 @@
 /*----------------------------------------------|
-| :: BaBa Launcher                            :: |
+| :: BaBa Launcher                           :: |
 |-----------------------------------------------|
-| Version: 1.0                                  |
+| Version: 1.0.1                                |
 | Author: Barbatos                              |
 | License: MIT                                  |
 |-----------------------------------------------|
@@ -251,7 +251,6 @@ namespace Barbatos_Flow
         return -sqrt(d.x) * sign(d.y);
     }
 
-    // Smooth coverage (0..1) of a shape boundary at signed distance 'dist'.
     float ArrowCoverage(float dist, float aaWidth)
     {
         return saturate(0.5 - dist / max(aaWidth, 1e-4));
@@ -261,8 +260,6 @@ namespace Barbatos_Flow
     bool IsOOB(float2 uv) { return any(uv < 0.0) || any(uv > 1.0); }
 
     static const float FLOW_MAX_MAGNITUDE = 0.25;
-
-    // A match this good leaves nothing for further refinement to find.
     static const float FLOW_SEARCH_EARLY_OUT = 0.01;
 
     bool IsInvalidFlow(float2 flow)
@@ -277,9 +274,6 @@ namespace Barbatos_Flow
         for (int z = 0; z < 9; z++)
             refWindow[z] = 0.0;
 
-        // Single-exit: FLOW_LEVEL is a uniform, and an early return inside a
-        // uniform branch makes ReShade lower this into a return-slot wrapper that
-        // FXC then reports as uninitialized (X4000) and tries to unroll (X3511).
         if (FLOW_LEVEL == 0)
         {
             refWindow[0] = tex2Dlod(cur, float4(pos_a, 0, mip)).r;
@@ -318,7 +312,6 @@ namespace Barbatos_Flow
 
     float ZAD_Cost(sampler2D prev, float2 pos_b, float2 texel_size, int mip, const float refWindow[9])
     {
-        // Single exit, initialized up front: see the note in ZAD_BuildRef.
         float result = EPSILON;
         float samples[9];
         float mean = 0.0;
@@ -383,7 +376,6 @@ namespace Barbatos_Flow
 
     float2 Median(sampler2D motion_tex, float2 uv, float2 texel_size, int mip)
     {
-        // Single exit, initialized up front: see the note in ZAD_BuildRef.
         float2 result = tex2Dlod(motion_tex, float4(uv, 0, mip)).xy;
 
         if (FLOW_LEVEL == 1)
@@ -400,7 +392,7 @@ namespace Barbatos_Flow
             BB_S2(v[1], v[3])
             result = max(min(v[1], v[2]), min(max(v[1], v[2]), v[4]));
         }
-        else if (FLOW_LEVEL != 0) // Low Quality keeps the unfiltered tap above
+        else if (FLOW_LEVEL != 0)
         {
             float2 v[9];
             int idx = 0;
@@ -472,7 +464,6 @@ namespace Barbatos_Flow
 
     float2 RefineFlow(sampler2D motion_tex, float2 uv, float2 texel_size, int mip)
     {
-        // Single exit, initialized up front: see the note in ZAD_BuildRef.
         const float inv_spatial_sigma_sq = -0.5 / (REFINE_SPATIAL_SIGMA * REFINE_SPATIAL_SIGMA);
         const float inv_luma_sigma_sq = -0.5 / (REFINE_LUMA_SIGMA * REFINE_LUMA_SIGMA);
 
@@ -509,8 +500,6 @@ namespace Barbatos_Flow
             }
         }
 
-        // Low Quality contributes no taps, so weight_sum stays 0 and the
-        // unfiltered center flow falls through - same result as the old early return.
         return (weight_sum > EPSILON) ?
             (flow_sum / weight_sum) : center_flow;
     }
@@ -531,7 +520,6 @@ namespace Barbatos_Flow
         float2 texel_size = rcp(float2(BUFFER_WIDTH, BUFFER_HEIGHT) / exp2(mip1));
         float2 source_texel_size = rcp(tex2Dsize(source_flow_sampler, 0));
 
-        // Current-frame window, built once and reused by all candidates below.
         float predRef[9];
         ZAD_BuildRef(sCurrLuma, uv, texel_size, mip1, predRef);
 
@@ -560,8 +548,7 @@ namespace Barbatos_Flow
         float2 residual = 0.0;
         float match_cost = ZAD_Cost(sPrevLuma, uv + prediction + residual, texel_size, mip2, searchRef);
         int match_i = 8;
-        // Constant loop bound with a runtime break, so the trip count stays
-        // compile-time bounded. See the note in PS_CoarseFlowL4.
+
         const int SEARCH_ITER_MAX = 10;
         int searchIter = (FLOW_LEVEL == 0) ? 1 : ((FLOW_LEVEL == 1) ? 3 : SEARCH_ITER_MAX);
 
@@ -610,7 +597,6 @@ namespace Barbatos_Flow
         float cost_down   = ZAD_Cost(sPrevLuma, uv + integer_match - float2(0, texel_size.y), texel_size, mip2, searchRef);
         float cost_up     = ZAD_Cost(sPrevLuma, uv + integer_match + float2(0, texel_size.y), texel_size, mip2, searchRef);
 
-        // Only fit a parabola when the three costs describe a convex minimum.
         float2 curvature = 2.0 * float2(cost_left + cost_right, cost_down + cost_up) - 4.0 * match_cost;
         float2 gradient = float2(cost_left - cost_right, cost_down - cost_up);
 
@@ -622,9 +608,6 @@ namespace Barbatos_Flow
         if (curvature.y > min_curvature)
             subpixel_offset.y = clamp(gradient.y / curvature.y, -0.5, 0.5);
 
-        // Cost the fitted position before emitting it. The fit is an extrapolation, so
-        // a displacement only leaves a level if it was measured there and beat the
-        // incumbent.
         float2 refined = integer_match + subpixel_offset * texel_size;
 
         if (any(subpixel_offset != 0.0))
@@ -645,7 +628,6 @@ namespace Barbatos_Flow
         float luma_sum = 0.0;
         float weight_sum = 0.0;
 
-        // Constant bound (the offs/weights arrays are 13 wide) with a runtime break.
         [loop]
         for(int i = 0; i < 13; i++)
         {
@@ -696,7 +678,6 @@ namespace Barbatos_Flow
         if (FRAME_COUNT == 0) return float2(0, 0);
         float2 texel_size = rcp(float2(BUFFER_WIDTH, BUFFER_HEIGHT) / exp2(mip));
         
-        // One current-frame window for the whole tile search.
         float refWindow[9];
         ZAD_BuildRef(sCurrLuma, uv, texel_size, mip, refWindow);
 
@@ -711,18 +692,10 @@ namespace Barbatos_Flow
             ((static_cost < global_cost) ? static_prediction : global_prediction) :
             ((local_cost < global_cost) ? local_prediction : global_prediction);
         float2 best_flow = prediction;
-        // The selection above already picks the cheapest of the three.
+
         float min_cost = min(min(static_cost, local_cost), global_cost);
         if (FLOW_LEVEL > 0)
         {
-            // Compile-time loop bounds. searchRadius comes from FLOW_QUALITY, a
-            // uniform, so bounding the loops by it leaves the trip count unknowable
-            // at compile time: the D3D compiler cannot keep a real loop, tries to
-            // unroll instead, and gives up with X3511. The widest radius (3) is a
-            // literal here and the narrower setting is masked out per tap, which
-            // keeps the loop bounded while tracing exactly the same candidates.
-            // The early-out sets a flag rather than returning from inside the nest,
-            // for the same reason.
             const int SEARCH_RADIUS_MAX = 3;
             int searchRadius = (FLOW_LEVEL == 1) ? 1 : SEARCH_RADIUS_MAX;
             bool search_done = false;
@@ -817,7 +790,6 @@ namespace Barbatos_Flow
         return float2(x_values[mid], y_values[mid]);
     }
 
-    // Flow and confidence history share a pass: both live at quarter resolution.
     void PS_CopyFlowHistory(float4 pos : SV_Position, float2 uv : TEXCOORD,
                             out float2 flow : SV_Target0, out float confidence : SV_Target1)
     {
@@ -836,9 +808,6 @@ namespace Barbatos_Flow
 #if BABA_LAUNCHER_DEBUG
     float4 PS_Debug(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
     {
-        // An if/else chain rather than a switch on DEBUG_VIEW: some ReShade
-        // versions lower a switch over a uniform into a loop construct, which
-        // FXC then tries to unroll and rejects (X3511) on several D3D11 drivers.
         if (DEBUG_VIEW == 1)
             return float4(MotionToColor(GetLod(BaBa_Launcher::sMotionVectors, uv).xy), 1);
 
@@ -926,7 +895,6 @@ namespace Barbatos_Flow
 
         if (DEBUG_VIEW == 7)
         {
-            // NormalEncoded is RG-packed; decode it before visualizing the direction.
             float3 normal = NM_DecodeNormal(tex2Dlod(
                 BaBa_Launcher::sNormalEncoded,
                 float4(clamp(uv, 0.0, 1.0), 0.0, 0.0)).rg);
@@ -1054,15 +1022,11 @@ namespace Barbatos_Flow
 
     void PS_Normal(PrepassVS_OUTPUT input, out float4 outNormal : SV_Target)
     {
-        // Normal reconstruction stays on the original high-precision depth path.
         float depth = NM_SafeDepth(bb::GetLinearizedDepth(input.uv));
         float3 normal = (depth >= 0.999) ? float3(0.0, 0.0, -1.0) : NM_CalculateNormal(input.uv, input.pScale);
         outNormal = float4(NM_SafeNormalize(normal), depth);
     }
 
-    // Two-iteration edge-avoiding A-Trous filter (NM_ATrousSmoothNormal), each
-    // iteration a separable H then V pass with step widths (4, 8). "Medium" runs
-    // iteration 1 only; "High" adds iteration 2.
     void PS_NormalSmoothH(PrepassVS_OUTPUT input, out float4 outNormal : SV_Target)
     {
         float4 raw = tex2Dlod(BaBa_Launcher::sNormalRaw, float4(input.uv, 0.0, 0.0));
@@ -1120,15 +1084,9 @@ namespace Barbatos_Flow
 
         normalData = NM_SanitizeNormalData(normalData);
         float3 normal = NM_SafeNormalize(normalData.rgb);
-        // Keep depth discontinuities sharp: the filtered alpha must not become a
-        // cross-edge depth used by temporal rejection or upsampling.
         float depth = NM_SafeDepth(GetDepth(input.uv));
-
-        // Republished before the bump for consumers that derive their own texture
-        // detail (see sNormalGeometric). Aliases the NormalSmoothV scratch buffer.
         outGeometric = float4(normal, depth);
 
-        // After the geometric smoothing and before the temporal pass.
         if (TEXTURE_NORMAL_INTENSITY > 0.0 && depth < 0.999)
         {
             normal = NM_ApplyTextureBump(normal, input.uv, bb::BackBuffer, bb::PixelSize,
@@ -1159,9 +1117,6 @@ namespace Barbatos_Flow
         float3 currentNormal = NM_SafeNormalize(currentData.rgb);
         float3 previousNormal = NM_SafeNormalize(previousData.rgb);
 
-        // Detect locally chaotic geometry (foliage, grates, wires) against immediate
-        // neighbors. With no coherent surface to protect, relax the agreement gates
-        // and let the flow-confidence check alone guard the reprojection.
         float2 px = bb::PixelSize;
         float3 nLeft = NM_SafeNormalize(tex2Dlod(BaBa_Launcher::sNormalMap, float4(input.uv + float2(-px.x, 0.0), 0.0, 0.0)).rgb);
         float3 nRight = NM_SafeNormalize(tex2Dlod(BaBa_Launcher::sNormalMap, float4(input.uv + float2(px.x, 0.0), 0.0, 0.0)).rgb);
@@ -1172,8 +1127,6 @@ namespace Barbatos_Flow
         float localChaos = 1.0 - smoothstep(0.0, 0.6, saturate(localAgreement));
 
         float normalAgreement = saturate(dot(currentNormal, previousNormal));
-        // The spatial kernel jitters its taps every frame, which legitimately shifts
-        // the resolved normal, so only reject clearly mismatched surfaces.
         float normalConfidence = lerp(smoothstep(0.25, 0.90, normalAgreement), 1.0, localChaos);
 
         float depthTolerance = lerp(0.004 + 0.04 * max(currentData.a, previousData.a), 1.0, localChaos);
@@ -1186,7 +1139,7 @@ namespace Barbatos_Flow
             flowConfidence * normalConfidence * depthConfidence;
 
         float3 stableNormal = NM_SafeNormalize(lerp(currentNormal, previousNormal, saturate(feedback)));
-        float stableDepth = NM_SafeDepth(lerp(currentData.a, previousData.a, saturate(feedback)));
+        float stableDepth = NM_SafeDepth(currentData.a);
         return float4(stableNormal, stableDepth);
     }
 
@@ -1244,8 +1197,6 @@ namespace Barbatos_Flow
         pass { VertexShader = VS_Prepass;
         PixelShader = PS_NormalAtrousH2; RenderTarget = BaBa_Launcher::NormalSmoothH; }
 
-        // No mip chain here: PS_PublishNormal rewrites both targets and regenerates
-        // their mips at the end of the technique.
         pass { VertexShader = VS_Prepass;
         PixelShader = PS_NormalAtrousV2;
         RenderTarget0 = BaBa_Launcher::NormalMap;
