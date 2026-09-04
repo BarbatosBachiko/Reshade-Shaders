@@ -70,7 +70,6 @@ float3 NM_CalculateNormal(float2 uv, float2 pScale)
         return float3(0, 0, -1);
     n *= rsqrt(lenSq);
 
-    // Correct the hemisphere once here: every consumer expects a camera-facing normal.
     if (dot(n, -pos_c) < 0.0)
         n = -n;
     return n;
@@ -125,7 +124,6 @@ float3 NM_BlendNormals(float3 n1, float3 n2)
 }
 
 // Textured/bump normal detail from a Scharr edge filter on scene luminance.
-// BaBa_SSR keeps its own independent copy as "Micro-Surface Details".
 float3 NM_ApplyTextureBump(float3 normal, float2 uv, sampler colorSampler, float2 pixelSize, float intensity, float edgeThreshold)
 {
     if (intensity <= 0.0)
@@ -151,26 +149,45 @@ float3 NM_ApplyTextureBump(float3 normal, float2 uv, sampler colorSampler, float
     return NM_SafeNormalize(normal + T * slope.x - B * slope.y);
 }
 
+#ifndef BB_NO_DYNAMIC_LOOPS
+    #if (__RENDERER__ < 0xA000)
+        #define BB_NO_DYNAMIC_LOOPS 1
+    #else
+        #define BB_NO_DYNAMIC_LOOPS 0
+    #endif
+#endif
+
+#if BB_NO_DYNAMIC_LOOPS
+    #define NM_SN_SAMPLES_MAX 3
+#else
+    #define NM_SN_SAMPLES_MAX 30
+#endif
+
 // Smoothed Normal (SmartSurface)
 float4 NM_ComputeSmoothedNormal(float2 uv, float2 direction, sampler sInput, int smartSurfaceMode, float smoothThreshold, float farPlane)
 {
     float4 color = NM_SanitizeNormalData(GetLod(sInput, uv));
     float SNWidth = (smartSurfaceMode == 1) ? 5.5 : ((smartSurfaceMode == 2) ? 2.5 : 1.0);
-    int SNSamples = (smartSurfaceMode == 1) ? 1 : ((smartSurfaceMode == 2) ? 3 : 30);
+    int SNSamples = min((smartSurfaceMode == 1) ? 1 : ((smartSurfaceMode == 2) ? 3 : 30), NM_SN_SAMPLES_MAX);
     float2 p = bb::PixelSize * SNWidth * direction;
     float T = rcp(max(smoothThreshold * saturate(2 * (1 - color.a)), 0.0001));
     float4 s1 = 0.0;
     float sc = 0.0;
     float4 flatSum = 0.0;
     float sampleCount = 0.0;
-
-    // Jitter the tap comb by up to half a spacing every frame; the Launcher's
-    // temporal normal history resolves the result.
     float jitter = N_GetAnimatedSpatialNoise(uv / bb::PixelSize, FRAME_COUNT) - 0.5;
 
+#if BB_NO_DYNAMIC_LOOPS
+    [unroll]
+    for (int x = -NM_SN_SAMPLES_MAX; x <= NM_SN_SAMPLES_MAX; x++)
+#else
     [loop]
     for (int x = -SNSamples; x <= SNSamples; x++)
+#endif
     {
+#if BB_NO_DYNAMIC_LOOPS
+        if (abs(x) > SNSamples) continue;
+#endif
         float4 s = NM_SanitizeNormalData(GetLod(sInput, uv + p * (x + jitter)));
         float diff = dot(0.333, abs(s.rgb - color.rgb)) + abs(s.a - color.a) * (farPlane * smoothThreshold);
         diff = 1 - saturate(diff * T);
@@ -182,8 +199,6 @@ float4 NM_ComputeSmoothedNormal(float2 uv, float2 direction, sampler sInput, int
 
     float4 bilateral = (sc > 0.0001) ? (s1 / sc) : color;
 
-    // On dense thin geometry (foliage, wires, grating) nearly every neighbor is
-    // rejected, so blend toward a plain average instead of leaving noise untouched.
     float coherence = saturate(sc / max(sampleCount, 1.0));
     float chaos = 1.0 - smoothstep(0.12, 0.45, coherence);
     float4 flatAverage = flatSum / max(sampleCount, 1.0);
@@ -193,8 +208,6 @@ float4 NM_ComputeSmoothedNormal(float2 uv, float2 direction, sampler sInput, int
 }
 
 // Edge-avoiding A-Trous wavelet pass (Dammertz et al., HPG 2010). B3-spline
-// stencil {1/16, 1/4, 3/8, 1/4, 1/16}; stepWidth is the hole spacing, so
-// callers can chain passes with growing dilation (1, 2, 4, ...).
 float4 NM_ATrousSmoothNormal(float2 uv, float2 direction, sampler sInput, float stepWidth, float smoothThreshold, float farPlane)
 {
     float4 color = NM_SanitizeNormalData(GetLod(sInput, uv));
@@ -228,7 +241,6 @@ float4 NM_ATrousSmoothNormal(float2 uv, float2 direction, sampler sInput, float 
 
     float4 bilateral = (sc > 0.0001) ? (s1 / sc) : color;
 
-    // Same fallback as above for dense thin geometry: blend toward the B3 average.
     float chaos = 1.0 - smoothstep(0.12, 0.45, saturate(sc));
     float4 result = lerp(bilateral, flatSum, chaos);
     result.rgb = NM_SafeNormalize(result.rgb);

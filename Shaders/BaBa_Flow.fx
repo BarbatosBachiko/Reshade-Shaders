@@ -1,7 +1,7 @@
 /*----------------------------------------------|
 | :: BarbatosFlow                            :: |
 |-----------------------------------------------|
-| Version: 1.1                                  |
+| Version: 1.1.1                                |
 | Author: Barbatos                              |
 | License: MIT                                  |
 |-----------------------------------------------|
@@ -102,6 +102,13 @@ sampler2D sMotionConfidence
 
 namespace Barbatos_Flow
 {
+
+#if (__RENDERER__ < 0xA000)
+    int ZAD_Ring8(int x) { return (x >= 8) ? (x - 8) : x; }
+#else
+    int ZAD_Ring8(int x) { return x & 7; }
+#endif
+
     texture2D tCurrLuma
     {
         Width = BUFFER_WIDTH;
@@ -442,7 +449,7 @@ namespace Barbatos_Flow
                 match_i = i;
                 match_cost = cost;
             }
-            i = (i + 1) & 7;
+            i = ZAD_Ring8(i + 1);
             [loop]
             for(int k=0; k<8; k++)
             {
@@ -455,7 +462,7 @@ namespace Barbatos_Flow
                     match_i = i;
                     match_cost = c_cost;
                 }
-                i = (i + 1) & 7;
+                i = ZAD_Ring8(i + 1);
             }
 
             if (all(search_center == residual)) break;

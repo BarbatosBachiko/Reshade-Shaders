@@ -1,7 +1,7 @@
 /*----------------------------------------------|
 | :: BaBa Launcher                           :: |
 |-----------------------------------------------|
-| Version: 1.0.1                                |
+| Version: 1.0.2                                |
 | Author: Barbatos                              |
 | License: MIT                                  |
 |-----------------------------------------------|
@@ -28,6 +28,10 @@
 
 #ifndef BABA_LAUNCHER_DEBUG
     #define BABA_LAUNCHER_DEBUG 0
+#endif
+
+#ifndef BABA_FLOW_SEARCH_ITER
+    #define BABA_FLOW_SEARCH_ITER 4
 #endif
 
 uniform int FLOW_QUALITY <
@@ -266,6 +270,12 @@ namespace Barbatos_Flow
     {
         return any(flow != flow) || any(abs(flow) > FLOW_MAX_MAGNITUDE);
     }
+
+#if (__RENDERER__ < 0xA000)
+    int ZAD_Ring8(int x) { return (x >= 8) ? (x - 8) : x; }
+#else
+    int ZAD_Ring8(int x) { return x & 7; }
+#endif
 
     //Zero-mean Absolute Difference
     void ZAD_BuildRef(sampler2D cur, float2 pos_a, float2 texel_size, int mip, out float refWindow[9])
@@ -549,45 +559,50 @@ namespace Barbatos_Flow
         float match_cost = ZAD_Cost(sPrevLuma, uv + prediction + residual, texel_size, mip2, searchRef);
         int match_i = 8;
 
-        const int SEARCH_ITER_MAX = 10;
-        int searchIter = (FLOW_LEVEL == 0) ? 1 : ((FLOW_LEVEL == 1) ? 3 : SEARCH_ITER_MAX);
+        const int SEARCH_ITER_MAX = BABA_FLOW_SEARCH_ITER;
+        int searchIter = (FLOW_LEVEL == 0) ? 1 : ((FLOW_LEVEL == 1) ? min(3, SEARCH_ITER_MAX) : SEARCH_ITER_MAX);
 
         if (match_cost >= FLOW_SEARCH_EARLY_OUT)
         {
+            bool search_done = false;
             [loop]
             for (int search = 0; search < SEARCH_ITER_MAX; search++)
             {
-                if (search >= searchIter) break;
-                int i = c8_it[match_i].x;
-                int end = c8_it[match_i].y;
-                float2 search_center = residual;
+                if (search < searchIter && !search_done)
+                {
+                    int i = c8_it[match_i].x;
+                    int end = c8_it[match_i].y;
+                    float2 search_center = residual;
 
-                float2 candidate_residual = search_center + float2(c8[i]) * texel_size;
-                float cost = ZAD_Cost(sPrevLuma, uv + prediction + candidate_residual, texel_size, mip2, searchRef);
-                if (cost < match_cost)
-                {
-                    residual = candidate_residual;
-                    match_i = i;
-                    match_cost = cost;
-                }
-                i = (i + 1) & 7;
-                [loop]
-                for(int k=0; k<8; k++)
-                {
-                    if (i == end) break;
-                    float2 cand_res = search_center + float2(c8[i]) * texel_size;
-                    float c_cost = ZAD_Cost(sPrevLuma, uv + prediction + cand_res, texel_size, mip2, searchRef);
-                    if (c_cost < match_cost)
+                    float2 candidate_residual = search_center + float2(c8[i]) * texel_size;
+                    float cost = ZAD_Cost(sPrevLuma, uv + prediction + candidate_residual, texel_size, mip2, searchRef);
+                    if (cost < match_cost)
                     {
-                        residual = cand_res;
+                        residual = candidate_residual;
                         match_i = i;
-                        match_cost = c_cost;
+                        match_cost = cost;
                     }
-                    i = (i + 1) & 7;
-                }
+                    i = ZAD_Ring8(i + 1);
+                    [loop]
+                    for(int k=0; k<8; k++)
+                    {
+                        if (i != end)
+                        {
+                            float2 cand_res = search_center + float2(c8[i]) * texel_size;
+                            float c_cost = ZAD_Cost(sPrevLuma, uv + prediction + cand_res, texel_size, mip2, searchRef);
+                            if (c_cost < match_cost)
+                            {
+                                residual = cand_res;
+                                match_i = i;
+                                match_cost = c_cost;
+                            }
+                            i = ZAD_Ring8(i + 1);
+                        }
+                    }
 
-                if (all(search_center == residual)) break;
-                if (match_cost < FLOW_SEARCH_EARLY_OUT) break;
+                    if (all(search_center == residual) || match_cost < FLOW_SEARCH_EARLY_OUT)
+                        search_done = true;
+                }
             }
         }
 
@@ -1286,7 +1301,6 @@ namespace Barbatos_Flow
         RenderTarget0 = tPrevFlow;
         RenderTarget1 = tPrevConfidence; }
 
-        // Same mip requirement as tCurrLuma.
         pass { VertexShader = PostProcessVS;
         PixelShader = PS_CopyHistory; RenderTarget = tPrevLuma; GenerateMipMaps = true; }
     }

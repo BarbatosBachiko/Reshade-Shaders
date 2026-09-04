@@ -47,3 +47,16 @@ float ComputeEdgeMask(float depth, float threshold)
     #define hfloat3 float3
     #define hfloat4 float4
 #endif
+
+// D3D9 (ps_3_0) has no integer pipeline and no usable dynamic flow control
+// for loops that sample textures: the compiler must unroll them, and a
+// [loop] attribute then fails with "error X3531: can't unroll loops marked
+// with loop attribute". BB_NO_DYNAMIC_LOOPS marks the spots that need a
+// literally-bounded, unrolled form on that target.
+#ifndef BB_NO_DYNAMIC_LOOPS
+    #if (__RENDERER__ < 0xA000)
+        #define BB_NO_DYNAMIC_LOOPS 1
+    #else
+        #define BB_NO_DYNAMIC_LOOPS 0
+    #endif
+#endif
