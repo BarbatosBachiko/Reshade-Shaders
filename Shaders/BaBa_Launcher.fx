@@ -643,7 +643,13 @@ namespace Barbatos_Flow
         float luma_sum = 0.0;
         float weight_sum = 0.0;
 
+        // Unrolled on D3D9: the bound is already literal, and ps_3_0 cannot
+        // run a sampling loop with dynamic flow control (X3531).
+#if BB_NO_DYNAMIC_LOOPS
+        [unroll]
+#else
         [loop]
+#endif
         for(int i = 0; i < 13; i++)
         {
             if (i >= sampleCount) break;
